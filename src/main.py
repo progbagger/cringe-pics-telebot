@@ -146,10 +146,18 @@ async def manage_subscriptions(call: CallbackQuery):
     )
 
 
+IMAGE_FORMAT = (".jpg", ".jpeg", ".png")
+GIF_FORMAT = (".gif", ".webp")
+ALL_FORMATS = (*IMAGE_FORMAT, *GIF_FORMAT)
+
+
 async def send_photo(id: int, folder: str, image_name: str, category: str):
     if image_name:
         with open(f"{folder}/{image_name}", "rb") as image_to_send:
-            await BOT.send_photo(id, image_to_send)
+            if image_name.endswith(GIF_FORMAT):
+                await BOT.send_animation(id, image_to_send)
+            else:
+                await BOT.send_photo(id, image_to_send)
     else:
         await BOT.send_message(
             id,
@@ -166,7 +174,7 @@ async def send_random_categorized_photo(message: Message):
     images = list(
         filter(
             lambda name: os.path.isfile(f"{folder}/{name}")
-            and name.endswith((".png", ".jpg", ".jpeg")),
+            and name.endswith(ALL_FORMATS),
             os.listdir(folder),
         )
     )
@@ -184,12 +192,11 @@ async def send_pictures(category: str):
     images = list(
         filter(
             lambda name: os.path.isfile(f"{folder}/{name}")
-            and name.endswith((".jpg", ".jpeg", ".png")),
+            and name.endswith(ALL_FORMATS),
             contents,
         )
     )
 
-    # image_to_send = random.choice(images)
     cursor = POSTGRES_CONNECTION.cursor()
     cursor.execute(f"SELECT id FROM {POSTGRES_TABLE} WHERE {category} = true")
     candidates = [res[0] for res in cursor.fetchall()]
@@ -213,6 +220,7 @@ async def schedule_messages():
 
     while True:
         current_seconds = int(time.time() + 7 * 60 * 60) % (60 * 60 * 24)
+        print(f"Current seconds: {current_seconds}")
         current_to_wait = times_in_seconds[0]
         current_diff = (
             24 * 60 * 60 - current_seconds + min([tup[0] for tup in times_in_seconds])
@@ -229,6 +237,9 @@ async def schedule_messages():
                 current_diff = abs(current_seconds - wait_time[0])
                 current_to_wait = wait_time
 
+        print(
+            f"Sleeping for {current_diff} seconds to reach {current_to_wait[0]} with category {current_to_wait[-1]}"
+        )
         await asyncio.sleep(current_diff)
         asyncio.gather(send_pictures(current_to_wait[-1]))
         await asyncio.sleep(5)
