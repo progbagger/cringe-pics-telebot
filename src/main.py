@@ -36,10 +36,11 @@ CATEGORIES = {
 SUBSCRIBED = "✅"
 UNSUBSCRIBED = "❌"
 
-POSTGRES_HOST = "localhost"
-POSTGRES_USERNAME = os.environ.get("POSTGRES_USERNAME")
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = os.environ.get("POSTGRES_PORT", 5432)
+POSTGRES_USERNAME = os.environ.get("POSTGRES_USERNAME", "postgres")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
-POSTGRES_NAME = os.environ.get("POSTGRES_NAME")
+POSTGRES_NAME = os.environ.get("POSTGRES_NAME", "cringe")
 POSTGRES_TABLE = "users"
 POSTGRES_CONNECTION = None
 
@@ -240,6 +241,7 @@ async def main():
         global POSTGRES_CONNECTION
         POSTGRES_CONNECTION = pg2.connect(
             host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
             database=POSTGRES_NAME,
             user=POSTGRES_USERNAME,
             password=POSTGRES_PASSWORD,
@@ -264,6 +266,7 @@ CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE} (
             await task
     except (Exception, KeyboardInterrupt) as e:
         print(e.__class__.__name__)
+        exit(1)
 
 
 if __name__ == "__main__":
