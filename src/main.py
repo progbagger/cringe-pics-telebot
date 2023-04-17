@@ -20,9 +20,6 @@ if TOKEN is None:
 
 BOT = AsyncTeleBot(TOKEN, parse_mode="HTML")
 
-USERS = {}
-USERS_FILENAME = "users.json"
-
 BASE_DIRECTORY = os.path.dirname(os.path.realpath(__file__)) + "/../"
 ASSETS_DIRECTORY = BASE_DIRECTORY + "assets/"
 
