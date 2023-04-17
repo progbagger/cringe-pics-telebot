@@ -258,8 +258,9 @@ async def schedule_messages():
         await asyncio.sleep(5)
 
 
-@BOT.message_handler(content_types=["text"])
-@BOT.message_handler(regexp=f"(?i){'|'.join([*CATEGORIES_TO_BUTTONS.values()])}")
+@BOT.message_handler(
+    content_types=["text"], regexp=f"(?i){'|'.join([*CATEGORIES_TO_BUTTONS.values()])}"
+)
 async def send_pictures_on_button(message: Message):
     message.text = {v: k for k, v in CATEGORIES_TO_BUTTONS.items()}[
         message.text.capitalize()
