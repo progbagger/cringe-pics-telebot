@@ -35,7 +35,7 @@ CATEGORIES = {
 
 CATEGORIES_TO_BUTTONS = {
     "morning": "Утро",
-    "evening": "День",
+    "evening": "Вечер",
     "night": "Ночь",
     "day": "День",
     "random": "Случайно",
@@ -52,6 +52,12 @@ POSTGRES_NAME = os.environ.get("POSTGRES_NAME", "cringe")
 POSTGRES_TABLE = "users"
 POSTGRES_CONNECTION = None
 
+REPLY_MARKUP = (
+    ReplyKeyboardMarkup(resize_keyboard=True)
+    .add("Список подписок", row_width=1)
+    .add(*CATEGORIES_TO_BUTTONS.values())
+)
+
 
 @BOT.message_handler(commands=["start", "help", "commands"])
 @BOT.message_handler(regexp=r"(?i)помощь|команд|help")
@@ -59,9 +65,7 @@ async def send_help(message: Message):
     asyncio.gather(
         BOT.send_message(
             message.chat.id,
-            reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(
-                "Список подписок", *CATEGORIES_TO_BUTTONS.values()
-            ),
+            reply_markup=REPLY_MARKUP,
             text=f"""\
 <b>Приветствую, <i>{message.from_user.full_name}</i>!</b>
 
@@ -163,13 +167,14 @@ async def send_photo(id: int, folder: str, image_name: str, category: str):
     if image_name:
         with open(f"{folder}/{image_name}", "rb") as image_to_send:
             if image_name.endswith(GIF_FORMAT):
-                await BOT.send_animation(id, image_to_send)
+                await BOT.send_animation(id, image_to_send, reply_markup=REPLY_MARKUP)
             else:
-                await BOT.send_photo(id, image_to_send)
+                await BOT.send_photo(id, image_to_send, reply_markup=REPLY_MARKUP)
     else:
         await BOT.send_message(
             id,
             f"В категории <b>{CATEGORIES[category]}</b> пока нет картинок, но они скоро появятся. Обязательно появятся.",
+            reply_markup=REPLY_MARKUP,
         )
 
 
@@ -272,6 +277,7 @@ async def send_anything(message: Message):
 
 Если хочешь пообщаться - я уверен, у тебя есть родственники в WhatsApp :)\
 """,
+        reply_markup=REPLY_MARKUP,
     )
 
 
