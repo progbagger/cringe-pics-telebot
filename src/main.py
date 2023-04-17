@@ -33,6 +33,14 @@ CATEGORIES = {
     "day": "Ежедневная (12:00)",
 }
 
+CATEGORIES_TO_BUTTONS = {
+    "morning": "Утро",
+    "evening": "День",
+    "night": "Ночь",
+    "day": "День",
+    "random": "Случайно",
+}
+
 SUBSCRIBED = "✅"
 UNSUBSCRIBED = "❌"
 
@@ -52,7 +60,7 @@ async def send_help(message: Message):
         BOT.send_message(
             message.chat.id,
             reply_markup=ReplyKeyboardMarkup(resize_keyboard=True).add(
-                "Список подписок"
+                "Список подписок", *CATEGORIES_TO_BUTTONS.values()
             ),
             text=f"""\
 <b>Приветствую, <i>{message.from_user.full_name}</i>!</b>
@@ -243,6 +251,28 @@ async def schedule_messages():
         await asyncio.sleep(current_diff)
         asyncio.gather(send_pictures(current_to_wait[-1]))
         await asyncio.sleep(5)
+
+
+@BOT.message_handler(content_types=["text"])
+@BOT.message_handler(regexp=f"(?i){'|'.join(*CATEGORIES_TO_BUTTONS.values())}")
+async def send_pictures_on_button(message: Message):
+    message.text = {v: k for k, v in CATEGORIES_TO_BUTTONS.items()}[
+        message.text.capitalize()
+    ]
+
+    await send_random_categorized_photo(message)
+
+
+@BOT.message_handler(content_types=["text"])
+async def send_anything(message: Message):
+    await BOT.send_message(
+        message.chat.id,
+        """\
+Я не знаю такой команды.
+
+Если хочешь пообщаться - я уверен, у тебя есть родственники в WhatsApp :)\
+""",
+    )
 
 
 async def main():
