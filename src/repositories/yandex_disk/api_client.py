@@ -1,29 +1,48 @@
 import asyncio
-import atexit
-import aiohttp
-import logging
 
-logger = logging.getLogger(__name__)
+import aiohttp
+from repositories.api_client import ApiClient
 
 
 class YandexDiskApiClient:
     BASE_URL = "https://cloud-api.yandex.net"
 
     def __init__(self, oauth_token: str) -> None:
-        self._oauth_token = oauth_token
-        self._session = aiohttp.ClientSession(
-            base_url=self.BASE_URL,
-            headers={"Authorization", f"OAuth {self._oauth_token}"},
-            raise_for_status=True,
+        self._api_client = ApiClient(base_url=self.BASE_URL, oauth_token=oauth_token)
+
+    async def get_images_paths(self, dirpath: str) -> list[str]:
+        params = {
+            "fields": ".".join(["_embedded"]),
+            "path": f"app:/{dirpath.strip("/")}",
+            "limit": 1_000_000,
+        }
+
+        response = await self._api_client.get(url=f"/v1/disk/resources", params=params)
+        items: list[str] = []
+        for item in response["_embedded"]["items"]:
+            if item["type"] == "file" and item["mime_type"].startswith("image"):
+                items.append(item["path"])
+
+        return items
+
+    async def download_image(self, image_path: str) -> tuple[bytes, str]:
+        params = {
+            "path": image_path,
+            "fields": ".".join(["href"]),
+        }
+
+        response = await self._api_client.get(
+            url=f"/v1/disk/resources/download", params=params
         )
 
-        atexit.register(self._sync_close)
+        save = self._api_client._session._base_url
+        self._api_client._session._base_url = None
+        result = await self._api_client.get(
+            url=response["href"], getter=aiohttp.ClientResponse.read
+        )
+        self._api_client._session._base_url = save
 
-    async def _close(self) -> None:
-        await self._session.close()
-
-    def _sync_close(self) -> None:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self._close())
-
-    # async def
+        try:
+            return result, image_path.split(".")[-1]
+        except IndexError:
+            return result, ""
