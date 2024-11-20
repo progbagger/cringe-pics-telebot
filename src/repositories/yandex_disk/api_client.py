@@ -1,6 +1,7 @@
 import asyncio
 
 import aiohttp
+from entities import Image, YandexDiskImagePath
 from repositories.api_client import ApiClient
 
 
@@ -10,7 +11,7 @@ class YandexDiskApiClient:
     def __init__(self, oauth_token: str) -> None:
         self._api_client = ApiClient(base_url=self.BASE_URL, oauth_token=oauth_token)
 
-    async def get_images_paths(self, dirpath: str) -> list[tuple[str, str]]:
+    async def get_images_paths(self, dirpath: str) -> list[YandexDiskImagePath]:
         params = {
             "fields": ".".join(["_embedded"]),
             "path": f"app:/{dirpath.strip("/")}",
@@ -18,16 +19,22 @@ class YandexDiskApiClient:
         }
 
         response = await self._api_client.get(url=f"/v1/disk/resources", params=params)
-        items: list[str] = []
+
+        items: list[YandexDiskImagePath] = []
         for item in response["_embedded"]["items"]:
             if item["type"] == "file" and item["mime_type"].startswith("image"):
-                items.append((item["path"], item["mime_type"]))
+                items.append(
+                    YandexDiskImagePath(
+                        path=item["path"],
+                        mime_type=item["mime_type"] if item["mime_type"] else None,
+                    )
+                )
 
         return items
 
-    async def download_image(self, image_path: str) -> bytes:
+    async def download_image(self, image_path: YandexDiskImagePath) -> bytes:
         params = {
-            "path": image_path,
+            "path": image_path.path,
             "fields": ".".join(["href"]),
         }
 
@@ -42,4 +49,13 @@ class YandexDiskApiClient:
         )
         self._api_client._session._base_url = save
 
-        return result
+        try:
+            image_format = (
+                image_path.mime_type.split("/")[-1]
+                if image_path.mime_type is not None
+                else None
+            )
+        except IndexError:
+            image_format = None
+
+        return Image(data=result, format=image_format)
