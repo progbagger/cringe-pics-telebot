@@ -11,20 +11,26 @@ class Base(AsyncAttrs, DeclarativeBase):
 users_to_categories_table = Table(
     "users_to_categories",
     Base.metadata,
-    Column("user", ForeignKey("users.id")),
-    Column("category", ForeignKey("categories.id")),
+    Column("user_id", ForeignKey("users.id")),
+    Column("category_id", ForeignKey("categories.id")),
 )
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 
     categories: Mapped[list["Category"]] = relationship(
-        "Category", secondary=users_to_categories_table, back_populates="users"
+        "Category",
+        secondary=users_to_categories_table,
+        back_populates="users",
+        lazy="selectin",
     )
+
+    def __eq__(self, other: "User") -> bool:
+        return self.id == other.id
 
 
 class Category(Base):
@@ -35,5 +41,11 @@ class Category(Base):
     path: Mapped[str]
 
     users: Mapped[list[User]] = relationship(
-        User, secondary=users_to_categories_table, back_populates="categories"
+        User,
+        secondary=users_to_categories_table,
+        back_populates="categories",
+        lazy="selectin",
     )
+
+    def __eq__(self, other: "Category") -> bool:
+        return self.id == other.id
