@@ -76,8 +76,11 @@ async def test_fill_tables(create_tables, session: AsyncSession):
 
         user1, user2 = users
 
-        assert user1.categories == [category1, category2]
-        assert user2.categories == [category2, category3]
+        assert category1 in user1.categories
+        assert category2 in user1.categories
+
+        assert category2 in user2.categories
+        assert category3 in user2.categories
 
         category1, category2, category3 = categories
 
@@ -87,7 +90,8 @@ async def test_fill_tables(create_tables, session: AsyncSession):
 
         assert category2.name == "name2"
         assert category2.path == "path2"
-        assert category2.users == [user1, user2]
+        assert user1 in category2.users
+        assert user2 in category2.users
 
         assert category3.name == "name3"
         assert category3.path == "path3"

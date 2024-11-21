@@ -2,6 +2,7 @@ import datetime
 from sqlalchemy import Column, ForeignKey, Table, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship, DeclarativeBase
 from sqlalchemy.ext.asyncio import AsyncAttrs
+from dataclasses import dataclass
 
 
 class Base(AsyncAttrs, DeclarativeBase):
@@ -16,6 +17,7 @@ users_to_categories_table = Table(
 )
 
 
+@dataclass(kw_only=True, repr=True)
 class User(Base):
     __tablename__ = "users"
 
@@ -29,16 +31,15 @@ class User(Base):
         lazy="selectin",
     )
 
-    def __eq__(self, other: "User") -> bool:
-        return self.id == other.id
 
-
+@dataclass(kw_only=True, repr=True)
 class Category(Base):
     __tablename__ = "categories"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str]
     path: Mapped[str]
+    created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 
     users: Mapped[list[User]] = relationship(
         User,
@@ -46,6 +47,3 @@ class Category(Base):
         back_populates="categories",
         lazy="selectin",
     )
-
-    def __eq__(self, other: "Category") -> bool:
-        return self.id == other.id
