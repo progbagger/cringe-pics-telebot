@@ -1,6 +1,6 @@
 from typing import AsyncGenerator
 import pytest
-from orm import Base
+from cringe_pics_telebot.orm import Base
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine,
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy import select, insert
 import asyncio
 
-from orm import User, Category
+from cringe_pics_telebot.orm import User, Category
 
 
 @pytest.fixture
