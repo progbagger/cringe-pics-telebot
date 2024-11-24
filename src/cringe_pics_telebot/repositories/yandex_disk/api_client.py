@@ -1,6 +1,6 @@
 import aiohttp
 from cringe_pics_telebot.entities import Image, YandexDiskImagePath
-from cringe_pics_telebot.repositories.api_client import ApiClient
+from cringe_pics_telebot.repositories.api_client.api_client import ApiClient
 
 
 class YandexDiskApiClient:
