@@ -50,16 +50,18 @@ async def test_fill_tables(create_tables, session: AsyncSession):
     category3 = Category(name="name3", path="path3", time=datetime.time(23, 30))
 
     user1 = User(
+        id=123456,
         categories=[
             category1,
             category2,
-        ]
+        ],
     )
     user2 = User(
+        id=654321,
         categories=[
             category2,
             category3,
-        ]
+        ],
     )
 
     # act
@@ -81,6 +83,9 @@ async def test_fill_tables(create_tables, session: AsyncSession):
 
         assert category2 in user2.categories
         assert category3 in user2.categories
+
+        assert user1.id == 123456
+        assert user2.id == 654321
 
         category1, category2, category3 = categories
 

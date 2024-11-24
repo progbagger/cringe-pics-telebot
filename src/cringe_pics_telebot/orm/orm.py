@@ -22,7 +22,7 @@ users_to_categories_table = Table(
 class User(Base):
     __tablename__ = "users"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 
     categories: Mapped[list["Category"]] = relationship(
