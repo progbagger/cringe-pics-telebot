@@ -1,10 +1,10 @@
 import asyncio
 import atexit
-from typing import Any, Coroutine
-import aiohttp
 import logging
+from typing import Any, Callable, Coroutine
 
-from yarl import Query
+import aiohttp
+from yarl import URL, Query
 
 from cringe_pics_telebot.utilities import setup_logger
 
@@ -15,7 +15,7 @@ logger = setup_logger(
 )
 
 
-def log_request(*, method: str, status_code: int, url: str) -> None:
+def log_request(*, method: str, status_code: int, url: str | URL) -> None:
     if 400 > status_code:
         logging_func = logger.info
     else:
@@ -64,7 +64,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         async with self._session.request(
@@ -86,7 +86,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(
@@ -106,7 +106,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(
@@ -126,7 +126,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(
@@ -146,7 +146,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(
@@ -166,7 +166,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(
@@ -186,7 +186,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(
@@ -206,7 +206,7 @@ class ApiClient:
         params: Query | None = None,
         json: Any | None = None,
         headers: dict[str, str] | None = None,
-        getter: Coroutine[None, None, Any] = aiohttp.ClientResponse.json,
+        getter: Callable[..., Coroutine] = aiohttp.ClientResponse.json,
         **kwargs,
     ) -> Any:
         return await self.request(

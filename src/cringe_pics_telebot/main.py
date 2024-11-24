@@ -1,17 +1,13 @@
-from telebot.async_telebot import AsyncTeleBot
-from telebot.types import (
-    Message,
-    ReplyKeyboardMarkup,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    CallbackQuery,
-)
-import os
-import logging
-import psycopg2 as pg2
 import asyncio
-import time
+import logging
+import os
 import random
+import time
+
+import psycopg2 as pg2
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import (CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message, ReplyKeyboardMarkup)
 
 TOKEN = os.environ.get("TELEBOT_TOKEN")
 if TOKEN is None:

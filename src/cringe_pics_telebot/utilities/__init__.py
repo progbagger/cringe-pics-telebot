@@ -1,1 +1,1 @@
-from .setup_logger import setup_logger, LoggingLevel
+from .setup_logger import LoggingLevel as LoggingLevel, setup_logger as setup_logger

@@ -1,16 +1,11 @@
 from typing import AsyncGenerator
-import pytest
-from cringe_pics_telebot.orm import Base
-from sqlalchemy.ext.asyncio import (
-    create_async_engine,
-    AsyncEngine,
-    async_sessionmaker,
-    AsyncSession,
-)
-from sqlalchemy import select, insert
-import asyncio
 
-from cringe_pics_telebot.orm import User, Category
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import (AsyncEngine, AsyncSession,
+                                    async_sessionmaker, create_async_engine)
+
+from cringe_pics_telebot.orm import Base, Category, User
 
 
 @pytest.fixture

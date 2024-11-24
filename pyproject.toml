@@ -9,13 +9,17 @@ readme = "README.md"
 python = "^3.12"
 aiohttp = "^3.11.6"
 pyTelegramBotAPI = "^4.24.0"
-sqlalchemy = "^2.0.36"
+sqlalchemy = {extras = ["mypy"], version = "^2.0.36"}
 asyncpg = "^0.30.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
 pytest-asyncio = "^0.24.0"
 aiosqlite = "^0.20.0"
+mypy = "^1.13.0"
+ruff = "^0.8.0"
+isort = "^5.13.2"
+types-psycopg2 = "^2.9.21.20241019"
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,6 +1,6 @@
 import logging
-from enum import IntEnum
 import sys
+from enum import IntEnum
 from typing import TextIO
 
 
@@ -15,29 +15,28 @@ class LoggingLevel(IntEnum):
 def setup_logger(
     *,
     name: str,
-    level: LoggingLevel | None = None,
+    level: LoggingLevel | int | None = None,
     file: TextIO | str | None = None,
     fmt: str | None = None,
 ) -> logging.Logger:
     if not level:
-        level = logging.WARNING
+        level = LoggingLevel(logging.WARNING)
     if not file:
         file = sys.stderr
     if not fmt:
         fmt = "%(asctime)s - %(levelname)s - %(message)s"
 
     logger = logging.getLogger(name)
-    logger.setLevel(level)
+    logger.setLevel(int(level) if isinstance(level, LoggingLevel) else level)
     logger.handlers = []
 
     formatter = logging.Formatter(fmt=fmt)
 
     if isinstance(file, str):
-        handler_cls = logging.FileHandler
+        handler: logging.StreamHandler = logging.FileHandler(file)
     else:
-        handler_cls = logging.StreamHandler
+        handler = logging.StreamHandler(file)
 
-    handler = handler_cls(file)
     handler.setFormatter(formatter)
     handler.setLevel(level)
 

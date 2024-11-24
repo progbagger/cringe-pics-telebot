@@ -1,1 +1,1 @@
-from .image import Image, YandexDiskImagePath
+from .image import Image as Image, YandexDiskImagePath as YandexDiskImagePath

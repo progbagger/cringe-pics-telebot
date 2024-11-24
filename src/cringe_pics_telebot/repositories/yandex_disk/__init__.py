@@ -1,1 +1,1 @@
-from .api_client import YandexDiskApiClient
+from .api_client import YandexDiskApiClient as YandexDiskApiClient

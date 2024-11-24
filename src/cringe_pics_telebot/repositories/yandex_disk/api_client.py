@@ -1,4 +1,5 @@
 import aiohttp
+
 from cringe_pics_telebot.entities import Image, YandexDiskImagePath
 from cringe_pics_telebot.repositories.api_client.api_client import ApiClient
 
@@ -10,13 +11,13 @@ class YandexDiskApiClient:
         self._api_client = ApiClient(base_url=self.BASE_URL, oauth_token=oauth_token)
 
     async def get_images_paths(self, dirpath: str) -> list[YandexDiskImagePath]:
-        params = {
+        params: dict[str, str | int | float] = {
             "fields": ".".join(["_embedded"]),
             "path": f"app:/{dirpath.strip("/")}",
             "limit": 1_000_000,
         }
 
-        response = await self._api_client.get(url=f"/v1/disk/resources", params=params)
+        response = await self._api_client.get(url="/v1/disk/resources", params=params)
 
         items: list[YandexDiskImagePath] = []
         for item in response["_embedded"]["items"]:
@@ -37,7 +38,7 @@ class YandexDiskApiClient:
         }
 
         response = await self._api_client.get(
-            url=f"/v1/disk/resources/download", params=params
+            url="/v1/disk/resources/download", params=params
         )
 
         save = self._api_client._session._base_url
