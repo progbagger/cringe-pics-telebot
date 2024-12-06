@@ -40,6 +40,7 @@ class Category(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column()
     path: Mapped[str] = mapped_column()
+    time: Mapped[datetime.time] = mapped_column()
     created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
 
     users: Mapped[list[User]] = relationship(
