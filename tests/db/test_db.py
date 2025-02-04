@@ -1,12 +1,10 @@
 import datetime
 
-import pytest
 
 
 from cringe_pics_telebot.db import get_users_by_category, get_categories
 from sqlalchemy.ext.asyncio import AsyncSession
 from cringe_pics_telebot.orm import User, Category
-from sqlalchemy import select
 
 
 async def test_get_categories(session: AsyncSession):
