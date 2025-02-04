@@ -1,36 +1,11 @@
-from typing import AsyncGenerator
 import datetime
 
-import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
     AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
 )
 
-from cringe_pics_telebot.orm import Base, Category, User
-
-
-@pytest.fixture
-async def engine() -> AsyncGenerator[AsyncEngine, None]:
-    engine = create_async_engine("sqlite+aiosqlite://", echo=True)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture
-async def session(engine: AsyncEngine) -> AsyncGenerator[AsyncSession, None]:
-    sessionmaker = async_sessionmaker(engine)
-    async with sessionmaker() as session:
-        yield session
-
-
-@pytest.fixture
-async def create_tables(engine: AsyncEngine):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+from cringe_pics_telebot.orm import Category, User
 
 
 async def test_create_tables(create_tables, session: AsyncSession):
