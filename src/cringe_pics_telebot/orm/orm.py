@@ -29,7 +29,7 @@ class User(Base):
         "Category",
         secondary=users_to_categories_table,
         back_populates="users",
-        lazy="immediate",
+        lazy="selectin",
     )
 
 
@@ -47,5 +47,5 @@ class Category(Base):
         User,
         secondary=users_to_categories_table,
         back_populates="categories",
-        lazy="immediate",
+        lazy="selectin",
     )

@@ -1,4 +1,6 @@
 from .db import (
-    get_categories as get_categories,
-    get_users_by_category as get_users_by_category,
+    DatabaseManager as DatabaseManager,
+    DbError as DbError,
+    EmptyResultError as EmptyResultError,
+    NoSuchUserError as NoSuchUserError,
 )

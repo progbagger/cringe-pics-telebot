@@ -11,7 +11,7 @@ from cringe_pics_telebot.orm import Base
 
 @pytest.fixture
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
-    engine = create_async_engine("sqlite+aiosqlite://", echo=True)
+    engine = create_async_engine("sqlite+aiosqlite://")
     yield engine
     await engine.dispose()
 

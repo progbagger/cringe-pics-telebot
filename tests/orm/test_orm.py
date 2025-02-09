@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import (
 from cringe_pics_telebot.orm import Category, User
 
 
-async def test_create_tables(create_tables, session: AsyncSession):
+async def test_create_tables(session: AsyncSession):
     # assert
     async with session.begin():
         users = (await session.execute(select(User))).all()
@@ -18,7 +18,7 @@ async def test_create_tables(create_tables, session: AsyncSession):
         assert not categories
 
 
-async def test_fill_tables(create_tables, session: AsyncSession):
+async def test_fill_tables(session: AsyncSession):
     # arrange
     category1 = Category(name="name1", path="path1", time=datetime.time(0))
     category2 = Category(name="name2", path="path2", time=datetime.time(15))
