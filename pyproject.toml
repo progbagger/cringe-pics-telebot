@@ -6,10 +6,10 @@ authors = ["Danil Astakhov <thrixstudio@yandex.ru>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "~3.13"
 aiohttp = "^3.11.6"
 pyTelegramBotAPI = "^4.24.0"
-sqlalchemy = {extras = ["asyncio"], version = "^2.0.36"}
+sqlalchemy = { extras = ["asyncio"], version = "^2.0.36" }
 asyncpg = "^0.30.0"
 
 [tool.poetry.group.dev.dependencies]
