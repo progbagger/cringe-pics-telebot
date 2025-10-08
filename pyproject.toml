@@ -1,11 +1,11 @@
-[tool.poetry]
+[project]
 name = "cringe-pics-telebot"
 version = "0.1.0"
 description = ""
-authors = ["Danil Astakhov <thrixstudio@yandex.ru>"]
+authors = [{ name = "Danil Astakhov", email = "thrixstudio@yandex.ru>" }]
 readme = "README.md"
 
-[tool.poetry.dependencies]
+dependencies = []
 python = "~3.13"
 aiohttp = "^3.11.6"
 pyTelegramBotAPI = "^4.24.0"

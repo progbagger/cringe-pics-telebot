@@ -1,5 +1,6 @@
 import datetime
 from dataclasses import dataclass
+from typing import Optional
 
 from sqlalchemy import Column, ForeignKey, Table, func
 from sqlalchemy.ext.asyncio import AsyncAttrs
@@ -24,6 +25,9 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
     created_at: Mapped[datetime.datetime] = mapped_column(server_default=func.now())
+    last_sent_scheduled_message_date: Mapped[Optional[datetime.datetime]] = (
+        mapped_column()
+    )
 
     categories: Mapped[list["Category"]] = relationship(
         "Category",

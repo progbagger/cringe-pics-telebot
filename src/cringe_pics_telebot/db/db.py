@@ -52,6 +52,9 @@ class DatabaseManager:
     async def get_all_categories(self) -> Sequence[Category]:
         return (await self.__session.execute(select(Category))).scalars().all()
 
+    async def get_all_users(self) -> Sequence[User]:
+        return (await self.__session.execute(select(Category))).scalars().all()
+
     async def get_user_by_id(self, id: int) -> User:
         try:
             return (
@@ -62,6 +65,13 @@ class DatabaseManager:
 
     async def add_user(self, user: User) -> None:
         self.__session.add(user)
+
+    async def get_category(self, category_name: str) -> Category | None:
+        return (
+            await self.__session.execute(
+                select(Category).where(Category.name == category_name)
+            )
+        ).scalar_one_or_none()
 
     @asynccontextmanager
     async def session(self) -> AsyncGenerator[AsyncSession, None]:
