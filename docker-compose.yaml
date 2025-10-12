@@ -1,0 +1,23 @@
+services:
+  bot:
+    build: . # Build the image from the current directory (where the Dockerfile is located)
+    depends_on:
+      - db # Ensure the 'db' service starts before 'web'
+    env_file:
+      - .env
+    volumes:
+      - ./assets:/assets
+
+  db:
+    image: postgres # Use the official PostgreSQL 13 image
+    environment:
+      POSTGRES_DB: cringe
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - db_data:/var/lib/postgresql/data # Mount a named volume for persistent data storage
+    ports:
+      - 5432:5432
+
+volumes:
+  db_data: # Define the named volume

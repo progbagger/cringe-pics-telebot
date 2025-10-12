@@ -1,17 +1,22 @@
+import asyncio
+import logging
+import os
+import random
+import time
+
+import psycopg2 as pg2
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
     ReplyKeyboardMarkup,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    CallbackQuery,
 )
-import os
-import logging
-import psycopg2 as pg2
-import asyncio
-import time
-import random
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 TOKEN = os.environ.get("TELEBOT_TOKEN")
 if TOKEN is None:
@@ -23,8 +28,7 @@ BOT = AsyncTeleBot(TOKEN, parse_mode="HTML")
 USERS = {}
 USERS_FILENAME = "users.json"
 
-BASE_DIRECTORY = os.path.dirname(os.path.realpath(__file__)) + "/../"
-ASSETS_DIRECTORY = BASE_DIRECTORY + "assets/"
+ASSETS_DIRECTORY = os.environ.get("ASSETS_DIRECTORY", "/assets/")
 
 CATEGORIES = {
     "morning": "Утренняя (9:00)",
@@ -44,7 +48,7 @@ CATEGORIES_TO_BUTTONS = {
 SUBSCRIBED = "✅"
 UNSUBSCRIBED = "❌"
 
-POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
+POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "0.0.0.0")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", 5432)
 POSTGRES_USERNAME = os.environ.get("POSTGRES_USERNAME", "postgres")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
@@ -301,7 +305,7 @@ async def main():
             f"""\
 CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE} (
     id BIGINT PRIMARY KEY UNIQUE NOT NULL,
-    {', '.join(f'{cat} BOOLEAN NOT NULL DEFAULT false' for cat in CATEGORIES.keys())}
+    {", ".join(f"{cat} BOOLEAN NOT NULL DEFAULT false" for cat in CATEGORIES.keys())}
 )"""
         )
         cursor.close()
@@ -312,8 +316,8 @@ CREATE TABLE IF NOT EXISTS {POSTGRES_TABLE} (
         ]
         for task in tasks:
             await task
-    except (Exception, KeyboardInterrupt) as e:
-        print(e.__class__.__name__)
+    except (Exception, KeyboardInterrupt):
+        logger.exception("Oops")
         exit(1)
 
 
