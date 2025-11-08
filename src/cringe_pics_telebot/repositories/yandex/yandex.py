@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import os
 from dataclasses import dataclass
 from itertools import count
 from typing import AsyncGenerator
@@ -24,13 +22,23 @@ class Image:
 
 
 class YandexS3Client:
+    """Клиент для загрузки файлов с Яндекс.Диска"""
+
     _session: aiohttp.ClientSession
 
     YANDEX_DISK_API_BASE_URL = "https://cloud-api.yandex.net/v1/disk/"
     YANDEX_DISK_DOWNLOAD_BASE_URL = "https://downloader.dst.yandex.ru/disk/"
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, *, fetch_size: int = 1_000) -> None:
+        """Создаёт клиент с заданным токеном приложения.
+
+        Args:
+            token (str): Токен приложения
+        """
+
         self._token = token
+
+        self.fetch_size = fetch_size
 
     async def __aenter__(self) -> "YandexS3Client":
         self._session = aiohttp.ClientSession(
@@ -46,20 +54,47 @@ class YandexS3Client:
 
     @classmethod
     def _create_url(cls, path: str, *, base_url: str | None = None) -> str:
+        """Создаёт URL для обращения в API Яндекс.Диска.
+
+        Args:
+            path (str): Конечный путь, который нужно присоединить к базовому пути API Яндекс.Диска
+            base_url (str | None, optional): Если базовый путь другой (например, при скачивании объекта).
+
+        Returns:
+            str: Полный путь для обращения в API Яндекс.Диска
+        """
+
         return f"{(base_url or cls.YANDEX_DISK_API_BASE_URL).rstrip('/')}/{path.lstrip('/')}"
 
     @staticmethod
     def _get_path_with_app(path: str) -> str:
+        """Делает путь к объекту пригодным для папки приложения.
+
+        Args:
+            path (str): Путь к объекту на диске
+
+        Returns:
+            str: Путь с префиксом `app:/`
+        """
+
         return f"app:/{path.lstrip('/')}"
 
     async def list_dir(self, path: str = "/") -> AsyncGenerator[Image]:
-        fetch_size = 1_000
-        for i in count(0, fetch_size):
+        """Перечисляет изображения в папке по указанному пути.
+
+        Args:
+            path (str, optional): Путь до папки. Defaults to "/".
+
+        Returns:
+            AsyncGenerator[Image]: Асинхронный генератор изображений в папке
+        """
+
+        for i in count(0, self.fetch_size):
             async with self._session.get(
                 self._create_url("/resources"),
                 params={
                     "path": self._get_path_with_app(path or ""),
-                    "limit": fetch_size,
+                    "limit": self.fetch_size,
                     "offset": i,
                 },
             ) as response:
@@ -81,10 +116,23 @@ class YandexS3Client:
 
                     items_count += 1
 
-            if items_count < fetch_size:
+            if items_count < self.fetch_size:
                 break
 
-    async def download_file(self, path: str) -> bytes:
+    async def download_file(self, path: str, dir: str | None = None) -> bytes:
+        """Скачивает файл по указанному пути.
+
+        Args:
+            path (str): Путь к файлу, который нужно скачать
+            dir (str | None, optional): Если путь неполный, можно присоединить к нему папку, указав этот параметр
+
+        Returns:
+            bytes: Скачанный файл в байтах
+        """
+
+        if dir is not None:
+            path = f"{dir.lstrip('/')}/{path.lstrip('/')}"
+
         async with self._session.get(
             self._create_url("/resources/download"),
             params={"path": self._get_path_with_app(path), "fields": "href"},
@@ -93,30 +141,3 @@ class YandexS3Client:
 
         async with self._session.get(link) as response:
             return await response.read()
-
-
-async def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-
-    async with YandexS3Client(os.environ["YANDEX_DISK_APP_CLIENT_TOKEN"]) as s3_client:
-
-        async def download_and_save_image(*, image_path: str, save_path: str) -> None:
-            image_bytes = await s3_client.download_file(image_path)
-            with open(save_path, "wb") as f:
-                f.write(image_bytes)
-
-        images = [image async for image in s3_client.list_dir("day")]
-
-        os.makedirs("downloads", exist_ok=True)
-        async with asyncio.TaskGroup() as tg:
-            for image in images:
-                tg.create_task(
-                    download_and_save_image(
-                        image_path=f"day/{image.name}",
-                        save_path=os.path.join("downloads", image.name),
-                    )
-                )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
