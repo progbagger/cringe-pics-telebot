@@ -1,0 +1,21 @@
+from datetime import UTC, datetime
+
+from sqlalchemy import insert
+
+from .connection import get_connection
+from .entities import User
+from .tables import users as users
+
+
+async def create_user(user_id: int) -> User:
+    async with get_connection() as conn:
+        row = (
+            await conn.execute(
+                insert(users)
+                .values(id=user_id, created_at=datetime.now(UTC))
+                .returning()
+            )
+        ).fetchone()
+        assert row is not None
+
+        return User(id=row.id, created_at=row.created_at)
