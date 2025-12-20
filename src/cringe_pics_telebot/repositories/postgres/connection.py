@@ -6,11 +6,16 @@ from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 _session: ContextVar[AsyncSession] = ContextVar("_session")
-
 _sessionmaker: async_sessionmaker | None = None
 
 
-class NotConnectedError(Exception): ...
+class DbConnectionError(ConnectionError): ...
+
+
+class NotConnectedError(DbConnectionError): ...
+
+
+class AlreadyConnectedError(DbConnectionError): ...
 
 
 def connect(
@@ -22,6 +27,8 @@ def connect(
     host: str,
 ) -> None:
     global _sessionmaker
+    if _sessionmaker is not None:
+        raise AlreadyConnectedError
 
     _sessionmaker = async_sessionmaker(
         create_async_engine(

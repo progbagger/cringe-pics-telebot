@@ -1,3 +1,8 @@
+from .connection import AlreadyConnectedError as AlreadyConnectedError
+from .connection import DbConnectionError as DbConnectionError
+from .connection import NotConnectedError as NotConnectedError
+from .connection import connect as connect
+from .connection import get_connection as get_connection
 from .entities import Subscription as Subscription
 from .entities import SubscriptionType as SubscriptionType
 from .entities import User as User

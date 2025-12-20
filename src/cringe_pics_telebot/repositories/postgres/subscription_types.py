@@ -5,12 +5,12 @@ from .entities.subscription_type import SubscriptionType
 from .tables import subscription_types
 
 
-async def get_subscription_types() -> list[SubscriptionType]:
+async def get_subscription_types() -> dict[int, SubscriptionType]:
     async with get_connection() as conn:
         rows = (await conn.execute(select(subscription_types))).fetchall()
 
-        return [
-            SubscriptionType(
+        return {
+            row.id: SubscriptionType(
                 id=row.id,
                 name=row.name,
                 time=row.time,
@@ -19,4 +19,4 @@ async def get_subscription_types() -> list[SubscriptionType]:
                 updated_at=row.updated_at,
             )
             for row in rows
-        ]
+        }

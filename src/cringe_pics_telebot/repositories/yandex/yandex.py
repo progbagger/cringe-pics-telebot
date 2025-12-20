@@ -19,6 +19,8 @@ class Image:
     """Название изображения"""
     mime_type: str
     """Мим-тип изображения"""
+    path: str
+    """Путь к изображению в S3"""
 
 
 class YandexS3Client:
@@ -112,6 +114,7 @@ class YandexS3Client:
                         yield Image(
                             name=image_path.split("/", 4)[-1],
                             mime_type=mime_type,
+                            path=image_path,
                         )
 
                     items_count += 1
