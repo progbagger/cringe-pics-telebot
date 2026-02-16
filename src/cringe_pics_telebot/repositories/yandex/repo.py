@@ -1,4 +1,4 @@
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from cringe_pics_telebot.repositories.yandex import Image
 from cringe_pics_telebot.repositories.yandex import get_connection as get

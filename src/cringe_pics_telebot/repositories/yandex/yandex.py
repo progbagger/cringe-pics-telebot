@@ -1,7 +1,7 @@
 import logging
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from itertools import count
-from typing import AsyncGenerator
 
 import aiohttp
 

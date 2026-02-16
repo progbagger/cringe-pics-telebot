@@ -1,6 +1,6 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import AsyncIterator
 
 from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -58,3 +58,9 @@ async def get_connection() -> AsyncIterator[AsyncSession]:
                 yield session
             finally:
                 _session.reset(token)
+
+
+@asynccontextmanager
+async def transaction() -> AsyncIterator[None]:
+    async with get_connection() as conn, conn.begin():
+        yield

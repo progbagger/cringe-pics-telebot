@@ -9,11 +9,7 @@ from aiohttp import (
 
 
 def log_request(*, logger: Logger, method: str, url: str, status: int) -> None:
-    if status < 400:
-        f = logger.info
-    else:
-        f = logger.error
-
+    f = logger.info if status < 400 else logger.error
     f("%s %d %s", method, status, url)
 
 
