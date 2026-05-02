@@ -35,16 +35,15 @@ async def create_subscription(subscription: CreateSubscription) -> Subscription:
 
 async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
     async with get_connection() as conn:
+        us = select(s).where(s.c.user_id == user_id).subquery()
         rows = (
             await conn.execute(
                 select(
                     st.c.id,
                     st.c.name,
                     st.c.time,
-                    s.c.id.is_not(None).label("subscribed"),
-                )
-                .select_from(st.outerjoin(s, s.c.subscription_type_id == st.c.id))
-                .where(s.c.user_id == user_id)
+                    us.c.id.is_not(None).label("subscribed"),
+                ).select_from(st.outerjoin(us, us.c.subscription_type_id == st.c.id))
             )
         ).fetchall()
 
