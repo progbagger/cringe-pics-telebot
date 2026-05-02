@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, time
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class SubscriptionType:
     id: int
     """ID типа подписки"""
@@ -16,3 +16,9 @@ class SubscriptionType:
     """Время создания типа подписки"""
     updated_at: datetime
     """Время обновления типа подписки"""
+
+    def __eq__(self, other: "SubscriptionType") -> bool:
+        return self.id == other.id
+
+    def __hash__(self) -> int:
+        return hash(self.id)

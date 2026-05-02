@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres
+    env_file:
+      - postgres.env
+    ports:
+      - 4243:5432
+    expose:
+      - 5432
+    restart: unless-stopped
+
+  bot:
+    build: .
+    env_file:
+      - tg.env
+    depends_on:
+      - db
+    restart: unless-stopped

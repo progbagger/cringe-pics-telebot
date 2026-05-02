@@ -1,12 +1,21 @@
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+import os
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 
 from sqlalchemy import URL
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from ._metadata import _metadata
 
 _session: ContextVar[AsyncSession] = ContextVar("_session")
 _sessionmaker: async_sessionmaker | None = None
+_engine: AsyncEngine | None = None
 
 
 class DbConnectionError(ConnectionError): ...
@@ -25,13 +34,14 @@ def connect(
     database: str,
     port: int,
     host: str,
-) -> None:
+):
     global _sessionmaker
     if _sessionmaker is not None:
         raise AlreadyConnectedError
 
+    global _engine
     _sessionmaker = async_sessionmaker(
-        create_async_engine(
+        _engine := create_async_engine(
             url=URL.create(
                 drivername="postgresql+asyncpg",
                 username=username,
@@ -45,12 +55,12 @@ def connect(
 
 
 @asynccontextmanager
-async def get_connection() -> AsyncIterator[AsyncSession]:
+async def get_connection() -> AsyncGenerator[AsyncSession]:
     try:
         yield _session.get()
     except LookupError as e:
         if _sessionmaker is None:
-            raise NotConnectedError("Not connected to the database") from e
+            raise NotConnectedError from e
 
         async with _sessionmaker() as session:
             token = _session.set(session)
@@ -61,6 +71,14 @@ async def get_connection() -> AsyncIterator[AsyncSession]:
 
 
 @asynccontextmanager
-async def transaction() -> AsyncIterator[None]:
+async def transaction() -> AsyncGenerator[None]:
     async with get_connection() as conn, conn.begin():
         yield
+
+
+async def create_tables() -> None:
+    if _engine is None:
+        raise NotConnectedError
+
+    async with _engine.begin() as conn:
+        await conn.run_sync(_metadata.create_all)

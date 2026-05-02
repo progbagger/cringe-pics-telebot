@@ -7,7 +7,9 @@ from cringe_pics_telebot.repositories.yandex import download_file, list_dir
 async def get_random_image(category_id: int | None = None) -> bytes:
     """Неоптимизировано на данный момент. После прикрутить кэш или CDN."""
 
-    subscription_types = await get_subscription_types()
+    subscription_types = {
+        subscription.id: subscription for subscription in await get_subscription_types()
+    }
     if category_id is None:
         category = random.choice(list(subscription_types.values()))
     else:

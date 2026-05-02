@@ -22,8 +22,9 @@ def create_inline_subscriptions_keyboard(
     inline_keyboard_builder = InlineKeyboardBuilder()
 
     for subscription in subscriptions:
+        emoji = Emojis.subscribed if subscription.subscribed else Emojis.unsubscribed
         inline_keyboard_builder.button(
-            text=f"{Emojis.subscribed if subscription.subscribed else Emojis.unsubscribed}"  # noqa: E501
+            text=f"{emoji}"
             f" {subscription.name}, {subscription.send_time.strftime('HH:MM')}",
             callback_data=json.dumps(
                 {

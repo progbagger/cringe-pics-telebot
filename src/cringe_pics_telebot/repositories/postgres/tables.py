@@ -1,13 +1,17 @@
 import sqlalchemy as sa
 
-_metadata = sa.MetaData()
+from ._metadata import _metadata
+
+
+def _time_column(name: str) -> sa.Column:
+    return sa.Column(name, sa.TIME(True), nullable=False, default=sa.text("now()"))
 
 
 users = sa.Table(
     "users",
     _metadata,
     sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=False),
-    sa.Column("created_at", sa.TIMESTAMP(True), nullable=False),
+    _time_column("created_at"),
 )
 
 
@@ -18,8 +22,8 @@ subscription_types = sa.Table(
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
     sa.Column("time", sa.TIME(True), nullable=False),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
-    sa.Column("created_at", sa.TIMESTAMP(True), nullable=False),
-    sa.Column("updated_at", sa.TIMESTAMP(True), nullable=False),
+    _time_column("created_at"),
+    _time_column("updated_at"),
 )
 
 subscriptions = sa.Table(
@@ -38,6 +42,6 @@ subscriptions = sa.Table(
         sa.ForeignKey(users.c.id),
         nullable=False,
     ),
-    sa.Column("created_at", sa.TIMESTAMP(True), nullable=False),
+    _time_column("created_at"),
     sa.Index("subscriptions_user_id_idx", _subscriptions_user_id),
 )
