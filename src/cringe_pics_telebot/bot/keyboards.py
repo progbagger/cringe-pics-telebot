@@ -1,15 +1,13 @@
-import json
 from collections.abc import Iterable
 
 from aiogram.types import (
-    InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-from cringe_pics_telebot.bot.utils import Emojis
+from cringe_pics_telebot.bot.emojis import Emoji
+from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import (
     SubscriptionType,
@@ -22,15 +20,13 @@ def create_inline_subscriptions_keyboard(
     inline_keyboard_builder = InlineKeyboardBuilder()
 
     for subscription in subscriptions:
-        emoji = Emojis.subscribed if subscription.subscribed else Emojis.unsubscribed
+        emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
         inline_keyboard_builder.button(
             text=f"{emoji}"
-            f" {subscription.name}, {subscription.send_time.strftime('HH:MM')}",
-            callback_data=json.dumps(
-                {
-                    "category_id": subscription.id,
-                    "subscribe": not subscription.subscribed,
-                }
+            f" {subscription.name} – {subscription.send_time.strftime('%H:%M')}",
+            callback_data=SubscriptionCallbackData(
+                category_id=subscription.id,
+                subscribe=not subscription.subscribed,
             ),
         )
 

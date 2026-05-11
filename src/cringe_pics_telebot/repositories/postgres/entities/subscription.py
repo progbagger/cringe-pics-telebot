@@ -1,14 +1,14 @@
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class CreateSubscription:
     subscription_type_id: int
     """ID типа подписки"""
     user_id: int
     """ID пользователя, чья это подписка"""
-    created_at: datetime
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     """Время создания подписки"""
 
 

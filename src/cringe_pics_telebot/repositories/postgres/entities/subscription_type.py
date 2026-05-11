@@ -17,7 +17,10 @@ class SubscriptionType:
     updated_at: datetime
     """Время обновления типа подписки"""
 
-    def __eq__(self, other: "SubscriptionType") -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, SubscriptionType):
+            return NotImplemented
+
         return self.id == other.id
 
     def __hash__(self) -> int:

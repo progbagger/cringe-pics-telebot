@@ -1,4 +1,5 @@
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert
 
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 
@@ -20,7 +21,8 @@ async def create_subscription(subscription: CreateSubscription) -> Subscription:
                     user_id=subscription.user_id,
                     created_at=subscription.created_at,
                 )
-                .returning()
+                .on_conflict_do_nothing()
+                .returning(s)
             )
         ).fetchone()
         assert row is not None
@@ -58,21 +60,11 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
         ]
 
 
-async def delete_subscription(subscription_id: int) -> Subscription | None:
+async def delete_subscription(*, user_id: int, subscription_type_id: int) -> None:
     async with get_connection() as conn:
-        row = (
-            await conn.execute(
-                delete(subscriptions)
-                .where(subscriptions.c.id == subscription_id)
-                .returning()
-            )
-        ).fetchone()
-        if row is None:
-            return None
-
-        return Subscription(
-            id=row.id,
-            subscription_type_id=row.subscription_type_id,
-            user_id=row.user_id,
-            created_at=row.created_at,
+        await conn.execute(
+            delete(subscriptions)
+            .where(subscriptions.c.user_id == user_id)
+            .where(subscriptions.c.subscription_type_id == subscription_type_id)
+            .returning()
         )
