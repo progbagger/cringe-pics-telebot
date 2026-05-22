@@ -26,7 +26,7 @@ async def start_polling() -> None:
     password = os.environ.get("POSTGRES_PASSWORD", "postgres")
     host = os.environ.get("POSTGRES_HOST", "0.0.0.0")
     port = int(os.environ.get("POSTGRES_PORT", "5432"))
-    database = os.environ.get("POSTGRES_DB`", "postgres")
+    database = os.environ.get("POSTGRES_DB", "postgres")
     connect(
         username=username,
         password=password,

@@ -71,8 +71,12 @@ async def get_connection() -> AsyncGenerator[AsyncSession]:
 
 @asynccontextmanager
 async def transaction() -> AsyncGenerator[None]:
-    async with get_connection() as conn, conn.begin():
-        yield
+    async with get_connection() as conn:
+        if conn.in_transaction():
+            yield
+        else:
+            async with conn.begin():
+                yield
 
 
 async def create_tables() -> None:

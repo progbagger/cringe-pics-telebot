@@ -24,7 +24,7 @@ from cringe_pics_telebot.repositories.postgres.subscription import (
 from cringe_pics_telebot.repositories.postgres.subscription_types import (
     get_subscription_types,
 )
-from cringe_pics_telebot.services.subscriptions import get_user_subscriptions
+from cringe_pics_telebot.services.subscriptions import get_user_subscriptions, subscribe, unsubscribe
 
 logger = logging.getLogger(__name__)
 
@@ -93,12 +93,7 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
         subscription_params = SubscriptionCallbackData.unpack(callback.data)
         async with transaction():
             if subscription_params.subscribe:
-                await create_subscription(
-                    CreateSubscription(
-                        subscription_type_id=subscription_params.category_id,
-                        user_id=callback.from_user.id,
-                    )
-                )
+                await subscribe(user_id=callback.from_user.id, subscription_type_id=subscription_params.category_id)
                 logger.info(
                     "User %d subscribed to category %d",
                     callback.from_user.id,
@@ -107,7 +102,7 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
                 await callback.answer("Подписка оформлена!")
 
             else:
-                await delete_subscription(
+                await unsubscribe(
                     user_id=callback.from_user.id,
                     subscription_type_id=subscription_params.category_id,
                 )
@@ -122,13 +117,9 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
                 callback.message,
                 InaccessibleMessage,
             ):
-                updated_user_subscriptions = await get_user_subscriptions(
-                    callback.from_user.id
-                )
+                updated_user_subscriptions = await get_user_subscriptions(callback.from_user.id)
                 await callback.message.edit_reply_markup(
-                    reply_markup=create_inline_subscriptions_keyboard(
-                        updated_user_subscriptions
-                    )
+                    reply_markup=create_inline_subscriptions_keyboard(updated_user_subscriptions)
                 )
 
             else:

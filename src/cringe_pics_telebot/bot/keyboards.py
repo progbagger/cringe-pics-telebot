@@ -22,8 +22,7 @@ def create_inline_subscriptions_keyboard(
     for subscription in subscriptions:
         emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
         inline_keyboard_builder.button(
-            text=f"{emoji}"
-            f" {subscription.name} – {subscription.send_time.strftime('%H:%M')}",
+            text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')}",
             callback_data=SubscriptionCallbackData(
                 category_id=subscription.id,
                 subscribe=not subscription.subscribed,
@@ -44,4 +43,4 @@ def create_reply_keyboard(
     for subscription_type in sorted(subscription_types, key=lambda st: st.time):
         reply_keyboard_builder.button(text=subscription_type.name.capitalize())
 
-    return reply_keyboard_builder.as_markup()
+    return reply_keyboard_builder.as_markup(resize_keyboard=True, is_persistent=True)
