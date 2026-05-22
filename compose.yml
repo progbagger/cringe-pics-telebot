@@ -7,12 +7,31 @@ services:
       - 4243:5432
     expose:
       - 5432
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - pg-data:/var/lib/postgresql
     restart: unless-stopped
 
   bot:
-    build: .
+    image: ghcr.io/astral-sh/uv:python3.14-alpine
     env_file:
       - tg.env
+      - postgres.env
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app:ro
+      - bot-env:/app/.venv
+    working_dir: /app
+    command: ["uv", "run", "bot"]
     restart: unless-stopped
+
+volumes:
+  pg-data:
+  bot-env:

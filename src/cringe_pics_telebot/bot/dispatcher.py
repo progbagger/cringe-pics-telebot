@@ -84,7 +84,7 @@ async def show_subscriptions(message: Message) -> None:
     )
 
 
-@dp.callback_query(SubscriptionCallbackData)
+@dp.callback_query(SubscriptionCallbackData.filter())
 @check_has_data
 async def process_subscribtion(callback: CallbackQuery) -> None:
     assert callback.data is not None
