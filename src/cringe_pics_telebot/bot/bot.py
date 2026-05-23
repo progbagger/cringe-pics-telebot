@@ -1,7 +1,7 @@
 import logging
 import os
 
-from aiogram import Bot
+from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
@@ -9,7 +9,7 @@ from cringe_pics_telebot.repositories.postgres import connect as connect_postgre
 from cringe_pics_telebot.repositories.postgres import create_tables
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 
-from .dispatcher import dp
+from .images import router
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -53,4 +53,6 @@ async def start_polling() -> None:
     logger.info("Connected to the Yandex!")
 
     logger.info("Polling...")
+    dp = Dispatcher()
+    dp.include_router(router)
     await dp.start_polling(bot)

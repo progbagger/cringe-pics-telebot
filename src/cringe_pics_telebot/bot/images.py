@@ -1,6 +1,6 @@
 import logging
 
-from aiogram import Dispatcher, F
+from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import (
     BufferedInputFile,
@@ -30,10 +30,10 @@ from cringe_pics_telebot.services.subscriptions import (
 
 logger = logging.getLogger(__name__)
 
-dp = Dispatcher()
+router = Router(name="main")
 
 
-@dp.message(Command("start", "help"))
+@router.message(Command("start", "help"))
 async def handle_start(message: Message) -> None:
     if message.from_user is None:
         logger.info("Received message without from_user: %d", message.message_id)
@@ -63,8 +63,8 @@ async def handle_start(message: Message) -> None:
     )
 
 
-@dp.message(Command("list", "subscriptions"))
-@dp.message(F.text.lower().contains("подписк"))
+@router.message(Command("list", "subscriptions"))
+@router.message(F.text.lower().contains("подписк"))
 async def show_subscriptions(message: Message) -> None:
     if message.from_user is None:
         logger.info("Received message without from_user: %d", message.message_id)
@@ -83,7 +83,7 @@ async def show_subscriptions(message: Message) -> None:
     )
 
 
-@dp.callback_query(SubscriptionCallbackData.filter())
+@router.callback_query(SubscriptionCallbackData.filter())
 async def process_subscribtion(callback: CallbackQuery) -> None:
     if callback.data is None:
         logger.error("Received callback query without data: %d", callback.id)
@@ -148,7 +148,7 @@ async def _subscription_type_filter(message: Message) -> dict[str, SubscriptionT
     return False
 
 
-@dp.message(_subscription_type_filter)
+@router.message(_subscription_type_filter)
 async def send_image(message: Message, *, subscription_type: SubscriptionType) -> None:
     if message.text is None or message.from_user is None:
         logger.info("Received message without text or from_user: %d", message.message_id)
@@ -171,6 +171,6 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
         await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
 
 
-@dp.message()
+@router.message()
 async def unknown_message(message: Message) -> None:
     await handle_start(message)
