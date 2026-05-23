@@ -1,4 +1,3 @@
-
 from cringe_pics_telebot.entities.subscriptions import (
     SubscriptionInfo,
 )
@@ -16,7 +15,6 @@ from cringe_pics_telebot.repositories.postgres.entities.subscription_type import
 from cringe_pics_telebot.repositories.postgres.users import create_user
 
 
-# @ttl_cache(maxsize=1, ttl=60 * 60 * 24)  # 1 day
 async def get_subscription_types() -> list[SubscriptionType]:
     return await get_subscription_types_pg()
 
