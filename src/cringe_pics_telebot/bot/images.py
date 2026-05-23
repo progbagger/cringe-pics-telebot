@@ -6,6 +6,7 @@ from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
     InaccessibleMessage,
+    InputMedia,
     InputMediaAnimation,
     InputMediaPhoto,
     Message,
@@ -158,6 +159,8 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
 
     try:
         image = await get_random_image(subscription_type.id)
+
+        input_media_type: type[InputMedia]
         if "gif" in image.mime_type:
             filename = f"{subscription_type.s3_directory_path}.gif"
             input_media_type = InputMediaAnimation

@@ -1,5 +1,6 @@
-from .bot import start_polling
+from .bot import create_bot, dp
 
 __all__ = [
-    "start_polling",
+    "create_bot",
+    "dp",
 ]
