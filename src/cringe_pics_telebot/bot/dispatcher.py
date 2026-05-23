@@ -7,6 +7,7 @@ from aiogram.types import (
     CallbackQuery,
     InaccessibleMessage,
     InputMediaAnimation,
+    InputMediaPhoto,
     Message,
 )
 
@@ -157,18 +158,13 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
 
     try:
         image = await get_random_image(subscription_type.id)
-        await sent_message.edit_media(
-            InputMediaAnimation(
-                media=BufferedInputFile(
-                    image.data,
-                    (
-                        f"{subscription_type.s3_directory_path}.gif"
-                        if "gif" in image.mime_type
-                        else subscription_type.s3_directory_path
-                    ),
-                )
-            )
-        )
+        if "gif" in image.mime_type:
+            filename = f"{subscription_type.s3_directory_path}.gif"
+            input_media_type = InputMediaAnimation
+        else:
+            filename = subscription_type.s3_directory_path
+            input_media_type = InputMediaPhoto
+        await sent_message.edit_media(input_media_type(media=BufferedInputFile(image.data, filename)))
 
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)

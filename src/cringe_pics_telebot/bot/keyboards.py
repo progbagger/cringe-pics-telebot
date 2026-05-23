@@ -43,4 +43,9 @@ def create_reply_keyboard(
     for subscription_type in sorted(subscription_types, key=lambda st: st.time):
         reply_keyboard_builder.button(text=subscription_type.name.capitalize())
 
-    return reply_keyboard_builder.as_markup(resize_keyboard=True, is_persistent=True)
+    reply_keyboard_builder.adjust(1, 3)
+    return reply_keyboard_builder.as_markup(
+        resize_keyboard=True,
+        input_field_placeholder="Выберите категорию",
+        selective=True,
+    )
