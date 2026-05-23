@@ -1,5 +1,4 @@
 import logging
-from functools import partial
 
 from aiogram import Dispatcher, F
 from aiogram.filters import Command
@@ -8,7 +7,6 @@ from aiogram.types import (
     CallbackQuery,
     InaccessibleMessage,
     InputMediaAnimation,
-    InputMediaPhoto,
     Message,
 )
 
@@ -17,10 +15,10 @@ from cringe_pics_telebot.bot.keyboards import (
     create_reply_keyboard,
 )
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
-from cringe_pics_telebot.bot.utils import check_has_properties
 from cringe_pics_telebot.repositories.postgres.connection import (
     transaction,
 )
+from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
 from cringe_pics_telebot.services.random_image import get_random_image
 from cringe_pics_telebot.services.subscriptions import (
     get_subscription_types,
@@ -33,17 +31,12 @@ logger = logging.getLogger(__name__)
 
 dp = Dispatcher()
 
-check_with_logger = partial(check_has_properties, logger=logger)
-
-check_from_user = check_with_logger("from_user")
-check_has_data = check_with_logger("data")
-check_has_text = check_with_logger("text")
-
 
 @dp.message(Command("start", "help"))
-@check_from_user
 async def handle_start(message: Message) -> None:
-    assert message.from_user is not None
+    if message.from_user is None:
+        logger.info("Received message without from_user: %d", message.message_id)
+        return
 
     subscription_types = await get_subscription_types()
     text = f"""\
@@ -70,10 +63,11 @@ async def handle_start(message: Message) -> None:
 
 
 @dp.message(Command("list", "subscriptions"))
-@dp.message(F.text.lower() == "подписки")
-@check_from_user
+@dp.message(F.text.lower().contains("подписк"))
 async def show_subscriptions(message: Message) -> None:
-    assert message.from_user is not None
+    if message.from_user is None:
+        logger.info("Received message without from_user: %d", message.message_id)
+        return
 
     subscriptions = await get_user_subscriptions(message.from_user.id)
     await message.answer(
@@ -89,9 +83,10 @@ async def show_subscriptions(message: Message) -> None:
 
 
 @dp.callback_query(SubscriptionCallbackData.filter())
-@check_has_data
 async def process_subscribtion(callback: CallbackQuery) -> None:
-    assert callback.data is not None
+    if callback.data is None:
+        logger.error("Received callback query without data: %d", callback.id)
+        return
 
     try:
         subscription_params = SubscriptionCallbackData.unpack(callback.data)
@@ -143,26 +138,43 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
             logger.error("Failed to show alert to user %d", callback.from_user.id)
 
 
-@dp.message(F.text.is_not(None))
-@check_has_text
-@check_from_user
-async def send_image(message: Message) -> None:
-    assert message.text is not None
-    assert message.from_user is not None
-
-    sent_message = await message.reply("<i>Выбираю картинку...</i>")
-
-    try:
+async def _subscription_type_filter(message: Message) -> dict[str, SubscriptionType] | bool:
+    if message.text is not None:
         subscription_types_by_name = {st.name.lower(): st for st in await get_subscription_types()}
         if s := subscription_types_by_name.get(message.text.lower()):
-            image = await get_random_image(s.id)
+            return {"subscription_type": s}
 
-            if "gif" in image.mime_type:
-                await sent_message.edit_media(
-                    InputMediaAnimation(media=BufferedInputFile(image.data, f"{s.s3_directory_path}.gif"))
+    return False
+
+
+@dp.message(_subscription_type_filter)
+async def send_image(message: Message, *, subscription_type: SubscriptionType) -> None:
+    if message.text is None or message.from_user is None:
+        logger.info("Received message without text or from_user: %d", message.message_id)
+        return
+
+    sent_message = await message.reply("<i>Выбираю картинку</i>")
+
+    try:
+        image = await get_random_image(subscription_type.id)
+        await sent_message.edit_media(
+            InputMediaAnimation(
+                media=BufferedInputFile(
+                    image.data,
+                    (
+                        f"{subscription_type.s3_directory_path}.gif"
+                        if "gif" in image.mime_type
+                        else subscription_type.s3_directory_path
+                    ),
                 )
-            else:
-                await sent_message.edit_media(InputMediaPhoto(media=BufferedInputFile(image.data, s.s3_directory_path)))
+            )
+        )
+
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)
-        await sent_message.edit_text("Произошла ошибка. Попробуй ещё раз.")
+        await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
+
+
+@dp.message()
+async def unknown_message(message: Message) -> None:
+    await handle_start(message)
