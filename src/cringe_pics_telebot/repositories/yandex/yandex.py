@@ -2,6 +2,7 @@ import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from itertools import count
+from typing import Any
 
 import aiohttp
 
@@ -51,7 +52,7 @@ class YandexS3Client:
         await self._session.__aenter__()
         return self
 
-    async def __aexit__(self, *args, **kwargs) -> None:
+    async def __aexit__(self, *args: Any, **kwargs: Any) -> None:
         await self._session.__aexit__(*args, **kwargs)
 
     @classmethod
@@ -104,6 +105,11 @@ class YandexS3Client:
                 j = await response.json()
                 for item in j["_embedded"]["items"]:
                     image_path: str = item["path"]
+
+                    # возвращаются пути вида
+                    # disk:/Приложения/Название приложения/путь
+                    # нас же интересует только путь, поэтому убираем префикс
+                    image_path = image_path.split("/", 3)[-1]
 
                     try:
                         mime_type: str | None = item["mime_type"]

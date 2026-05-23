@@ -5,7 +5,9 @@ from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from cringe_pics_telebot.repositories.postgres import connect, create_tables
+from cringe_pics_telebot.repositories.postgres import connect as connect_postgres
+from cringe_pics_telebot.repositories.postgres import create_tables
+from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 
 from .dispatcher import dp
 
@@ -27,7 +29,7 @@ async def start_polling() -> None:
     host = os.environ.get("POSTGRES_HOST", "0.0.0.0")
     port = int(os.environ.get("POSTGRES_PORT", "5432"))
     database = os.environ.get("POSTGRES_DB", "postgres")
-    connect(
+    connect_postgres(
         username=username,
         password=password,
         database=database,
@@ -39,6 +41,16 @@ async def start_polling() -> None:
     logger.info("Createing tables...")
     await create_tables()
     logger.info("Tables created!")
+
+    logger.info("Connecting to Yandex...")
+    try:
+        yandex_key = os.environ["YANDEX_DISK_TOKEN"]
+    except KeyError:
+        logger.exception("Failed to get Yandex token")
+        raise
+    else:
+        connect_yandex(yandex_key)
+    logger.info("Connected to the Yandex!")
 
     logger.info("Polling...")
     await dp.start_polling(bot)

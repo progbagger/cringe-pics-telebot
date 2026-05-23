@@ -1,6 +1,11 @@
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+
 from .yandex import YandexS3Client
 
-_client: YandexS3Client | None = None
+_client: ContextVar[YandexS3Client] = ContextVar("yandex_s3_client")
+_TOKEN: str | None = None
 
 
 class S3ConnectionError(ConnectionError): ...
@@ -9,19 +14,23 @@ class S3ConnectionError(ConnectionError): ...
 class NotConnectedError(S3ConnectionError): ...
 
 
-class AlreadyConnectedError(S3ConnectionError): ...
-
-
 def connect(token: str) -> None:
-    global _client
-    if _client is not None:
-        raise AlreadyConnectedError
-
-    _client = YandexS3Client(token)
+    global _TOKEN
+    _TOKEN = token
 
 
-def get_connection() -> YandexS3Client:
-    if _client is None:
+@asynccontextmanager
+async def get_connection() -> AsyncGenerator[YandexS3Client]:
+    if _TOKEN is None:
         raise NotConnectedError
 
-    return _client
+    try:
+        yield _client.get()
+    except LookupError:
+        try:
+            client = YandexS3Client(_TOKEN)
+            token = _client.set(client)
+            async with client:
+                yield client
+        finally:
+            _client.reset(token)
