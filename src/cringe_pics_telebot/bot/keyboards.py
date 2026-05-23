@@ -19,7 +19,7 @@ def create_inline_subscriptions_keyboard(
 ) -> InlineKeyboardMarkup:
     inline_keyboard_builder = InlineKeyboardBuilder()
 
-    for subscription in subscriptions:
+    for subscription in sorted(subscriptions, key=lambda s: s.send_time):
         emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
         inline_keyboard_builder.button(
             text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')}",

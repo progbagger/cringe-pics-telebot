@@ -27,7 +27,7 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - .:/app:ro
+      - .:/app
       - bot-env:/app/.venv
     working_dir: /app
     command: ["uv", "run", "bot"]
