@@ -1,23 +1,18 @@
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 
 from sqlalchemy import URL
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from ._metadata import _metadata
 
 _session: ContextVar[AsyncSession] = ContextVar("_session")
-_sessionmaker: async_sessionmaker | None = None
-_engine: AsyncEngine | None = None
+_sessionmaker: ContextVar[async_sessionmaker] = ContextVar("_sessionmaker")
+_engine: ContextVar[AsyncEngine] = ContextVar("_asyncpg_engine")
 
 
-class DbConnectionError(ConnectionError): ...
+class DbConnectionError(Exception): ...
 
 
 class NotConnectedError(DbConnectionError): ...
@@ -26,47 +21,60 @@ class NotConnectedError(DbConnectionError): ...
 class AlreadyConnectedError(DbConnectionError): ...
 
 
-def connect(
+@asynccontextmanager
+async def connect(
     *,
     username: str,
     password: str,
     database: str,
     port: int,
     host: str,
-):
-    global _sessionmaker
-    if _sessionmaker is not None:
+) -> AsyncGenerator[tuple[AsyncEngine, async_sessionmaker]]:
+    with suppress(LookupError):
+        _engine.get()
         raise AlreadyConnectedError
 
-    global _engine
-    _sessionmaker = async_sessionmaker(
-        _engine := create_async_engine(
-            url=URL.create(
-                drivername="postgresql+asyncpg",
-                username=username,
-                password=password,
-                host=host,
-                port=port,
-                database=database,
+    with (
+        _engine.set(
+            create_async_engine(
+                url=URL.create(
+                    drivername="postgresql+asyncpg",
+                    username=username,
+                    password=password,
+                    host=host,
+                    port=port,
+                    database=database,
+                )
             )
-        )
-    )
+        ),
+        _sessionmaker.set(async_sessionmaker(_engine.get())),
+    ):
+        yield _engine.get(), _sessionmaker.get()
+        await _engine.get().dispose()
+
+
+def get_engine() -> AsyncEngine:
+    try:
+        return _engine.get()
+    except LookupError as e:
+        raise NotConnectedError from e
+
+
+def get_sessionmaker() -> async_sessionmaker:
+    try:
+        return _sessionmaker.get()
+    except LookupError as e:
+        raise NotConnectedError from e
 
 
 @asynccontextmanager
 async def get_connection() -> AsyncGenerator[AsyncSession]:
     try:
         yield _session.get()
-    except LookupError as e:
-        if _sessionmaker is None:
-            raise NotConnectedError from e
-
-        async with _sessionmaker() as session:
-            token = _session.set(session)
-            try:
+    except LookupError:
+        async with _sessionmaker.get()() as session:
+            with _session.set(session):
                 yield session
-            finally:
-                _session.reset(token)
 
 
 @asynccontextmanager
@@ -80,8 +88,10 @@ async def transaction() -> AsyncGenerator[None]:
 
 
 async def create_tables() -> None:
-    if _engine is None:
-        raise NotConnectedError
+    try:
+        engine = _engine.get()
+    except LookupError as e:
+        raise NotConnectedError from e
 
-    async with _engine.begin() as conn:
-        await conn.run_sync(_metadata.create_all)
+    async with engine.begin() as tx:
+        await tx.run_sync(_metadata.create_all)
