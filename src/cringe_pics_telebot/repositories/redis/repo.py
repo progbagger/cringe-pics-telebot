@@ -1,13 +1,22 @@
+import hashlib
 import json
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
-from typing import Any, get_type_hints, overload
+from typing import Any, Protocol, get_type_hints, overload, runtime_checkable
 
 from cringe_pics_telebot.helpers.serializers import get_serializer
 
 from .connection import get_connection
 
-type _Wrappable[**P, R] = Callable[P, Coroutine[Any, Any, R]]
+
+@runtime_checkable
+class _CallableWithName[**P, R](Protocol):
+    __name__: str
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+
+type _Wrappable[**P, R] = _CallableWithName[P, Coroutine[Any, Any, R]]
 
 
 async def set(*, key: str, value: Any, ttl: timedelta | None = None) -> None:
@@ -35,7 +44,13 @@ def cached[**P, R](*, ttl: timedelta) -> Callable[[_Wrappable[P, R]], _Wrappable
 
 
 def _make_key[**P, R](func: _Wrappable[P, R], *args: P.args, **kwargs: P.kwargs) -> str:
-    return f"{id(func)}:{args}:{kwargs}"
+    try:
+        payload = json.dumps((args, kwargs), default=repr, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except Exception:
+        payload = repr((args, kwargs))
+
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"{func.__module__}.{func.__name__}:{digest}"
 
 
 def cached[**P, R](
