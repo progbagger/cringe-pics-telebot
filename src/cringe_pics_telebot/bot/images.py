@@ -40,7 +40,7 @@ async def handle_start(message: Message) -> None:
         logger.info("Received message without from_user: %d", message.message_id)
         return
 
-    subscription_types = await get_subscription_types()
+    subscription_types = await get_subscription_types() or []
     text = f"""\
 <b>Приветствую, <i>{message.from_user.first_name}</i>!</b>
 
@@ -142,7 +142,7 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
 
 async def _subscription_type_filter(message: Message) -> dict[str, SubscriptionType] | bool:
     if message.text is not None:
-        subscription_types_by_name = {st.name.lower(): st for st in await get_subscription_types()}
+        subscription_types_by_name = {st.name.lower(): st for st in await get_subscription_types() or []}
         if s := subscription_types_by_name.get(message.text.lower()):
             return {"subscription_type": s}
 

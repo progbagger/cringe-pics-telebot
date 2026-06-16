@@ -16,6 +16,11 @@ class _CallableWithName[**P, R](Protocol):
     def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
 
 
+class _CachedWrapper[**P, R](Protocol):
+    async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R | None: ...
+    async def recache(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+
+
 type _Wrappable[**P, R] = _CallableWithName[P, Coroutine[Any, Any, R]]
 
 
@@ -35,14 +40,6 @@ async def get[T](*, key: str, cls: type[T]) -> T | None:
         return serializer.load(json.loads(value))
 
 
-@overload
-def cached[**P, R](func: _Wrappable[P, R]) -> _Wrappable[P, R]: ...
-
-
-@overload
-def cached[**P, R](*, ttl: timedelta) -> Callable[[_Wrappable[P, R]], _Wrappable[P, R]]: ...
-
-
 def _make_key[**P, R](func: _Wrappable[P, R], *args: P.args, **kwargs: P.kwargs) -> str:
     try:
         payload = json.dumps((args, kwargs), default=repr, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -53,27 +50,49 @@ def _make_key[**P, R](func: _Wrappable[P, R], *args: P.args, **kwargs: P.kwargs)
     return f"{func.__module__}.{func.__name__}:{digest}"
 
 
+@overload
+def cached[**P, R](func: _Wrappable[P, R], *, ttl: None = None) -> _CachedWrapper[P, R]: ...
+
+
+@overload
+def cached[**P, R](
+    func: None = None, *, ttl: timedelta | None = None
+) -> Callable[[_Wrappable[P, R]], _CachedWrapper[P, R]]: ...
+
+
 def cached[**P, R](
     func: _Wrappable[P, R] | None = None,
     *,
     ttl: timedelta | None = None,
-) -> Callable[[_Wrappable[P, R]], _Wrappable[P, R]] | _Wrappable[P, R]:
-    def decorator(func: _Wrappable[P, R]) -> _Wrappable[P, R]:
-        hints = get_type_hints(func)
-        return_type = hints.get("return")
-
-        async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            key = _make_key(func, *args, **kwargs)
-            if return_type and (cached_value := await get(key=key, cls=return_type)) is not None:
-                return cached_value
-
-            result = await func(*args, **kwargs)
-            await set(key=key, value=result, ttl=ttl)
-            return result
-
-        return wrapper
+) -> Callable[[_Wrappable[P, R]], _CachedWrapper[P, R]] | _CachedWrapper[P, R]:
+    def decorator(func: _Wrappable[P, R]) -> _CachedWrapper[P, R]:
+        return cached_internal(func=func, ttl=ttl)
 
     if func is not None:
         return decorator(func)
 
     return decorator
+
+
+class cached_internal[**P, R]:
+    def __init__(self, *, func: _Wrappable[P, R], ttl: timedelta | None = None) -> None:
+        self.func = func
+        self.ttl = ttl
+
+        self._func_return_type = get_type_hints(func).get("return")
+
+    async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R | None:
+        key = _make_key(self.func, *args, **kwargs)
+        if self._func_return_type and (cached_value := await get(key=key, cls=self._func_return_type)) is not None:
+            return cached_value
+
+        result = await self.func(*args, **kwargs)
+        await set(key=key, value=result, ttl=self.ttl)
+
+        return result
+
+    async def recache(self, *args: P.args, **kwargs: P.kwargs) -> R:
+        key = _make_key(self.func, *args, **kwargs)
+        result = await self.func(*args, **kwargs)
+        await set(key=key, value=result, ttl=self.ttl)
+        return result
