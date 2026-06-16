@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 from redis import asyncio as redis
@@ -19,9 +19,11 @@ class RedisUninitializedError(RedisError): ...
 
 @asynccontextmanager
 async def connect(*, username: str, password: str, host: str, port: int) -> AsyncGenerator[redis.ConnectionPool]:
-    with suppress(LookupError):
+    try:
         _pool.get()
         raise RedisConnectionError("Redis connection pool is already initialized.")
+    except LookupError:
+        pass
 
     with _pool.set(
         pool := redis.ConnectionPool(

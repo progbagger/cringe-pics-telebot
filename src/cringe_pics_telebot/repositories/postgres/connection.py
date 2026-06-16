@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
 from sqlalchemy import URL
@@ -30,9 +30,11 @@ async def connect(
     port: int,
     host: str,
 ) -> AsyncGenerator[tuple[AsyncEngine, async_sessionmaker]]:
-    with suppress(LookupError):
+    try:
         _engine.get()
         raise AlreadyConnectedError
+    except LookupError:
+        pass
 
     with (
         _engine.set(
