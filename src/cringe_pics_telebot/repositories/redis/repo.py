@@ -66,7 +66,7 @@ def cached[**P, R](
     ttl: timedelta | None = None,
 ) -> Callable[[_Wrappable[P, R]], _CachedWrapper[P, R]] | _CachedWrapper[P, R]:
     def decorator(func: _Wrappable[P, R]) -> _CachedWrapper[P, R]:
-        return cached_internal(func=func, ttl=ttl)
+        return Cached(func=func, ttl=ttl)
 
     if func is not None:
         return decorator(func)
@@ -74,7 +74,7 @@ def cached[**P, R](
     return decorator
 
 
-class cached_internal[**P, R]:
+class Cached[**P, R]:
     def __init__(self, *, func: _Wrappable[P, R], ttl: timedelta | None = None) -> None:
         self.func = func
         self.ttl = ttl
