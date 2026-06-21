@@ -4,7 +4,8 @@ from datetime import timedelta
 
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import get_subscription_types
-from cringe_pics_telebot.repositories.yandex import Image, download_file, list_dir
+from cringe_pics_telebot.repositories.yandex import Image, list_dir
+from cringe_pics_telebot.repositories.yandex import download_file as download_file_from_s3
 
 
 @dataclass
@@ -51,7 +52,11 @@ async def get_image_by_path(image_path: str) -> bytes | str:
     if (cached_image := await cache.get(key=image_path, cls=str)) is not None:
         return cached_image
 
-    return await download_file(image_path)
+    return await download_image(image_path)
+
+
+async def download_image(image_path: str) -> bytes:
+    return await download_file_from_s3(image_path)
 
 
 async def update_image_cache(*, image_path: str, image_id: str) -> None:

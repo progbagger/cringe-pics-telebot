@@ -17,11 +17,17 @@ from cringe_pics_telebot.bot.keyboards import (
     create_reply_keyboard,
 )
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
+from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.repositories.postgres.connection import (
     transaction,
 )
-from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
-from cringe_pics_telebot.services.random_image import CachedImage, DownloadedImage, get_random_image, update_image_cache
+from cringe_pics_telebot.services.random_image import (
+    CachedImage,
+    DownloadedImage,
+    download_image,
+    get_random_image,
+    update_image_cache,
+)
 from cringe_pics_telebot.services.subscriptions import (
     get_subscription_types,
     get_user_subscriptions,
@@ -159,31 +165,14 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
 
     try:
         image = await get_random_image(subscription_type.id)
-
-        input_media_type: type[InputMedia]
-        if "gif" in image.mime_type:
-            filename = f"{subscription_type.s3_directory_path}.gif"
-            input_media_type = InputMediaAnimation
-        else:
-            filename = subscription_type.s3_directory_path
-            input_media_type = InputMediaPhoto
-
-        match image:
-            case DownloadedImage():
-                edited_message = await sent_message.edit_media(
-                    input_media_type(media=BufferedInputFile(image.data, filename))
-                )
-            case CachedImage():
-                edited_message = await sent_message.edit_media(input_media_type(media=image.id))
+        edited_message = await _add_image_to_chat_message(message=message, image=image)
 
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)
         await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
 
     try:
-        assert isinstance(edited_message, Message)  # ! will not work in inline mode
         assert edited_message.photo is not None
-
         (photo,) = edited_message.photo
         await update_image_cache(image_path=image.path, image_id=photo.file_id)
     except Exception:
@@ -193,3 +182,41 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
 @router.message()
 async def unknown_message(message: Message) -> None:
     await handle_start(message)
+
+
+async def _add_image_to_message(*, message: Message, image: DownloadedImage | CachedImage) -> Message | bool:
+    input_media_type: type[InputMedia]
+    if "gif" in image.mime_type:
+        filename = f"{image.name}.gif"
+        input_media_type = InputMediaAnimation
+    else:
+        filename = image.name
+        input_media_type = InputMediaPhoto
+
+    added_cached_image = False
+    if isinstance(image, CachedImage):
+        try:
+            edited_message = await message.edit_media(input_media_type(media=image.id))
+        except Exception:
+            logger.exception("Failed to attach cached image %s to message %s", image.id, message.message_id)
+        else:
+            added_cached_image = True
+
+    if not added_cached_image:
+        edited_message = await message.edit_media(
+            input_media_type(
+                media=BufferedInputFile(
+                    image.data if isinstance(image, DownloadedImage) else await download_image(image.path),
+                    filename,
+                )
+            )
+        )
+
+    return edited_message
+
+
+async def _add_image_to_chat_message(*, message: Message, image: DownloadedImage | CachedImage) -> Message:
+    result = await _add_image_to_message(message=message, image=image)
+
+    assert isinstance(result, Message)
+    return result
