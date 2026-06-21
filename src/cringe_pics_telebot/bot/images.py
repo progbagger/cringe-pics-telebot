@@ -21,7 +21,7 @@ from cringe_pics_telebot.repositories.postgres.connection import (
     transaction,
 )
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
-from cringe_pics_telebot.services.random_image import get_random_image
+from cringe_pics_telebot.services.random_image import CachedImage, DownloadedImage, get_random_image, update_image_cache
 from cringe_pics_telebot.services.subscriptions import (
     get_subscription_types,
     get_user_subscriptions,
@@ -167,11 +167,27 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
         else:
             filename = subscription_type.s3_directory_path
             input_media_type = InputMediaPhoto
-        await sent_message.edit_media(input_media_type(media=BufferedInputFile(image.data, filename)))
+
+        match image:
+            case DownloadedImage():
+                edited_message = await sent_message.edit_media(
+                    input_media_type(media=BufferedInputFile(image.data, filename))
+                )
+            case CachedImage():
+                edited_message = await sent_message.edit_media(input_media_type(media=image.id))
 
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)
         await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
+
+    try:
+        assert isinstance(edited_message, Message)  # ! will not work in inline mode
+        assert edited_message.photo is not None
+
+        (photo,) = edited_message.photo
+        await update_image_cache(image_path=image.path, image_id=photo.file_id)
+    except Exception:
+        logger.exception("Failed to update image %s in cache", image.path)
 
 
 @router.message()

@@ -10,7 +10,7 @@ from cringe_pics_telebot.repositories.postgres.users import create_user
 from cringe_pics_telebot.repositories.redis import cached
 
 
-@cached(ttl=timedelta(days=1))
+@cached(ttl=timedelta(minutes=10))
 async def get_subscription_types() -> list[SubscriptionType]:
     return await get_subscription_types_pg()
 
