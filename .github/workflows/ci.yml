@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Python and uv
-        uses: ./.github/actions/dev-uv.yml
+        uses: ./.github/actions/install-project
 
       - name: Run unit tests
         run: uv run pytest tests/units -q
@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Python and uv
-        uses: ./.github/actions/dev-uv.yml
+        uses: ./.github/actions/install-project
 
       - name: Run functional tests
         run: uv run pytest tests/functional -q || if [[ $? -ne 5 ]]; then exit $?; fi

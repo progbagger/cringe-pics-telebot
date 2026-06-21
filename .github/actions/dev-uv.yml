@@ -1,6 +1,0 @@
-steps:
-  - name: "Set up Python and uv"
-    uses: ./.github/actions/setup-python.yml
-
-  - name: Install the project
-    run: uv sync --locked --all-extras --dev
