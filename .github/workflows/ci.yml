@@ -6,6 +6,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  ruff:
+    name: Run ruff check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/ruff-action@v4.0.0
+        with:
+          version-file: pyproject.toml
+      - run: ruff check
+
+  mypy:
+    name: Run mypy check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/install-project
+      - run: uv run mypy .
+
   unit-tests:
     name: Run unit tests using uv
     runs-on: ubuntu-latest
