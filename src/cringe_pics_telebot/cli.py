@@ -2,7 +2,7 @@ import asyncio
 
 import click
 
-from cringe_pics_telebot.services.polling import start_polling
+from cringe_pics_telebot.bot import start_polling
 
 
 @click.command()

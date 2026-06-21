@@ -1,8 +1,7 @@
 services:
-  db:
+  postgres:
     image: postgres
-    env_file:
-      - postgres.env
+    env_file: ./docker/postgres/.env
     ports:
       - 4243:5432
     expose:
@@ -17,14 +16,33 @@ services:
       - pg-data:/var/lib/postgresql
     restart: unless-stopped
 
+  redis:
+    build:
+      context: docker/redis
+    env_file: ./docker/redis/.env
+    ports:
+      - 12312:6379
+    expose:
+      - 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   bot:
-    image: ghcr.io/astral-sh/uv:python3.14-alpine
+    image: ghcr.io/astral-sh/uv:python3.14-trixie
     env_file:
-      - tg.env
-      - postgres.env
-      - yandex.env
+      - ./docker/bot/.env
+      - ./docker/postgres/.env
+      - ./docker/redis/.env
+      - ./docker/yandex/.env
     depends_on:
-      db:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - .:/app

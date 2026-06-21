@@ -14,9 +14,7 @@ def log_request(*, logger: Logger, method: str, url: str, status: int) -> None:
 
 
 def aiohttp_logging_middleware_factory(logger: Logger) -> ClientMiddlewareType:
-    async def log_middleware(
-        request: ClientRequest, handler: ClientHandlerType
-    ) -> ClientResponse:
+    async def log_middleware(request: ClientRequest, handler: ClientHandlerType) -> ClientResponse:
         response = await handler(request)
 
         log_request(

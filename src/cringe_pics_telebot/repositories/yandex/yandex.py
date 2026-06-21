@@ -43,7 +43,7 @@ class YandexS3Client:
 
         self.fetch_size = fetch_size
 
-    async def __aenter__(self) -> "YandexS3Client":
+    async def __aenter__(self) -> YandexS3Client:
         self._session = aiohttp.ClientSession(
             raise_for_status=True,
             headers={"Authorization": f"OAuth {self._token}"},
