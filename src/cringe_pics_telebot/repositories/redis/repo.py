@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Coroutine
 from datetime import timedelta
 from typing import Any, Protocol, get_type_hints, overload, runtime_checkable
@@ -7,6 +8,8 @@ from typing import Any, Protocol, get_type_hints, overload, runtime_checkable
 from cringe_pics_telebot.helpers.serializers import get_serializer
 
 from .connection import get_connection
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -24,10 +27,15 @@ class _CachedWrapper[**P, R](Protocol):
 type _Wrappable[**P, R] = _CallableWithName[P, Coroutine[Any, Any, R]]
 
 
-async def set(*, key: str, value: Any, ttl: timedelta | None = None) -> None:
+async def set[T](*, key: str, value: T, cls: type[T], ttl: timedelta | None = None) -> None:
     async with get_connection() as conn:
-        serializer = get_serializer(type(value))
-        await conn.set(name=key, value=json.dumps(serializer.dump(value)), ex=ttl)
+        serializer = get_serializer(cls)
+
+        try:
+            await conn.set(name=key, value=json.dumps(serializer.dump(value)), ex=ttl)
+        except Exception:
+            logger.exception("Tried to serialize %s", value)
+            raise
 
 
 async def get[T](*, key: str, cls: type[T]) -> T | None:
@@ -87,12 +95,12 @@ class Cached[**P, R]:
             return cached_value
 
         result = await self.func(*args, **kwargs)
-        await set(key=key, value=result, ttl=self.ttl)
+        await set(key=key, value=result, cls=self._func_return_type, ttl=self.ttl)  # type: ignore[arg-type]
 
         return result
 
     async def recache(self, *args: P.args, **kwargs: P.kwargs) -> R:
         key = _make_key(self.func, *args, **kwargs)
         result = await self.func(*args, **kwargs)
-        await set(key=key, value=result, ttl=self.ttl)
+        await set(key=key, value=result, cls=self._func_return_type, ttl=self.ttl)  # type: ignore[arg-type]
         return result

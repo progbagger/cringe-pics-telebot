@@ -38,7 +38,7 @@ async def _connect_postgres() -> AsyncGenerator:
 
 
 @asynccontextmanager
-async def _connect_yandex() -> AsyncGenerator:
+async def _create_yandex_client() -> AsyncGenerator:
     logger.info("Connecting to Yandex...")
     try:
         yandex_key = os.environ["YANDEX_DISK_TOKEN"]
@@ -55,19 +55,18 @@ async def _connect_yandex() -> AsyncGenerator:
 @asynccontextmanager
 async def _connect_redis() -> AsyncGenerator:
     logger.info("Connecting to Redis...")
-    username = os.environ.get("REDIS_USER", "default")
+    username = os.environ.get("REDIS_USERNAME", "default")
     password = os.environ.get("REDIS_PASSWORD", "redis")
     host = os.environ.get("REDIS_HOST", "0.0.0.0")
     port = int(os.environ.get("REDIS_PORT", "6379"))
 
     async with connect_redis(username=username, password=password, host=host, port=port):
         logger.info("Connected to Redis!")
-
-    yield
+        yield
 
 
 async def start_polling() -> None:
-    connectors = (_connect_postgres, _connect_yandex, _connect_redis)
+    connectors = (_connect_postgres, _create_yandex_client, _connect_redis)
     async with AsyncExitStack() as stack:
         for connector in connectors:
             await stack.enter_async_context(connector())

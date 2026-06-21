@@ -60,4 +60,4 @@ async def download_image(image_path: str) -> bytes:
 
 
 async def update_image_cache(*, image_path: str, image_id: str) -> None:
-    await cache.set(key=image_path, value=image_id, ttl=timedelta(days=7))
+    await cache.set(key=image_path, value=image_id, cls=str, ttl=timedelta(days=7))

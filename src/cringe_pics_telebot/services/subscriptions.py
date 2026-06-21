@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres import create_subscription, delete_subscription, transaction
 from cringe_pics_telebot.repositories.postgres import get_subscription_types as get_subscription_types_pg
@@ -7,10 +5,8 @@ from cringe_pics_telebot.repositories.postgres import get_user_subscriptions as 
 from cringe_pics_telebot.repositories.postgres.entities import CreateSubscription
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
 from cringe_pics_telebot.repositories.postgres.users import create_user
-from cringe_pics_telebot.repositories.redis import cached
 
 
-@cached(ttl=timedelta(minutes=10))
 async def get_subscription_types() -> list[SubscriptionType]:
     return await get_subscription_types_pg()
 

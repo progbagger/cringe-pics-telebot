@@ -1,4 +1,4 @@
-from .connection import RedisConnectionError, RedisError, RedisUninitializedError, connect, get_connection
+from .connection import RedisConnectionError, RedisError, connect, get_connection
 from .repo import cached, get, set
 
 __all__ = [
@@ -9,5 +9,4 @@ __all__ = [
     "cached",
     "RedisError",
     "RedisConnectionError",
-    "RedisUninitializedError",
 ]

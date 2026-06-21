@@ -12,6 +12,7 @@ from aiogram.types import (
     Message,
 )
 
+from cringe_pics_telebot.bot.helpers import HasFileId
 from cringe_pics_telebot.bot.keyboards import (
     create_inline_subscriptions_keyboard,
     create_reply_keyboard,
@@ -165,16 +166,23 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
 
     try:
         image = await get_random_image(subscription_type.id)
-        edited_message = await _add_image_to_chat_message(message=message, image=image)
+        edited_message = await _add_image_to_chat_message(message=sent_message, image=image)
 
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)
         await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
+        return
 
     try:
-        assert edited_message.photo is not None
-        (photo,) = edited_message.photo
-        await update_image_cache(image_path=image.path, image_id=photo.file_id)
+        media: HasFileId
+        if edited_message.photo is not None:
+            media, *_ = edited_message.photo
+        elif edited_message.animation is not None:
+            media = edited_message.animation
+        else:
+            raise ValueError("Resulted message %s has no media", edited_message.message_id)
+
+        await update_image_cache(image_path=image.path, image_id=media.file_id)
     except Exception:
         logger.exception("Failed to update image %s in cache", image.path)
 
@@ -197,20 +205,16 @@ async def _add_image_to_message(*, message: Message, image: DownloadedImage | Ca
     if isinstance(image, CachedImage):
         try:
             edited_message = await message.edit_media(input_media_type(media=image.id))
+            logger.info("Added cached image %s from cache", image.path)
         except Exception:
             logger.exception("Failed to attach cached image %s to message %s", image.id, message.message_id)
         else:
             added_cached_image = True
 
     if not added_cached_image:
-        edited_message = await message.edit_media(
-            input_media_type(
-                media=BufferedInputFile(
-                    image.data if isinstance(image, DownloadedImage) else await download_image(image.path),
-                    filename,
-                )
-            )
-        )
+        image_data = image.data if isinstance(image, DownloadedImage) else await download_image(image.path)
+        edited_message = await message.edit_media(input_media_type(media=BufferedInputFile(image_data, filename)))
+        logger.info("Downloaded and added image %s", image.path)
 
     return edited_message
 
