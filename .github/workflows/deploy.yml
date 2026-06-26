@@ -1,8 +1,12 @@
 name: Deploy over SSH
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
     branches: [main]
+    types:
+      - completed
+
   workflow_dispatch:
 
 jobs:
@@ -24,4 +28,6 @@ jobs:
             cd cringe-pics-telebot
             git checkout main
             git pull origin main
+
+            docker compose build
             docker compose up -d --force-recreate
