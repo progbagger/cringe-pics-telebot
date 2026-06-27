@@ -1,0 +1,25 @@
+include:
+  - ../../compose.yml
+
+services:
+  postgres:
+    env_file: ./docker/postgres.env
+    ports:
+      - 1001:5432
+    volumes: []
+    restart: no
+
+  redis:
+    env_file: ./docker/redis.env
+    ports:
+      - 1002:6379
+    volumes: []
+    restart: no
+
+  bot:
+    env_file:
+      - ./docker/bot.env
+      - ./docker/postgres.env
+      - ./docker/redis.env
+      - ./docker/yandex.env
+    restart: no
