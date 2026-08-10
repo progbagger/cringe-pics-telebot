@@ -46,7 +46,10 @@ async def _create_yandex_client() -> AsyncGenerator:
         logger.exception("Failed to get Yandex token")
         raise
     else:
-        connect_yandex(yandex_key)
+        connect_yandex(
+            yandex_key,
+            api_base_url=os.environ.get("YANDEX_DISK_API_BASE_URL"),
+        )
     logger.info("Connected to the Yandex!")
 
     yield

@@ -100,23 +100,41 @@ class FakeTelegram:
         self._next_message_id += 1
         chat_id = int(payload.get("chat_id") or payload.get("chat", {}).get("id") or 1)
         text = payload.get("text") or ""
-        return {
+        message = {
             "message_id": self._next_message_id,
             "date": int(time.time()),
             "chat": {"id": chat_id, "type": "private"},
             "text": text,
         }
+        if "reply_markup" in payload:
+            message["reply_markup"] = payload["reply_markup"]
+
+        return message
 
     def _media_message_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = self._message_from_payload(payload)
-        message["photo"] = [
-            {
-                "file_id": "functional-photo-file-id",
-                "file_unique_id": "functional-photo-file-unique-id",
+        media = payload.get("media")
+        media_id = "functional-media-file-id"
+        if isinstance(media, dict):
+            media_id = media.get("media", media_id)
+
+        if isinstance(media, dict) and media.get("type") == "animation":
+            message["animation"] = {
+                "file_id": "functional-animation-file-id",
+                "file_unique_id": "functional-animation-file-unique-id",
                 "width": 1,
                 "height": 1,
+                "duration": 1,
             }
-        ]
+        else:
+            message["photo"] = [
+                {
+                    "file_id": "functional-photo-file-id" if str(media_id).startswith("attach://") else str(media_id),
+                    "file_unique_id": "functional-photo-file-unique-id",
+                    "width": 1,
+                    "height": 1,
+                }
+            ]
         return message
 
     async def _read_payload(self, request: web.Request) -> dict[str, Any]:

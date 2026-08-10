@@ -6,7 +6,7 @@ import sys
 from asyncio import subprocess
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -45,9 +45,26 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class FunctionalSubscriptionType:
+    id: int
+    name: str
+    send_time: time
+    s3_directory_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class DependencyPorts:
     postgres: int
     redis: int
+
+
+SEEDED_SUBSCRIPTION_TYPES = (
+    FunctionalSubscriptionType(1, "/morning", time(8, 0, tzinfo=UTC), "morning"),
+    FunctionalSubscriptionType(2, "/day", time(13, 0, tzinfo=UTC), "day"),
+    FunctionalSubscriptionType(3, "/evening", time(19, 0, tzinfo=UTC), "evening"),
+    FunctionalSubscriptionType(4, "/night", time(23, 0, tzinfo=UTC), "night"),
+    FunctionalSubscriptionType(5, "/random", time(0, 0, tzinfo=UTC), "random"),
+)
 
 
 @dataclass(slots=True)
@@ -59,7 +76,7 @@ class FakeTelegramServer:
         update = {
             "message": {
                 "message_id": 1,
-                "date": int(datetime(2026, 8, 11, tzinfo=UTC).timestamp()),
+                "date": _telegram_message_date(),
                 "chat": {
                     "id": user_id,
                     "type": "private",
@@ -72,7 +89,49 @@ class FakeTelegramServer:
                     "language_code": "ru",
                 },
                 "text": text,
-                "entities": [{"type": "bot_command", "offset": 0, "length": len(text)}],
+            }
+        }
+        if text.startswith("/"):
+            update["message"]["entities"] = [
+                {"type": "bot_command", "offset": 0, "length": len(text.split(maxsplit=1)[0])}
+            ]
+
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/updates", json=update) as response,
+        ):
+            response.raise_for_status()
+            return await response.json()
+
+    async def push_callback_query(
+        self,
+        *,
+        data: str,
+        user_id: int = 42,
+        first_name: str = "Functional",
+        message_id: int = 100,
+    ) -> dict[str, Any]:
+        update = {
+            "callback_query": {
+                "id": f"callback-{message_id}",
+                "from": {
+                    "id": user_id,
+                    "is_bot": False,
+                    "first_name": first_name,
+                    "language_code": "ru",
+                },
+                "message": {
+                    "message_id": message_id,
+                    "date": _telegram_message_date(),
+                    "chat": {
+                        "id": user_id,
+                        "type": "private",
+                        "first_name": first_name,
+                    },
+                    "text": "Вот список твоих подписок.",
+                },
+                "chat_instance": "functional-chat-instance",
+                "data": data,
             }
         }
         async with (
@@ -109,6 +168,21 @@ class FakeTelegramServer:
             await asyncio.sleep(0.1)
 
         raise TimeoutError(f"Telegram request {method!r} was not received in {timeout} seconds")
+
+
+@dataclass(slots=True)
+class FakeYandexServer:
+    base_url: str
+    process: subprocess.Process
+
+    async def requests(self) -> list[dict[str, Any]]:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.base_url}/test/requests") as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
@@ -155,18 +229,40 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
 
 
 @pytest.fixture
-async def fake_telegram_server(unused_tcp_port: int) -> AsyncIterator[FakeTelegramServer]:
+async def fake_telegram_server() -> AsyncIterator[FakeTelegramServer]:
+    port = _get_unused_tcp_port()
     process = await subprocess.create_subprocess_exec(
         sys.executable,
         str(FUNCTIONAL_DIR / "fake_telegram.py"),
         "--port",
-        str(unused_tcp_port),
+        str(port),
         cwd=ROOT_DIR,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    server = FakeTelegramServer(base_url=f"http://127.0.0.1:{unused_tcp_port}", process=process)
+    server = FakeTelegramServer(base_url=f"http://127.0.0.1:{port}", process=process)
     await _wait_until_ready(lambda: _http_ready(f"{server.base_url}/healthz"), "fake Telegram")
+
+    try:
+        yield server
+    finally:
+        await _terminate_process(process)
+
+
+@pytest.fixture
+async def fake_yandex_server() -> AsyncIterator[FakeYandexServer]:
+    port = _get_unused_tcp_port()
+    process = await subprocess.create_subprocess_exec(
+        sys.executable,
+        str(FUNCTIONAL_DIR / "fake_yandex.py"),
+        "--port",
+        str(port),
+        cwd=ROOT_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    server = FakeYandexServer(base_url=f"http://127.0.0.1:{port}", process=process)
+    await _wait_until_ready(lambda: _http_ready(f"{server.base_url}/healthz"), "fake Yandex")
 
     try:
         yield server
@@ -178,9 +274,11 @@ async def fake_telegram_server(unused_tcp_port: int) -> AsyncIterator[FakeTelegr
 async def bot_process(
     docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
 ) -> AsyncIterator[subprocess.Process]:
     env = _bot_env(docker_compose)
     env["TELEGRAM_API_BASE_URL"] = fake_telegram_server.base_url
+    env["YANDEX_DISK_API_BASE_URL"] = f"{fake_yandex_server.base_url}/v1/disk/"
 
     process = await subprocess.create_subprocess_exec(
         "uv",
@@ -198,6 +296,26 @@ async def bot_process(
         await _terminate_process(process)
 
 
+@pytest.fixture
+async def seeded_subscription_types(
+    docker_compose: DependencyPorts,
+    bot_process: subprocess.Process,
+) -> tuple[FunctionalSubscriptionType, ...]:
+    _raise_if_process_exited(bot_process, "bot")
+    await _reset_database(docker_compose)
+    await _flush_redis(docker_compose)
+    await _insert_subscription_types(docker_compose, SEEDED_SUBSCRIPTION_TYPES)
+    return SEEDED_SUBSCRIPTION_TYPES
+
+
+@pytest.fixture
+async def user_subscribed_to_morning(
+    docker_compose: DependencyPorts,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+) -> None:
+    await _insert_user_subscription(docker_compose, user_id=42, subscription_type_id=1)
+
+
 def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
     env = os.environ.copy()
     env.update(BOT_ENV)
@@ -205,6 +323,88 @@ def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
     env["REDIS_PORT"] = str(dependency_ports.redis)
 
     return env
+
+
+async def _reset_database(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.execute("TRUNCATE subscriptions, users, subscription_types RESTART IDENTITY CASCADE")
+    finally:
+        await connection.close()
+
+
+async def _insert_subscription_types(
+    dependency_ports: DependencyPorts,
+    subscription_types: tuple[FunctionalSubscriptionType, ...],
+) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.executemany(
+            """
+            INSERT INTO subscription_types(id, name, time, s3_directory_path, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $5)
+            """,
+            [
+                (
+                    subscription.id,
+                    subscription.name,
+                    subscription.send_time,
+                    subscription.s3_directory_path,
+                    _database_time(),
+                )
+                for subscription in subscription_types
+            ],
+        )
+    finally:
+        await connection.close()
+
+
+async def _insert_user_subscription(
+    dependency_ports: DependencyPorts,
+    *,
+    user_id: int,
+    subscription_type_id: int,
+) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.execute(
+            "INSERT INTO users(id, created_at) VALUES($1, $2) ON CONFLICT DO NOTHING",
+            user_id,
+            _database_time(),
+        )
+        await connection.execute(
+            """
+            INSERT INTO subscriptions(subscription_type_id, user_id, created_at)
+            VALUES ($1, $2, $3)
+            """,
+            subscription_type_id,
+            user_id,
+            _database_time(),
+        )
+    finally:
+        await connection.close()
+
+
+async def _create_postgres_connection(dependency_ports: DependencyPorts) -> asyncpg.Connection:
+    return await asyncpg.connect(
+        user=POSTGRES_ENV["POSTGRES_USER"],
+        password=POSTGRES_ENV["POSTGRES_PASSWORD"],
+        database=POSTGRES_ENV["POSTGRES_DB"],
+        host=POSTGRES_ENV["POSTGRES_HOST"],
+        port=dependency_ports.postgres,
+    )
+
+
+async def _flush_redis(dependency_ports: DependencyPorts) -> None:
+    client = redis.from_url(
+        f"redis://{REDIS_ENV['REDIS_HOST']}:{dependency_ports.redis}",
+        username=REDIS_ENV["REDIS_USERNAME"],
+        password=REDIS_ENV["REDIS_PASSWORD"],
+    )
+    try:
+        await client.flushdb()
+    finally:
+        await client.aclose()
 
 
 async def _run_checked(*args: str, env: dict[str, str] | None = None) -> str:
@@ -243,13 +443,7 @@ async def _wait_until_ready(check: Callable[[], Awaitable[None]], name: str, *, 
 
 
 async def _postgres_ready(dependency_ports: DependencyPorts) -> None:
-    connection = await asyncpg.connect(
-        user=POSTGRES_ENV["POSTGRES_USER"],
-        password=POSTGRES_ENV["POSTGRES_PASSWORD"],
-        database=POSTGRES_ENV["POSTGRES_DB"],
-        host=POSTGRES_ENV["POSTGRES_HOST"],
-        port=dependency_ports.postgres,
-    )
+    connection = await _create_postgres_connection(dependency_ports)
     await connection.close()
 
 
@@ -293,3 +487,11 @@ def _get_unused_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _telegram_message_date() -> int:
+    return int(datetime(2026, 8, 11, tzinfo=UTC).timestamp())
+
+
+def _database_time() -> time:
+    return datetime.now(UTC).timetz()
