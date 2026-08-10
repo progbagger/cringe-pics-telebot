@@ -1,33 +1,48 @@
 name: Deploy over SSH
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    branches: [main]
-    types:
-      - completed
-
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    name: Deploy to remote server
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Validate required secrets
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          test -n "$DEPLOY_HOST" || (echo "::error::DEPLOY_HOST secret is required" && exit 1)
+          test -n "$DEPLOY_USER" || (echo "::error::DEPLOY_USER secret is required" && exit 1)
+          test -n "$DEPLOY_SSH_KEY" || (echo "::error::DEPLOY_SSH_KEY secret is required" && exit 1)
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.5
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         with:
-          host: ${{ secrets.DEPLOY_SSH_HOST }}
-          username: ${{ secrets.DEPLOY_SSH_USER }}
-          key: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          port: ${{ secrets.DEPLOY_SSH_PORT }}
-
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || '22' }}
+          envs: DEPLOY_PATH
+          script_stop: true
           script: |
-            cd cringe-pics-telebot
-            git checkout main
-            git pull origin main
+            cd "${DEPLOY_PATH:-cringe-pics-telebot}"
 
-            docker compose build
-            docker compose up -d --force-recreate
+            git fetch origin main
+            git checkout main
+            git reset --hard origin/main
+
+            docker compose up -d --build --remove-orphans
+            docker compose ps
