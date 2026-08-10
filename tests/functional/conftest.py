@@ -72,6 +72,13 @@ class FakeTelegramServer:
     base_url: str
     process: subprocess.Process
 
+    async def reset(self) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/reset") as response,
+        ):
+            response.raise_for_status()
+
     async def push_message(self, *, text: str, user_id: int = 42, first_name: str = "Functional") -> dict[str, Any]:
         update = {
             "message": {
@@ -175,6 +182,13 @@ class FakeYandexServer:
     base_url: str
     process: subprocess.Process
 
+    async def reset(self) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/reset") as response,
+        ):
+            response.raise_for_status()
+
     async def requests(self) -> list[dict[str, Any]]:
         async with (
             aiohttp.ClientSession() as session,
@@ -228,7 +242,7 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def fake_telegram_server() -> AsyncIterator[FakeTelegramServer]:
     port = _get_unused_tcp_port()
     process = await subprocess.create_subprocess_exec(
@@ -249,7 +263,7 @@ async def fake_telegram_server() -> AsyncIterator[FakeTelegramServer]:
         await _terminate_process(process)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def fake_yandex_server() -> AsyncIterator[FakeYandexServer]:
     port = _get_unused_tcp_port()
     process = await subprocess.create_subprocess_exec(
@@ -270,7 +284,7 @@ async def fake_yandex_server() -> AsyncIterator[FakeYandexServer]:
         await _terminate_process(process)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def bot_process(
     docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
@@ -300,8 +314,12 @@ async def bot_process(
 async def seeded_subscription_types(
     docker_compose: DependencyPorts,
     bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
 ) -> tuple[FunctionalSubscriptionType, ...]:
     _raise_if_process_exited(bot_process, "bot")
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
     await _reset_database(docker_compose)
     await _flush_redis(docker_compose)
     await _insert_subscription_types(docker_compose, SEEDED_SUBSCRIPTION_TYPES)

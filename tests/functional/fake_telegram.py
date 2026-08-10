@@ -38,6 +38,14 @@ class FakeTelegram:
 
         return web.json_response({"ok": True, "result": requests})
 
+    async def reset(self, request: web.Request) -> web.Response:
+        async with self._condition:
+            self._updates.clear()
+            self._requests.clear()
+            self._condition.notify_all()
+
+        return web.json_response({"ok": True})
+
     async def handle_bot_api(self, request: web.Request) -> web.Response:
         method = request.match_info["method"]
         payload = await self._read_payload(request)
@@ -163,6 +171,7 @@ def create_app() -> web.Application:
     app.router.add_get("/healthz", fake.healthcheck)
     app.router.add_post("/test/updates", fake.push_update)
     app.router.add_get("/test/requests", fake.list_requests)
+    app.router.add_post("/test/reset", fake.reset)
     app.router.add_route("*", "/{bot_token}/{method}", fake.handle_bot_api)
     return app
 

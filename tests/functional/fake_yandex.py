@@ -20,6 +20,10 @@ class FakeYandex:
     async def list_requests(self, request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "result": self._requests})
 
+    async def reset(self, request: web.Request) -> web.Response:
+        self._requests.clear()
+        return web.json_response({"ok": True})
+
     async def resources(self, request: web.Request) -> web.Response:
         params = dict(request.query)
         self._requests.append({"method": "resources", "params": params})
@@ -55,6 +59,7 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/healthz", fake.healthcheck)
     app.router.add_get("/test/requests", fake.list_requests)
+    app.router.add_post("/test/reset", fake.reset)
     app.router.add_get("/v1/disk/resources", fake.resources)
     app.router.add_get("/v1/disk/resources/download", fake.download_resource)
     app.router.add_get("/download/{path:.*}", fake.download_file)
