@@ -14,6 +14,8 @@ jobs:
   deploy:
     name: Deploy to remote server
     runs-on: ubuntu-latest
+    environment:
+      name: Deploy
 
     steps:
       - name: Validate required secrets
