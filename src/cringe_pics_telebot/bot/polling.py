@@ -73,7 +73,10 @@ async def start_polling() -> None:
 
         logger.info("Polling...")
         try:
-            bot = create_bot(os.environ["TELEGRAM_BOT_TOKEN"])
+            bot = create_bot(
+                os.environ["TELEGRAM_BOT_TOKEN"],
+                api_base_url=os.environ.get("TELEGRAM_API_BASE_URL"),
+            )
         except KeyError:
             logger.exception("Failed to get Telegram bot token")
             raise

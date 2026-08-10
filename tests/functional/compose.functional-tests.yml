@@ -1,25 +1,32 @@
-include:
-  - ../../compose.yml
-
 services:
   postgres:
-    env_file: ./docker/postgres.env
+    image: postgres
+    environment:
+      POSTGRES_USER: functional
+      POSTGRES_PASSWORD: functional
+      POSTGRES_DB: cringe_pics_telebot_functional
     ports:
-      - 1001:5432
-    volumes: []
+      - "${FUNCTIONAL_POSTGRES_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
     restart: no
 
   redis:
-    env_file: ./docker/redis.env
+    build:
+      context: ../../docker/redis
+    environment:
+      REDIS_USERNAME: functional
+      REDIS_PASSWORD: functional
     ports:
-      - 1002:6379
-    volumes: []
-    restart: no
-
-  bot:
-    env_file:
-      - ./docker/bot.env
-      - ./docker/postgres.env
-      - ./docker/redis.env
-      - ./docker/yandex.env
+      - "${FUNCTIONAL_REDIS_PORT:-16379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-u", "redis://functional:functional@127.0.0.1:6379", "ping"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
     restart: no
