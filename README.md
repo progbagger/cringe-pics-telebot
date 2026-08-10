@@ -17,7 +17,7 @@
 
 Деплой запускается вручную через GitHub Actions workflow **Deploy over SSH**.
 
-Для workflow нужны GitHub Secrets:
+Для workflow нужны GitHub Environment Secrets в environment **Deploy**:
 
 - `DEPLOY_HOST` - адрес сервера;
 - `DEPLOY_USER` - SSH-пользователь;
