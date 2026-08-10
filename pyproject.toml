@@ -19,7 +19,7 @@ dependencies = [
 bot = "cringe_pics_telebot.cli:poll"
 
 [build-system]
-requires = ["uv_build"]
+requires = ["uv_build<0.12"]
 build-backend = "uv_build"
 
 [tool.hatch.build.targets.wheel]
@@ -27,6 +27,7 @@ packages = ["src/cringe_pics_telebot"]
 
 [dependency-groups]
 dev = [
+  "dotenv>=0.9.9",
   "mypy>=1.18.2",
   "pre-commit>=4.6.0",
   "pyhamcrest>=2.1.0",
@@ -34,3 +35,7 @@ dev = [
   "pytest-asyncio>=1.2.0",
   "ruff>=0.14.1",
 ]
+
+[[tool.mypy.overrides]]
+module = "asyncpg"
+ignore_missing_imports = true

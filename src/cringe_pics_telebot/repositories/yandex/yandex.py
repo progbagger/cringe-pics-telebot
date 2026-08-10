@@ -32,7 +32,7 @@ class YandexS3Client:
     YANDEX_DISK_API_BASE_URL = "https://cloud-api.yandex.net/v1/disk/"
     YANDEX_DISK_DOWNLOAD_BASE_URL = "https://downloader.dst.yandex.ru/disk/"
 
-    def __init__(self, token: str, *, fetch_size: int = 1_000) -> None:
+    def __init__(self, token: str, *, api_base_url: str | None = None, fetch_size: int = 1_000) -> None:
         """Создаёт клиент с заданным токеном приложения.
 
         Args:
@@ -40,6 +40,7 @@ class YandexS3Client:
         """
 
         self._token = token
+        self._api_base_url = api_base_url or self.YANDEX_DISK_API_BASE_URL
 
         self.fetch_size = fetch_size
 
@@ -94,7 +95,7 @@ class YandexS3Client:
 
         for i in count(0, self.fetch_size):
             async with self._session.get(
-                self._create_url("/resources"),
+                self._create_url("/resources", base_url=self._api_base_url),
                 params={
                     "path": self._get_path_with_app(path or ""),
                     "limit": self.fetch_size,
@@ -143,7 +144,7 @@ class YandexS3Client:
             path = f"{dir.lstrip('/')}/{path.lstrip('/')}"
 
         async with self._session.get(
-            self._create_url("/resources/download"),
+            self._create_url("/resources/download", base_url=self._api_base_url),
             params={"path": self._get_path_with_app(path), "fields": "href"},
         ) as response:
             link: str = (await response.json())["href"]
