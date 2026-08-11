@@ -8,7 +8,7 @@ from aiogram import Bot
 from cringe_pics_telebot.bot.media import get_message_media_file_id, send_image_to_chat
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
-from cringe_pics_telebot.services.random_image import CachedMedia, DownloadedMedia, get_random_image, update_image_cache
+from cringe_pics_telebot.services.random_image import get_random_image, update_image_cache
 from cringe_pics_telebot.services.subscriptions import get_subscription_types, get_subscription_user_ids
 
 logger = logging.getLogger(__name__)
@@ -82,19 +82,12 @@ async def _broadcast_subscription_type(*, bot: Bot, subscription_type: Subscript
     if not reserved_user_ids:
         return 0
 
-    try:
-        image = await get_random_image(subscription_type.id)
-    except Exception:
-        logger.exception("Failed to get image for subscription type %d", subscription_type.id)
-        return 0
-
     sent_results = await asyncio.gather(
         *(
             _send_scheduled_image_to_user(
                 bot=bot,
                 user_id=user_id,
                 subscription_type=subscription_type,
-                image=image,
             )
             for user_id in reserved_user_ids
         )
@@ -108,9 +101,9 @@ async def _send_scheduled_image_to_user(
     bot: Bot,
     user_id: int,
     subscription_type: SubscriptionType,
-    image: DownloadedMedia | CachedMedia,
 ) -> int:
     try:
+        image = await get_random_image(subscription_type.id)
         message = await send_image_to_chat(bot=bot, chat_id=user_id, image=image)
     except Exception:
         logger.exception(
