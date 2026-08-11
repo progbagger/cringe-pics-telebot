@@ -46,5 +46,5 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
-            docker compose up -d --build --remove-orphans
+            docker compose up -d --build --remove-orphans --force-recreate
             docker compose ps
