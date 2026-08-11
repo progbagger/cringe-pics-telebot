@@ -39,6 +39,7 @@ BOT_ENV = {
     **REDIS_ENV,
     "TELEGRAM_BOT_TOKEN": "123456:functional-test-token",
     "YANDEX_DISK_TOKEN": "functional-test-yandex-token",
+    "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.5",
 }
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,24 @@ class FakeYandexServer:
             body = await response.json()
             return body["result"]
 
+    async def wait_for_request(
+        self,
+        method: str,
+        *,
+        predicate: Callable[[dict[str, Any]], bool] | None = None,
+        timeout: float = 10,
+    ) -> dict[str, Any]:
+        deadline = asyncio.get_running_loop().time() + timeout
+        while asyncio.get_running_loop().time() < deadline:
+            _raise_if_process_exited(self.process, "fake Yandex")
+            for request in await self.requests():
+                if request["method"] == method and (predicate is None or predicate(request)):
+                    return request
+
+            await asyncio.sleep(0.1)
+
+        raise TimeoutError(f"Yandex request {method!r} was not received in {timeout} seconds")
+
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
 async def docker_compose() -> AsyncIterator[DependencyPorts]:
@@ -332,6 +351,44 @@ async def user_subscribed_to_morning(
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
 ) -> None:
     await _insert_user_subscription(docker_compose, user_id=42, subscription_type_id=1)
+
+
+@pytest.fixture
+async def reset_functional_state(
+    docker_compose: DependencyPorts,
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+) -> Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]]:
+    async def reset(subscription_types: tuple[FunctionalSubscriptionType, ...]) -> None:
+        _raise_if_process_exited(bot_process, "bot")
+        await fake_telegram_server.reset()
+        await fake_yandex_server.reset()
+        await _reset_database(docker_compose)
+        await _flush_redis(docker_compose)
+        await _insert_subscription_types(docker_compose, subscription_types)
+
+    return reset
+
+
+@pytest.fixture
+async def seed_functional_subscription_types(
+    docker_compose: DependencyPorts,
+) -> Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]]:
+    async def seed(subscription_types: tuple[FunctionalSubscriptionType, ...]) -> None:
+        await _insert_subscription_types(docker_compose, subscription_types)
+
+    return seed
+
+
+@pytest.fixture
+async def create_user_subscription(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[None]]:
+    async def create(*, user_id: int, subscription_type_id: int) -> None:
+        await _insert_user_subscription(docker_compose, user_id=user_id, subscription_type_id=subscription_type_id)
+
+    return create
 
 
 def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:

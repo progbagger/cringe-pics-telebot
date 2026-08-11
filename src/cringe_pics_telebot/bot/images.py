@@ -3,29 +3,24 @@ import logging
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import (
-    BufferedInputFile,
     CallbackQuery,
     InaccessibleMessage,
-    InputMedia,
-    InputMediaAnimation,
-    InputMediaPhoto,
     Message,
 )
 
-from cringe_pics_telebot.bot.helpers import HasFileId
 from cringe_pics_telebot.bot.keyboards import (
     create_inline_subscriptions_keyboard,
     create_reply_keyboard,
 )
+from cringe_pics_telebot.bot.media import add_image_to_message, get_message_media_file_id
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.repositories.postgres.connection import (
     transaction,
 )
 from cringe_pics_telebot.services.random_image import (
-    CachedImage,
-    DownloadedImage,
-    download_image,
+    CachedMedia,
+    DownloadedMedia,
     get_random_image,
     update_image_cache,
 )
@@ -174,15 +169,7 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
         return
 
     try:
-        media: HasFileId
-        if edited_message.photo is not None:
-            media, *_ = edited_message.photo
-        elif edited_message.animation is not None:
-            media = edited_message.animation
-        else:
-            raise ValueError("Resulted message %s has no media", edited_message.message_id)
-
-        await update_image_cache(image_path=image.path, image_id=media.file_id)
+        await update_image_cache(image_path=image.path, image_id=get_message_media_file_id(edited_message))
     except Exception:
         logger.exception("Failed to update image %s in cache", image.path)
 
@@ -192,35 +179,8 @@ async def unknown_message(message: Message) -> None:
     await handle_start(message)
 
 
-async def _add_image_to_message(*, message: Message, image: DownloadedImage | CachedImage) -> Message | bool:
-    input_media_type: type[InputMedia]
-    if "gif" in image.mime_type:
-        filename = f"{image.name}.gif"
-        input_media_type = InputMediaAnimation
-    else:
-        filename = image.name
-        input_media_type = InputMediaPhoto
-
-    added_cached_image = False
-    if isinstance(image, CachedImage):
-        try:
-            edited_message = await message.edit_media(input_media_type(media=image.id))
-            logger.info("Added cached image %s from cache", image.path)
-        except Exception:
-            logger.exception("Failed to attach cached image %s to message %s", image.id, message.message_id)
-        else:
-            added_cached_image = True
-
-    if not added_cached_image:
-        image_data = image.data if isinstance(image, DownloadedImage) else await download_image(image.path)
-        edited_message = await message.edit_media(input_media_type(media=BufferedInputFile(image_data, filename)))
-        logger.info("Downloaded and added image %s", image.path)
-
-    return edited_message
-
-
-async def _add_image_to_chat_message(*, message: Message, image: DownloadedImage | CachedImage) -> Message:
-    result = await _add_image_to_message(message=message, image=image)
+async def _add_image_to_chat_message(*, message: Message, image: DownloadedMedia | CachedMedia) -> Message:
+    result = await add_image_to_message(message=message, image=image)
 
     assert isinstance(result, Message)
     return result

@@ -71,6 +71,10 @@ class FakeTelegram:
                 result = await self._get_updates(payload)
             case "sendMessage":
                 result = self._message_from_payload(payload)
+            case "sendPhoto":
+                result = self._sent_media_message_from_payload(payload, media_key="photo")
+            case "sendAnimation":
+                result = self._sent_media_message_from_payload(payload, media_key="animation")
             case "editMessageText" | "editMessageReplyMarkup":
                 result = self._message_from_payload(payload)
             case "answerCallbackQuery":
@@ -143,6 +147,30 @@ class FakeTelegram:
                     "height": 1,
                 }
             ]
+        return message
+
+    def _sent_media_message_from_payload(self, payload: dict[str, Any], *, media_key: str) -> dict[str, Any]:
+        message = self._message_from_payload(payload)
+        media_id = str(payload.get(media_key) or f"functional-{media_key}-file-id")
+
+        if media_key == "animation":
+            message["animation"] = {
+                "file_id": "functional-animation-file-id" if media_id.startswith("attach://") else media_id,
+                "file_unique_id": "functional-animation-file-unique-id",
+                "width": 1,
+                "height": 1,
+                "duration": 1,
+            }
+        else:
+            message["photo"] = [
+                {
+                    "file_id": "functional-photo-file-id" if media_id.startswith("attach://") else media_id,
+                    "file_unique_id": "functional-photo-file-unique-id",
+                    "width": 1,
+                    "height": 1,
+                }
+            ]
+
         return message
 
     async def _read_payload(self, request: web.Request) -> dict[str, Any]:

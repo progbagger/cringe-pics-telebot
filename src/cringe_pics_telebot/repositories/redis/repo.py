@@ -38,6 +38,19 @@ async def set[T](*, key: str, value: T, cls: type[T], ttl: timedelta | None = No
             raise
 
 
+async def set_if_absent[T](*, key: str, value: T, cls: type[T], ttl: timedelta | None = None) -> bool:
+    async with get_connection() as conn:
+        serializer = get_serializer(cls)
+
+        try:
+            result = await conn.set(name=key, value=json.dumps(serializer.dump(value)), ex=ttl, nx=True)
+        except Exception:
+            logger.exception("Tried to serialize %s", value)
+            raise
+
+        return bool(result)
+
+
 async def get[T](*, key: str, cls: type[T]) -> T | None:
     async with get_connection() as conn:
         value = await conn.get(name=key)

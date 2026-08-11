@@ -29,19 +29,18 @@ class FakeYandex:
         self._requests.append({"method": "resources", "params": params})
 
         directory = params.get("path", "app:/functional").removeprefix("app:/").strip("/")
-        return web.json_response(
-            {
-                "_embedded": {
-                    "items": [
-                        {
-                            "name": "image.png",
-                            "mime_type": "image/png",
-                            "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/image.png",
-                        }
-                    ]
+        if directory == "empty":
+            items: list[dict[str, str]] = []
+        else:
+            items = [
+                {
+                    "name": "image.png",
+                    "mime_type": "image/png",
+                    "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/image.png",
                 }
-            }
-        )
+            ]
+
+        return web.json_response({"_embedded": {"items": items}})
 
     async def download_resource(self, request: web.Request) -> web.Response:
         params = dict(request.query)

@@ -1,13 +1,16 @@
+import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, suppress
+from datetime import timedelta
 
-from cringe_pics_telebot.bot import create_bot, dp
+from cringe_pics_telebot.bot.bot import create_bot, dp
 from cringe_pics_telebot.repositories.postgres import connect as connect_postgres
 from cringe_pics_telebot.repositories.postgres import create_tables
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
+from cringe_pics_telebot.services.subscription_broadcasts import DEFAULT_CHECK_INTERVAL, run_subscription_broadcasts
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -83,4 +86,18 @@ async def start_polling() -> None:
         except KeyError:
             logger.exception("Failed to get Telegram bot token")
             raise
-        await dp.start_polling(bot)
+        broadcast_interval = float(
+            os.environ.get("SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS", DEFAULT_CHECK_INTERVAL.total_seconds())
+        )
+        broadcast_task = asyncio.create_task(
+            run_subscription_broadcasts(
+                bot,
+                interval=timedelta(seconds=broadcast_interval),
+            )
+        )
+        try:
+            await dp.start_polling(bot)
+        finally:
+            broadcast_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await broadcast_task

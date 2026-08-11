@@ -60,6 +60,20 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
         ]
 
 
+async def get_subscription_user_ids(subscription_type_id: int) -> list[int]:
+    async with get_connection() as conn:
+        rows = (
+            await conn.execute(
+                select(s.c.user_id)
+                .where(s.c.subscription_type_id == subscription_type_id)
+                .distinct()
+                .order_by(s.c.user_id)
+            )
+        ).fetchall()
+
+        return [row.user_id for row in rows]
+
+
 async def delete_subscription(*, user_id: int, subscription_type_id: int) -> None:
     async with get_connection() as conn:
         await conn.execute(
