@@ -9,18 +9,18 @@ from cringe_pics_telebot.repositories.yandex import download_file as download_fi
 
 
 @dataclass
-class DownloadedImage(Image):
+class DownloadedMedia(Image):
     data: bytes
     """Данные скачанной картинки"""
 
 
 @dataclass
-class CachedImage(Image):
+class CachedMedia(Image):
     id: str
     """ID of picture on Telegram servers"""
 
 
-async def get_random_image(category_id: int | None = None) -> DownloadedImage | CachedImage:
+async def get_random_image(category_id: int | None = None) -> DownloadedMedia | CachedMedia:
     subscription_types = {subscription.id: subscription for subscription in await get_subscription_types()}
     if category_id is None:
         category = random.choice(list(subscription_types.values()))
@@ -32,7 +32,7 @@ async def get_random_image(category_id: int | None = None) -> DownloadedImage | 
     image_data = await get_image_by_path(random_image.path)
     match image_data:
         case bytes():
-            return DownloadedImage(
+            return DownloadedMedia(
                 name=random_image.name,
                 mime_type=random_image.mime_type,
                 path=random_image.path,
@@ -40,7 +40,7 @@ async def get_random_image(category_id: int | None = None) -> DownloadedImage | 
             )
 
         case str():
-            return CachedImage(
+            return CachedMedia(
                 name=random_image.name,
                 mime_type=random_image.mime_type,
                 path=random_image.path,

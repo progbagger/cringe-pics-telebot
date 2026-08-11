@@ -1,4 +1,7 @@
+import asyncio
 from asyncio import subprocess
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, time
 from typing import Any
 
 import pytest
@@ -9,6 +12,13 @@ from tests.functional.conftest import (
     FakeYandexServer,
     FunctionalSubscriptionType,
 )
+
+
+@pytest.fixture(autouse=True)
+async def reset_state_before_test(
+    reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    await reset_functional_state(())
 
 
 @pytest.mark.parametrize("text", ["/start", "/help", "непонятное сообщение"])
@@ -150,6 +160,73 @@ async def test_bot_sends_image_for_subscription_category(
     assert any(request["method"] == "download" for request in yandex_requests)
 
 
+async def test_bot_sends_scheduled_image_to_subscribed_user_only(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((_due_subscription_type(1, "/morning", "morning"),))
+    await create_user_subscription(user_id=42, subscription_type_id=1)
+
+    request = await fake_telegram_server.wait_for_request(
+        "sendPhoto",
+        predicate=lambda request: _chat_id(request["payload"]) == 42,
+    )
+    payload = request["payload"]
+    assert _chat_id(payload) == 42
+    assert "photo" in payload
+
+    yandex_requests = await fake_yandex_server.requests()
+    expected_list_request = {
+        "method": "resources",
+        "params": {"path": "app:/morning", "limit": "1000", "offset": "0"},
+    }
+    assert expected_list_request in yandex_requests
+    assert not _telegram_requests_for_chat(await fake_telegram_server.requests(method="sendPhoto"), chat_id=84)
+
+
+async def test_bot_does_not_duplicate_scheduled_send_in_same_minute(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((_due_subscription_type(1, "/morning", "morning"),))
+    await create_user_subscription(user_id=42, subscription_type_id=1)
+
+    await fake_telegram_server.wait_for_request(
+        "sendPhoto",
+        predicate=lambda request: _chat_id(request["payload"]) == 42,
+    )
+    await _assert_telegram_request_count_stays(
+        fake_telegram_server,
+        method="sendPhoto",
+        predicate=lambda request: _chat_id(request["payload"]) == 42,
+        expected_count=1,
+    )
+
+
+async def test_bot_skips_scheduled_send_when_category_is_empty(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((_due_subscription_type(1, "/empty", "empty"),))
+    await create_user_subscription(user_id=42, subscription_type_id=1)
+
+    await fake_yandex_server.wait_for_request(
+        "resources",
+        predicate=lambda request: request["params"].get("path") == "app:/empty",
+    )
+
+    assert not _telegram_requests_for_chat(await fake_telegram_server.requests(method="sendPhoto"), chat_id=42)
+    assert bot_process.returncode is None
+
+
 def _is_start_answer(request: dict[str, Any]) -> bool:
     payload = request["payload"]
     return payload.get("chat_id") == 42 and "Приветствую" in payload.get("text", "")
@@ -189,3 +266,47 @@ def _reply_to_message_id(payload: dict[str, Any]) -> int | None:
         return int(payload["reply_parameters"]["message_id"])
 
     return None
+
+
+def _due_subscription_type(subscription_type_id: int, name: str, s3_directory_path: str) -> FunctionalSubscriptionType:
+    return FunctionalSubscriptionType(
+        id=subscription_type_id,
+        name=name,
+        send_time=_current_minute(),
+        s3_directory_path=s3_directory_path,
+    )
+
+
+def _current_minute() -> time:
+    now = datetime.now(UTC)
+    return time(now.hour, now.minute, tzinfo=UTC)
+
+
+def _chat_id(payload: dict[str, Any]) -> int:
+    return int(payload["chat_id"])
+
+
+def _telegram_requests_for_chat(requests: list[dict[str, Any]], *, chat_id: int) -> list[dict[str, Any]]:
+    return [request for request in requests if _chat_id(request["payload"]) == chat_id]
+
+
+async def _assert_telegram_request_count_stays(
+    fake_telegram_server: FakeTelegramServer,
+    *,
+    method: str,
+    predicate: Callable[[dict[str, Any]], bool],
+    expected_count: int,
+    stable_for: float = 1.2,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + stable_for
+    matched_requests: list[dict[str, Any]] = []
+    while asyncio.get_running_loop().time() < deadline:
+        matched_requests = [
+            request for request in await fake_telegram_server.requests(method=method) if predicate(request)
+        ]
+        if len(matched_requests) > expected_count:
+            raise AssertionError(f"Expected {expected_count} {method} requests, got {len(matched_requests)}")
+
+        await asyncio.sleep(0.1)
+
+    assert len(matched_requests) == expected_count
