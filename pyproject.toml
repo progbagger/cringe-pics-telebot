@@ -33,7 +33,7 @@ dev = [
   "pyhamcrest>=2.1.0",
   "pytest>=8.4.2",
   "pytest-asyncio>=1.2.0",
-  "ruff>=0.14.1",
+  "ruff>=0.16.2",
 ]
 
 [[tool.mypy.overrides]]
