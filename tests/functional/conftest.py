@@ -149,6 +149,35 @@ class FakeTelegramServer:
             response.raise_for_status()
             return await response.json()
 
+    async def push_inline_query(
+        self,
+        *,
+        query: str,
+        user_id: int = 42,
+        first_name: str = "Functional",
+        query_id: str = "inline-100",
+    ) -> dict[str, Any]:
+        update = {
+            "inline_query": {
+                "id": query_id,
+                "from": {
+                    "id": user_id,
+                    "is_bot": False,
+                    "first_name": first_name,
+                    "language_code": "ru",
+                },
+                "query": query,
+                "offset": "",
+                "chat_type": "group",
+            }
+        }
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/updates", json=update) as response,
+        ):
+            response.raise_for_status()
+            return await response.json()
+
     async def requests(self, *, method: str | None = None) -> list[dict[str, Any]]:
         params = {"method": method} if method is not None else None
         async with (
