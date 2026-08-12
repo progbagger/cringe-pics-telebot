@@ -2,18 +2,127 @@ name: Deploy over SSH
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 permissions:
   contents: read
 
-concurrency:
-  group: deploy-production
-  cancel-in-progress: false
-
 jobs:
+  check_deploy:
+    name: Check deployment eligibility
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      deploy_sha: ${{ steps.eligibility.outputs.deploy_sha }}
+      should_deploy: ${{ steps.eligibility.outputs.should_deploy }}
+
+    steps:
+      - name: Check CI result and changed files
+        id: eligibility
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const workflowRun = context.payload.workflow_run;
+            const deploySha = workflowRun.head_sha;
+
+            core.setOutput("deploy_sha", deploySha);
+            core.setOutput("should_deploy", "false");
+
+            async function finish(reason, shouldDeploy = false) {
+              core.setOutput("should_deploy", String(shouldDeploy));
+              core.notice(reason);
+              await core.summary
+                .addHeading("Deploy eligibility")
+                .addRaw(reason)
+                .addEOL()
+                .write();
+            }
+
+            if (workflowRun.conclusion !== "success") {
+              await finish(
+                `Deployment skipped: CI concluded with ${workflowRun.conclusion}.`,
+              );
+              return;
+            }
+
+            if (workflowRun.event !== "push") {
+              await finish(
+                `Deployment skipped: CI was triggered by ${workflowRun.event}, not a push to main.`,
+              );
+              return;
+            }
+
+            const { owner, repo } = context.repo;
+            const associatedPulls = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              {
+                owner,
+                repo,
+                commit_sha: deploySha,
+                per_page: 100,
+              },
+            );
+            const pull = associatedPulls.find(
+              (candidate) =>
+                candidate.merged_at &&
+                candidate.base.ref === "main" &&
+                candidate.merge_commit_sha === deploySha,
+            );
+
+            if (!pull) {
+              await finish(
+                `Deployment skipped: ${deploySha} is not the merge result of a pull request into main.`,
+              );
+              return;
+            }
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number: pull.number,
+              per_page: 100,
+            });
+            const deployFiles = files
+              .map((file) => file.filename)
+              .filter(
+                (filename) =>
+                  filename.startsWith("src/") ||
+                  filename.startsWith("docker/") ||
+                  filename === "pyproject.toml" ||
+                  filename === "uv.lock" ||
+                  filename === "compose.yml",
+              );
+
+            if (deployFiles.length === 0) {
+              await finish(
+                `Deployment skipped: pull request #${pull.number} has no deploy-relevant changes.`,
+              );
+              return;
+            }
+
+            await finish(
+              `Deployment enabled for pull request #${pull.number}: ${deployFiles.length} deploy-relevant file(s), SHA ${deploySha}.`,
+              true,
+            );
+
   deploy:
     name: Deploy to remote server
+    needs: check_deploy
+    if: >-
+      ${{ always() &&
+          (github.event_name == 'workflow_dispatch' ||
+           (needs.check_deploy.result == 'success' &&
+            needs.check_deploy.outputs.should_deploy == 'true')) }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
     environment:
       name: Deploy
 
@@ -31,20 +140,48 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.5
         env:
+          AUTOMATIC_DEPLOY: ${{ github.event_name == 'workflow_run' }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SHA: ${{ needs.check_deploy.outputs.deploy_sha }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || '22' }}
-          envs: DEPLOY_PATH
+          envs: AUTOMATIC_DEPLOY,DEPLOY_PATH,DEPLOY_SHA
           script_stop: true
           script: |
             cd "${DEPLOY_PATH:-cringe-pics-telebot}"
 
             git fetch origin main
+            if [ -z "$DEPLOY_SHA" ]; then
+              DEPLOY_SHA="$(git rev-parse origin/main)"
+            fi
+
+            if ! git cat-file -e "$DEPLOY_SHA^{commit}"; then
+              echo "Deployment commit $DEPLOY_SHA is unavailable after fetching origin/main" >&2
+              exit 1
+            fi
+
+            if ! git merge-base --is-ancestor "$DEPLOY_SHA" origin/main; then
+              echo "Deployment commit $DEPLOY_SHA is not contained in origin/main" >&2
+              exit 1
+            fi
+
             git checkout main
-            git reset --hard origin/main
+            CURRENT_SHA="$(git rev-parse HEAD)"
+
+            if [ "$AUTOMATIC_DEPLOY" = "true" ] && [ "$CURRENT_SHA" = "$DEPLOY_SHA" ]; then
+              echo "Commit $DEPLOY_SHA is already deployed; skipping duplicate deployment"
+              exit 0
+            fi
+
+            if [ "$AUTOMATIC_DEPLOY" = "true" ] && git merge-base --is-ancestor "$DEPLOY_SHA" "$CURRENT_SHA"; then
+              echo "Commit $DEPLOY_SHA is older than already deployed $CURRENT_SHA; skipping stale deployment"
+              exit 0
+            fi
+
+            git reset --hard "$DEPLOY_SHA"
 
             docker compose up -d --build --remove-orphans --force-recreate
             docker compose ps
