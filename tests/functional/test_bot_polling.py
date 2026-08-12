@@ -178,7 +178,7 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     result = payload["results"][0]
     assert result["type"] == "photo"
     assert len(result["id"]) == 64
-    assert result["title"] == "image.png"
+    assert result["title"] == "🎲 Выбрать случайную картинку"
     assert result["description"] == "Категория /day"
     assert result["photo_url"] == f"{fake_yandex_server.base_url}/download/image.png"
     assert result["thumbnail_url"] == result["photo_url"]
