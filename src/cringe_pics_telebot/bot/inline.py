@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import logging
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from aiogram import Router
 from aiogram.types import (
@@ -25,6 +25,12 @@ from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
 logger = logging.getLogger(__name__)
 
+RANDOM_INLINE_RESULT_TITLE = "🎲 Выбрать случайную картинку"
+
+type InlineMediaResult = (
+    InlineQueryResultCachedGif | InlineQueryResultCachedPhoto | InlineQueryResultGif | InlineQueryResultPhoto
+)
+
 router = Router(name="inline")
 
 
@@ -36,7 +42,7 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
         return
 
     try:
-        results = _shuffle_inline_results(await _get_inline_results(subscription_types))
+        results = _prepare_inline_results(await _get_inline_results(subscription_types))
     except Exception:
         logger.exception(
             "Failed to prepare inline results for user %d and categories %s",
@@ -45,7 +51,8 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
         )
         results = []
 
-    await inline_query.answer(results[:MAX_INLINE_QUERY_RESULTS], cache_time=0, is_personal=True)
+    answer_results: list[InlineQueryResultUnion] = [*results[:MAX_INLINE_QUERY_RESULTS]]
+    await inline_query.answer(answer_results, cache_time=0, is_personal=True)
 
 
 async def _find_subscription_types(query: str) -> list[SubscriptionType]:
@@ -68,12 +75,12 @@ def _normalize_category(category: str) -> str:
     return category.strip().removeprefix("/").casefold()
 
 
-async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineQueryResultUnion]:
+async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
     images_by_subscription_type = await asyncio.gather(
-        *(get_inline_images(subscription_type) for subscription_type in subscription_types)
+        *(get_inline_images(subscription_type, limit=None) for subscription_type in subscription_types)
     )
     seen_paths: set[str] = set()
-    results: list[InlineQueryResultUnion] = []
+    results: list[InlineMediaResult] = []
 
     for subscription_type, images in zip(subscription_types, images_by_subscription_type, strict=True):
         for image in images:
@@ -86,11 +93,37 @@ async def _get_inline_results(subscription_types: list[SubscriptionType]) -> lis
     return results
 
 
-def _shuffle_inline_results(
-    results: list[InlineQueryResultUnion],
+def _prepare_inline_results(
+    results: list[InlineMediaResult],
     *,
-    shuffler: Callable[[list[InlineQueryResultUnion]], None] | None = None,
-) -> list[InlineQueryResultUnion]:
+    chooser: Callable[[Sequence[InlineMediaResult]], InlineMediaResult] | None = None,
+    shuffler: Callable[[list[InlineMediaResult]], None] | None = None,
+) -> list[InlineMediaResult]:
+    if not results:
+        return []
+
+    selected_result = (chooser or random.choice)(results)
+    random_result = selected_result.model_copy(
+        update={
+            "id": _random_result_id(selected_result.id),
+            "title": RANDOM_INLINE_RESULT_TITLE,
+        }
+    )
+    ordinary_results = [result for result in results if result.id != selected_result.id]
+    shuffled_results = _shuffle_inline_results(ordinary_results, shuffler=shuffler)
+
+    return [random_result, *shuffled_results[: MAX_INLINE_QUERY_RESULTS - 1]]
+
+
+def _random_result_id(result_id: str) -> str:
+    return hashlib.sha256(f"random:{result_id}".encode()).hexdigest()
+
+
+def _shuffle_inline_results(
+    results: list[InlineMediaResult],
+    *,
+    shuffler: Callable[[list[InlineMediaResult]], None] | None = None,
+) -> list[InlineMediaResult]:
     shuffled_results = results.copy()
     (shuffler or random.shuffle)(shuffled_results)
     return shuffled_results
@@ -100,7 +133,7 @@ def _inline_result(
     image: CachedInlineImage | LinkedInlineImage,
     *,
     subscription_type: SubscriptionType,
-) -> InlineQueryResultUnion:
+) -> InlineMediaResult:
     result_id = hashlib.sha256(image.path.encode()).hexdigest()
     title = image.name
 

@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Iterable
 from datetime import UTC, datetime, time
 
+import pytest
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
@@ -53,7 +54,18 @@ async def test_get_inline_images_reuses_cached_ids_and_resolves_missing_urls(mon
     assert requested_paths == ["day/linked.gif"]
 
 
-async def test_get_inline_images_limits_results(monkeypatch: MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("limit", "expected_count"),
+    [
+        (inline_images.MAX_INLINE_QUERY_RESULTS, 50),
+        (None, 52),
+    ],
+)
+async def test_get_inline_images_supports_limited_and_complete_results(
+    monkeypatch: MonkeyPatch,
+    limit: int | None,
+    expected_count: int,
+) -> None:
     async def list_images(directory: str) -> AsyncGenerator[Image]:
         assert directory == "day"
         for index in range(52):
@@ -70,10 +82,10 @@ async def test_get_inline_images_limits_results(monkeypatch: MonkeyPatch) -> Non
     monkeypatch.setattr(inline_images.cache, "get", cache_miss)
     monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
 
-    results = await inline_images.get_inline_images(_subscription_type())
+    results = await inline_images.get_inline_images(_subscription_type(), limit=limit)
 
-    assert len(results) == inline_images.MAX_INLINE_QUERY_RESULTS
-    assert results[-1].path == "day/49.png"
+    assert len(results) == expected_count
+    assert results[-1].path == f"day/{expected_count - 1}.png"
 
 
 async def test_get_inline_images_reads_cache_concurrently_and_preserves_storage_order(

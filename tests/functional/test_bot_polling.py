@@ -174,14 +174,20 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     assert payload["inline_query_id"] == "inline-100"
     assert payload["cache_time"] == 0
     assert payload["is_personal"] is True
-    assert len(payload["results"]) == 1
-    result = payload["results"][0]
-    assert result["type"] == "photo"
-    assert len(result["id"]) == 64
-    assert result["title"] == "image.png"
-    assert result["description"] == "Категория /day"
-    assert result["photo_url"] == f"{fake_yandex_server.base_url}/download/image.png"
-    assert result["thumbnail_url"] == result["photo_url"]
+    assert len(payload["results"]) == 2
+    random_result, ordinary_result = payload["results"]
+    assert random_result["type"] == ordinary_result["type"] == "photo"
+    assert random_result["title"] == "🎲 Выбрать случайную картинку"
+    assert ordinary_result["title"] in {"image.png", "second.png"}
+    assert random_result["description"] == ordinary_result["description"] == "Категория /day"
+    assert random_result["thumbnail_url"] == random_result["photo_url"]
+    assert ordinary_result["thumbnail_url"] == ordinary_result["photo_url"]
+    assert {random_result["photo_url"], ordinary_result["photo_url"]} == {
+        f"{fake_yandex_server.base_url}/download/image.png",
+        f"{fake_yandex_server.base_url}/download/second.png",
+    }
+    assert len({random_result["id"], ordinary_result["id"]}) == 2
+    assert all(len(result["id"]) == 64 for result in payload["results"])
 
     yandex_requests = await fake_yandex_server.requests()
     assert {
@@ -191,6 +197,10 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     assert {
         "method": "resources/download",
         "params": {"path": "app:/day/image.png", "fields": "href"},
+    } in yandex_requests
+    assert {
+        "method": "resources/download",
+        "params": {"path": "app:/day/second.png", "fields": "href"},
     } in yandex_requests
     assert not any(request["method"] == "download" for request in yandex_requests)
 
@@ -209,6 +219,24 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
     assert request["payload"]["results"] == []
 
     await fake_telegram_server.push_message(text="still running")
+    await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+
+
+async def test_bot_returns_empty_inline_results_for_known_empty_category_and_keeps_polling(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((_due_subscription_type(1, "/empty", "empty"),))
+    await fake_telegram_server.push_inline_query(query="empty", query_id="inline-empty")
+
+    request = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-empty",
+    )
+    assert request["payload"]["results"] == []
+
+    await fake_telegram_server.push_message(text="still running after empty inline category")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
 
 

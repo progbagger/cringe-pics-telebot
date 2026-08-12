@@ -32,12 +32,14 @@ class FakeYandex:
         if directory == "empty":
             items: list[dict[str, str]] = []
         else:
+            image_names = ["image.png", "second.png"] if directory == "day" else ["image.png"]
             items = [
                 {
-                    "name": "image.png",
+                    "name": image_name,
                     "mime_type": "image/png",
-                    "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/image.png",
+                    "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/{image_name}",
                 }
+                for image_name in image_names
             ]
 
         return web.json_response({"_embedded": {"items": items}})
@@ -49,7 +51,8 @@ class FakeYandex:
         if "broken" in params.get("path", ""):
             raise web.HTTPServiceUnavailable(text="Functional Yandex failure")
 
-        return web.json_response({"href": f"{request.scheme}://{request.host}/download/image.png"})
+        image_name = params.get("path", "image.png").rsplit("/", maxsplit=1)[-1]
+        return web.json_response({"href": f"{request.scheme}://{request.host}/download/{image_name}"})
 
     async def download_file(self, request: web.Request) -> web.Response:
         self._requests.append({"method": "download", "path": request.match_info["path"]})

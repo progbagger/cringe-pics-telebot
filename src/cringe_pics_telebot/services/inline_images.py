@@ -25,11 +25,11 @@ class LinkedInlineImage(Image):
 async def get_inline_images(
     subscription_type: SubscriptionType,
     *,
-    limit: int = MAX_INLINE_QUERY_RESULTS,
+    limit: int | None = MAX_INLINE_QUERY_RESULTS,
 ) -> list[CachedInlineImage | LinkedInlineImage]:
     images: list[Image] = []
     async for image in list_dir(subscription_type.s3_directory_path):
-        if len(images) >= limit:
+        if limit is not None and len(images) >= limit:
             break
         images.append(image)
 
