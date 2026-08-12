@@ -18,7 +18,18 @@
 
 ## Деплой
 
-Деплой запускается вручную через GitHub Actions workflow **Deploy over SSH**.
+После merge пулл-реквеста в `main` workflow **Deploy over SSH** автоматически
+запускает деплой, когда workflow **CI** успешно проверил итоговый commit и в
+пулл-реквесте изменились файлы приложения или production-сборки:
+
+- `src/**`;
+- `pyproject.toml` или `uv.lock`;
+- `compose.yml`;
+- `docker/**`.
+
+Изменения только в документации, тестах и служебных файлах не запускают деплой.
+Workflow также можно запустить вручную через `workflow_dispatch`; ручной запуск
+не зависит от списка изменённых файлов.
 
 Для workflow нужны GitHub Environment Secrets в environment **Deploy**:
 
@@ -28,7 +39,9 @@
 - `DEPLOY_PORT` - SSH-порт, если используется не `22`;
 - `DEPLOY_PATH` - путь к checkout репозитория на сервере, если он отличается от `cringe-pics-telebot`.
 
-На сервере workflow обновляет ветку `main` и перезапускает сервисы через `docker compose up -d --build --remove-orphans`.
+На сервере автоматический workflow разворачивает конкретный commit, успешно
+прошедший CI, и перезапускает сервисы через
+`docker compose up -d --build --remove-orphans --force-recreate`.
 
 ## Планы
 
