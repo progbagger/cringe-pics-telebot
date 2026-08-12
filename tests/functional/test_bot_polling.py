@@ -160,6 +160,58 @@ async def test_bot_sends_image_for_subscription_category(
     assert any(request["method"] == "download" for request in yandex_requests)
 
 
+async def test_bot_returns_day_images_for_inline_query(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+) -> None:
+    await fake_telegram_server.push_inline_query(query="  DAY ")
+
+    request = await fake_telegram_server.wait_for_request("answerInlineQuery")
+
+    payload = request["payload"]
+    assert payload["inline_query_id"] == "inline-100"
+    assert payload["cache_time"] == 0
+    assert payload["is_personal"] is True
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["type"] == "photo"
+    assert len(result["id"]) == 64
+    assert result["title"] == "image.png"
+    assert result["description"] == "Категория /day"
+    assert result["photo_url"] == f"{fake_yandex_server.base_url}/download/image.png"
+    assert result["thumbnail_url"] == result["photo_url"]
+
+    yandex_requests = await fake_yandex_server.requests()
+    assert {
+        "method": "resources",
+        "params": {"path": "app:/day", "limit": "1000", "offset": "0"},
+    } in yandex_requests
+    assert {
+        "method": "resources/download",
+        "params": {"path": "app:/day/image.png", "fields": "href"},
+    } in yandex_requests
+    assert not any(request["method"] == "download" for request in yandex_requests)
+
+
+async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_polling(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+) -> None:
+    await fake_telegram_server.push_inline_query(query="unknown", query_id="inline-unknown")
+
+    request = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-unknown",
+    )
+    assert request["payload"]["results"] == []
+
+    await fake_telegram_server.push_message(text="still running")
+    await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+
+
 async def test_bot_sends_scheduled_image_to_subscribed_user_only(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,

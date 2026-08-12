@@ -79,6 +79,8 @@ class FakeTelegram:
                 result = self._message_from_payload(payload)
             case "answerCallbackQuery":
                 result = True
+            case "answerInlineQuery":
+                result = True
             case "editMessageMedia":
                 result = self._media_message_from_payload(payload)
             case _:
