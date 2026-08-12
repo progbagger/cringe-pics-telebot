@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, time
+from typing import cast
 
 import pytest
+from aiogram.types import InlineQuery, InlineQueryResultPhoto, InlineQueryResultUnion
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.bot import inline
@@ -87,6 +89,65 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     assert len({payload["id"] for payload in payloads}) == 3
 
 
+def test_shuffle_inline_results_uses_injected_shuffler_on_a_copy() -> None:
+    results = _inline_results(3)
+    shuffled_inputs: list[list[str]] = []
+
+    def reverse(items: list[InlineQueryResultUnion]) -> None:
+        shuffled_inputs.append([item.id for item in items])
+        items.reverse()
+
+    shuffled_results = inline._shuffle_inline_results(results, shuffler=reverse)
+
+    assert shuffled_inputs == [["result-0", "result-1", "result-2"]]
+    assert [result.id for result in shuffled_results] == ["result-2", "result-1", "result-0"]
+    assert [result.id for result in results] == ["result-0", "result-1", "result-2"]
+
+
+async def test_answer_inline_query_shuffles_before_limit_and_disables_telegram_cache(monkeypatch: MonkeyPatch) -> None:
+    subscription_type = _subscription_type(2, "/day", "day")
+    results = _inline_results(inline.MAX_INLINE_QUERY_RESULTS + 1)
+    query = _FakeInlineQuery(query="day")
+
+    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+        assert query == "day"
+        return [subscription_type]
+
+    async def get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineQueryResultUnion]:
+        assert subscription_types == [subscription_type]
+        return results
+
+    def reverse(items: list[InlineQueryResultUnion]) -> None:
+        items.reverse()
+
+    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_get_inline_results", get_inline_results)
+    monkeypatch.setattr(inline.random, "shuffle", reverse)
+
+    await inline.answer_inline_query(cast(InlineQuery, query))
+
+    assert len(query.results) == inline.MAX_INLINE_QUERY_RESULTS
+    assert [result.id for result in query.results] == [
+        f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS, 0, -1)
+    ]
+    assert query.cache_time == 0
+    assert query.is_personal is True
+    assert [result.id for result in results] == [
+        f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 1)
+    ]
+
+
+def _inline_results(count: int) -> list[InlineQueryResultUnion]:
+    return [
+        InlineQueryResultPhoto(
+            id=f"result-{index}",
+            photo_url=f"https://storage.example/{index}.png",
+            thumbnail_url=f"https://storage.example/{index}.png",
+        )
+        for index in range(count)
+    ]
+
+
 def _subscription_type(subscription_type_id: int, name: str, directory: str) -> SubscriptionType:
     now = datetime.now(UTC)
     return SubscriptionType(
@@ -97,3 +158,27 @@ def _subscription_type(subscription_type_id: int, name: str, directory: str) -> 
         created_at=now,
         updated_at=now,
     )
+
+
+class _FakeInlineQuery:
+    def __init__(self, *, query: str) -> None:
+        self.query = query
+        self.from_user = _FakeUser()
+        self.results: list[InlineQueryResultUnion] = []
+        self.cache_time: int | None = None
+        self.is_personal: bool | None = None
+
+    async def answer(
+        self,
+        results: list[InlineQueryResultUnion],
+        *,
+        cache_time: int,
+        is_personal: bool,
+    ) -> None:
+        self.results = results
+        self.cache_time = cache_time
+        self.is_personal = is_personal
+
+
+class _FakeUser:
+    id = 42

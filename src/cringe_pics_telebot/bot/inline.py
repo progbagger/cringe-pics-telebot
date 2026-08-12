@@ -1,6 +1,8 @@
 import asyncio
 import hashlib
 import logging
+import random
+from collections.abc import Callable
 
 from aiogram import Router
 from aiogram.types import (
@@ -34,7 +36,7 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
         return
 
     try:
-        results = await _get_inline_results(subscription_types)
+        results = _shuffle_inline_results(await _get_inline_results(subscription_types))
     except Exception:
         logger.exception(
             "Failed to prepare inline results for user %d and categories %s",
@@ -82,6 +84,16 @@ async def _get_inline_results(subscription_types: list[SubscriptionType]) -> lis
             results.append(_inline_result(image, subscription_type=subscription_type))
 
     return results
+
+
+def _shuffle_inline_results(
+    results: list[InlineQueryResultUnion],
+    *,
+    shuffler: Callable[[list[InlineQueryResultUnion]], None] | None = None,
+) -> list[InlineQueryResultUnion]:
+    shuffled_results = results.copy()
+    (shuffler or random.shuffle)(shuffled_results)
+    return shuffled_results
 
 
 def _inline_result(
