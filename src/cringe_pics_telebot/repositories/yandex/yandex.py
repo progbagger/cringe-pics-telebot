@@ -129,6 +129,26 @@ class YandexS3Client:
             if items_count < self.fetch_size:
                 break
 
+    async def get_download_url(self, path: str, dir: str | None = None) -> str:
+        """Получает временную ссылку для скачивания файла.
+
+        Args:
+            path (str): Путь к файлу, ссылку на который нужно получить
+            dir (str | None, optional): Если путь неполный, можно присоединить к нему папку, указав этот параметр
+
+        Returns:
+            str: Временная ссылка для скачивания файла
+        """
+
+        if dir is not None:
+            path = f"{dir.lstrip('/')}/{path.lstrip('/')}"
+
+        async with self._session.get(
+            self._create_url("/resources/download", base_url=self._api_base_url),
+            params={"path": self._get_path_with_app(path), "fields": "href"},
+        ) as response:
+            return (await response.json())["href"]
+
     async def download_file(self, path: str, dir: str | None = None) -> bytes:
         """Скачивает файл по указанному пути.
 
@@ -140,14 +160,7 @@ class YandexS3Client:
             bytes: Скачанный файл в байтах
         """
 
-        if dir is not None:
-            path = f"{dir.lstrip('/')}/{path.lstrip('/')}"
-
-        async with self._session.get(
-            self._create_url("/resources/download", base_url=self._api_base_url),
-            params={"path": self._get_path_with_app(path), "fields": "href"},
-        ) as response:
-            link: str = (await response.json())["href"]
+        link = await self.get_download_url(path, dir=dir)
 
         async with self._session.get(link) as response:
             return await response.read()
