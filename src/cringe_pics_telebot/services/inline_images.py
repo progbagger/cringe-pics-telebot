@@ -30,7 +30,13 @@ async def get_inline_images(
 
     cached_file_ids = [await cache.get(key=image.path, cls=str) for image in images]
     uncached_images = [image for image, file_id in zip(images, cached_file_ids, strict=True) if file_id is None]
-    download_urls = iter(await get_download_urls(image.path for image in uncached_images) if uncached_images else [])
+    download_urls_by_path = dict(
+        zip(
+            (image.path for image in uncached_images),
+            await get_download_urls(image.path for image in uncached_images) if uncached_images else [],
+            strict=True,
+        )
+    )
 
     results: list[CachedInlineImage | LinkedInlineImage] = []
     for image, file_id in zip(images, cached_file_ids, strict=True):
@@ -44,12 +50,15 @@ async def get_inline_images(
                 )
             )
         else:
+            if (url := download_urls_by_path[image.path]) is None:
+                continue
+
             results.append(
                 LinkedInlineImage(
                     name=image.name,
                     mime_type=image.mime_type,
                     path=image.path,
-                    url=next(download_urls),
+                    url=url,
                 )
             )
 
