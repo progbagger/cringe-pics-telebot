@@ -1,5 +1,8 @@
+import asyncio
 import hashlib
 import logging
+import random
+from collections.abc import Callable
 
 from aiogram import Router
 from aiogram.types import (
@@ -12,7 +15,12 @@ from aiogram.types import (
 )
 
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
-from cringe_pics_telebot.services.inline_images import CachedInlineImage, LinkedInlineImage, get_inline_images
+from cringe_pics_telebot.services.inline_images import (
+    MAX_INLINE_QUERY_RESULTS,
+    CachedInlineImage,
+    LinkedInlineImage,
+    get_inline_images,
+)
 from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
 logger = logging.getLogger(__name__)
@@ -22,42 +30,70 @@ router = Router(name="inline")
 
 @router.inline_query()
 async def answer_inline_query(inline_query: InlineQuery) -> None:
-    subscription_type = await _find_subscription_type(inline_query.query)
-    if subscription_type is None:
+    subscription_types = await _find_subscription_types(inline_query.query)
+    if not subscription_types:
         await inline_query.answer([], cache_time=0, is_personal=True)
         return
 
     try:
-        images = await get_inline_images(subscription_type)
-        results = [_inline_result(image, subscription_type=subscription_type) for image in images]
+        results = _shuffle_inline_results(await _get_inline_results(subscription_types))
     except Exception:
         logger.exception(
-            "Failed to prepare inline results for user %d and category %s",
+            "Failed to prepare inline results for user %d and categories %s",
             inline_query.from_user.id,
-            subscription_type.name,
+            ", ".join(subscription_type.name for subscription_type in subscription_types),
         )
         results = []
 
-    await inline_query.answer(results, cache_time=0, is_personal=True)
+    await inline_query.answer(results[:MAX_INLINE_QUERY_RESULTS], cache_time=0, is_personal=True)
 
 
-async def _find_subscription_type(query: str) -> SubscriptionType | None:
+async def _find_subscription_types(query: str) -> list[SubscriptionType]:
+    if not _normalize_category(query):
+        return []
+
+    return [
+        subscription_type
+        for subscription_type in await get_subscription_types()
+        if category_matches_query(query, subscription_type.name)
+    ]
+
+
+def category_matches_query(query: str, category: str) -> bool:
     normalized_query = _normalize_category(query)
-    if not normalized_query:
-        return None
-
-    return next(
-        (
-            subscription_type
-            for subscription_type in await get_subscription_types()
-            if _normalize_category(subscription_type.name) == normalized_query
-        ),
-        None,
-    )
+    return bool(normalized_query) and normalized_query in _normalize_category(category)
 
 
 def _normalize_category(category: str) -> str:
     return category.strip().removeprefix("/").casefold()
+
+
+async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineQueryResultUnion]:
+    images_by_subscription_type = await asyncio.gather(
+        *(get_inline_images(subscription_type) for subscription_type in subscription_types)
+    )
+    seen_paths: set[str] = set()
+    results: list[InlineQueryResultUnion] = []
+
+    for subscription_type, images in zip(subscription_types, images_by_subscription_type, strict=True):
+        for image in images:
+            if image.path in seen_paths:
+                continue
+
+            seen_paths.add(image.path)
+            results.append(_inline_result(image, subscription_type=subscription_type))
+
+    return results
+
+
+def _shuffle_inline_results(
+    results: list[InlineQueryResultUnion],
+    *,
+    shuffler: Callable[[list[InlineQueryResultUnion]], None] | None = None,
+) -> list[InlineQueryResultUnion]:
+    shuffled_results = results.copy()
+    (shuffler or random.shuffle)(shuffled_results)
+    return shuffled_results
 
 
 def _inline_result(
