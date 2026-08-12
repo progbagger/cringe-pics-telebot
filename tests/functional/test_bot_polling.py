@@ -212,6 +212,24 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
 
 
+async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_polling(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((_due_subscription_type(1, "/broken", "broken"),))
+    await fake_telegram_server.push_inline_query(query="broken", query_id="inline-broken")
+
+    request = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-broken",
+    )
+    assert request["payload"]["results"] == []
+
+    await fake_telegram_server.push_message(text="still running after Yandex failure")
+    await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+
+
 async def test_bot_sends_scheduled_image_to_subscribed_user_only(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,

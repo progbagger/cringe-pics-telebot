@@ -46,6 +46,9 @@ class FakeYandex:
         params = dict(request.query)
         self._requests.append({"method": "resources/download", "params": params})
 
+        if "broken" in params.get("path", ""):
+            raise web.HTTPServiceUnavailable(text="Functional Yandex failure")
+
         return web.json_response({"href": f"{request.scheme}://{request.host}/download/image.png"})
 
     async def download_file(self, request: web.Request) -> web.Response:
