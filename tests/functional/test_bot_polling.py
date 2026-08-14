@@ -22,23 +22,26 @@ async def reset_state_before_test(
 
 
 @pytest.mark.parametrize("text", ["/start", "/help", "непонятное сообщение"])
-async def test_bot_shows_start_screen_for_entry_points(
+async def test_bot_shows_current_help_for_entry_points(
     text: str,
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
 ) -> None:
-    await fake_telegram_server.push_message(text=text, first_name="Danil")
+    await fake_telegram_server.push_message(text=text)
 
     request = await fake_telegram_server.wait_for_request(
         "sendMessage",
-        predicate=_is_start_answer,
+        predicate=_is_help_answer,
     )
 
     payload = request["payload"]
     assert payload["chat_id"] == 42
-    assert "Приветствую" in payload["text"]
-    assert "Danil" in payload["text"]
+    assert "случайную картинку из категории" in payload["text"]
+    assert "Управлять рассылками" in payload["text"]
+    assert "Отправить картинку в любом чате" in payload["text"]
+    assert "<code>/random</code>, <code>/morning</code>, <code>/day</code>" in payload["text"]
+    assert "<code>@имя_бота day</code>" in payload["text"]
     assert _reply_keyboard_button_texts(payload) == [
         "Подписки",
         "/random",
@@ -219,7 +222,25 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
     assert request["payload"]["results"] == []
 
     await fake_telegram_server.push_message(text="still running")
-    await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+    await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_help_answer)
+
+
+async def test_bot_returns_empty_inline_results_for_known_empty_category_and_keeps_polling(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((_due_subscription_type(1, "/empty", "empty"),))
+    await fake_telegram_server.push_inline_query(query="empty", query_id="inline-empty")
+
+    request = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-empty",
+    )
+    assert request["payload"]["results"] == []
+
+    await fake_telegram_server.push_message(text="still running after empty inline category")
+    await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_help_answer)
 
 
 async def test_bot_returns_empty_inline_results_for_known_empty_category_and_keeps_polling(
@@ -325,9 +346,9 @@ async def test_bot_skips_scheduled_send_when_category_is_empty(
     assert bot_process.returncode is None
 
 
-def _is_start_answer(request: dict[str, Any]) -> bool:
+def _is_help_answer(request: dict[str, Any]) -> bool:
     payload = request["payload"]
-    return payload.get("chat_id") == 42 and "Приветствую" in payload.get("text", "")
+    return payload.get("chat_id") == 42 and "Что умеет бот" in payload.get("text", "")
 
 
 def _is_subscription_list_answer(request: dict[str, Any]) -> bool:

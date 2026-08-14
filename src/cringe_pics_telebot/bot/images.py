@@ -37,24 +37,32 @@ router = Router(name="main")
 
 
 @router.message(Command("start", "help"))
-async def handle_start(message: Message) -> None:
-    if message.from_user is None:
-        logger.info("Received message without from_user: %d", message.message_id)
-        return
-
+async def show_help(message: Message) -> None:
     subscription_types = await get_subscription_types() or []
-    text = f"""\
-<b>Приветствую, <i>{message.from_user.first_name}</i>!</b>
-
-Я - бот, который будет присылать тебе <b>кринжульки из WhatsApp</b>, \
-если ты, конечно, подпишешься на рассылку...
-
-<code>/list</code> - <i>показать список доступных рассылок. \
-Тут же можно будет отписаться/подписаться на них.</i>\
-"""
+    category_commands = ", ".join(
+        f"<code>{subscription_type.name}</code>"
+        for subscription_type in sorted(subscription_types, key=lambda subscription_type: subscription_type.time)
+    )
+    categories_text = category_commands or "Сейчас доступных категорий нет."
 
     await message.answer(
-        text=text,
+        text=f"""\
+<b>Что умеет бот</b>
+
+🖼 <b>Прислать случайную картинку из категории</b>
+Нажми кнопку с нужной категорией или отправь одну из команд:
+{categories_text}
+
+🔔 <b>Управлять рассылками</b>
+Отправь <code>/list</code> или <code>/subscriptions</code>, затем нажми на категорию, чтобы подписаться или отписаться.
+В меню указано время каждой рассылки по Новосибирску (UTC+7).
+
+💬 <b>Отправить картинку в любом чате</b>
+Введи <code>@имя_бота day</code>, заменив <code>day</code> нужной категорией без <code>/</code>.
+Первый результат выберет случайную картинку, остальные позволят отправить конкретную.
+
+<code>/help</code> — снова показать эту справку.\
+""",
         reply_markup=create_reply_keyboard(subscription_types),
     )
 
@@ -169,7 +177,7 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
 
 @router.message()
 async def unknown_message(message: Message) -> None:
-    await handle_start(message)
+    await show_help(message)
 
 
 async def _add_image_to_chat_message(*, message: Message, image: DownloadedMedia | CachedMedia) -> Message:
