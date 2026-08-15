@@ -11,7 +11,7 @@ dependencies = [
   "asyncpg>=0.31.0",
   "click>=8.3.2",
   "redis[hiredis]>=8.1.0",
-  "serpyco-rs>=1.20.0",
+  "serpyco-rs>=1.21.0",
   "sqlalchemy[asyncio]>=2.0.51",
 ]
 
