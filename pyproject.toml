@@ -28,7 +28,7 @@ packages = ["src/cringe_pics_telebot"]
 [dependency-groups]
 dev = [
   "dotenv>=0.9.9",
-  "mypy>=1.18.2",
+  "mypy>=2.3.0",
   "pre-commit>=4.6.1",
   "pyhamcrest>=2.1.0",
   "pytest>=8.4.2",
