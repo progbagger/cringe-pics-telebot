@@ -26,6 +26,9 @@ build-backend = "uv_build"
 packages = ["src/cringe_pics_telebot"]
 
 [dependency-groups]
+migration = [
+  "alembic>=1.17.2",
+]
 dev = [
   "dotenv>=0.9.9",
   "mypy>=2.3.0",

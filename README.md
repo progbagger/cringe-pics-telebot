@@ -95,12 +95,13 @@ random/
 ### 4. Запустить сервисы
 
 ```bash
+docker compose run --rm bot uv run --isolated --no-dev --group migration alembic upgrade head
 docker compose up -d --build
 docker compose ps
 docker compose logs -f bot
 ```
 
-При первом запуске бот автоматически создаст таблицы PostgreSQL. После появления в логах сообщения `Tables created!` можно остановить просмотр логов сочетанием `Ctrl+C` — контейнеры продолжат работать.
+Миграции Alembic запускаются отдельной одноразовой командой и не входят в production-зависимости процесса бота. После запуска polling можно остановить просмотр логов сочетанием `Ctrl+C` — контейнеры продолжат работать.
 
 ### 5. Добавить категории
 
@@ -135,8 +136,11 @@ docker compose logs --tail=100 bot
 
 ```bash
 git pull --ff-only
+docker compose run --rm bot uv run --isolated --no-dev --group migration alembic upgrade head
 docker compose up -d --build --remove-orphans
 ```
+
+При запуске без Docker Compose сначала примените миграции командой `uv run --isolated --no-dev --group migration alembic upgrade head`, а затем запустите бота командой `uv run --no-dev bot`.
 
 Данные PostgreSQL и виртуальное окружение бота сохраняются в Docker volumes `pg-data` и `bot-env`. Redis используется как восстанавливаемый кэш и отдельного volume не имеет.
 
@@ -159,4 +163,4 @@ Workflow **Deploy over SSH** автоматически обновляет се�
 - `DEPLOY_PORT` — SSH-порт, если используется не `22`;
 - `DEPLOY_PATH` — путь к checkout репозитория на сервере, если он отличается от `cringe-pics-telebot`.
 
-Перед первым автоматическим деплоем репозиторий, `.env`-файлы, категории PostgreSQL и папки Яндекс Диска нужно подготовить вручную по инструкции выше. Workflow разворачивает конкретный commit, успешно прошедший CI, и перезапускает сервисы командой `docker compose up -d --build --remove-orphans --force-recreate`.
+Перед первым автоматическим деплоем репозиторий, `.env`-файлы, категории PostgreSQL и папки Яндекс Диска нужно подготовить вручную по инструкции выше. Workflow разворачивает конкретный commit, применяет миграции отдельным one-shot контейнером и перезапускает сервисы через Docker Compose.

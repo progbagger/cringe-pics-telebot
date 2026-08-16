@@ -272,6 +272,18 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
     )
     await _wait_until_ready(lambda: _postgres_ready(dependency_ports), "Postgres")
     await _wait_until_ready(lambda: _redis_ready(dependency_ports), "Redis")
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
 
     try:
         yield dependency_ports
