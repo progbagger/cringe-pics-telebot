@@ -11,7 +11,17 @@ users = sa.Table(
     "users",
     _metadata,
     sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=False),
+    sa.Column(
+        "timezone_offset_minutes",
+        sa.SMALLINT,
+        nullable=False,
+        server_default=sa.text("420"),
+    ),
     _time_column("created_at"),
+    sa.CheckConstraint(
+        "timezone_offset_minutes BETWEEN -720 AND 840",
+        name="users_timezone_offset_minutes_range",
+    ),
 )
 
 

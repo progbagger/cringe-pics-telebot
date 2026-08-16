@@ -13,3 +13,5 @@ from .subscription import get_subscription_user_ids as get_subscription_user_ids
 from .subscription import get_user_subscriptions as get_user_subscriptions
 from .subscription_types import get_subscription_types as get_subscription_types
 from .users import create_user as create_user
+from .users import get_user_timezone_offset as get_user_timezone_offset
+from .users import set_user_timezone_offset as set_user_timezone_offset

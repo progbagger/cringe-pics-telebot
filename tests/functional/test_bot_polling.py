@@ -43,6 +43,8 @@ async def test_bot_shows_start_screen_for_entry_points(
         "<code>/random</code>, <code>/morning</code>, <code>/day</code>, <code>/evening</code>, <code>/night</code>"
     ) in payload["text"]
     assert "<code>/list</code> или <code>/subscriptions</code>" in payload["text"]
+    assert "<code>/timezone [+HH:MM]</code>" in payload["text"]
+    assert "UTC+07:00" in payload["text"]
     assert "<code>@имя_бота</code>" in payload["text"]
     assert "Первый результат 🎲" in payload["text"]
     assert _reply_keyboard_button_texts(payload) == [
@@ -72,6 +74,7 @@ async def test_bot_shows_subscription_list(
     payload = request["payload"]
     assert payload["chat_id"] == 42
     assert "список" in payload["text"]
+    assert "UTC+07:00" in payload["text"]
     assert _inline_keyboard_button_texts(payload) == [
         "❌ /random – 00:00",
         "❌ /morning – 08:00",
@@ -79,6 +82,59 @@ async def test_bot_shows_subscription_list(
         "❌ /evening – 19:00",
         "❌ /night – 23:00",
     ]
+
+
+async def test_bot_shows_default_timezone(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+) -> None:
+    await fake_telegram_server.push_message(text="/timezone")
+
+    request = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "текущий часовой пояс" in request["payload"].get("text", ""),
+    )
+
+    assert request["payload"]["chat_id"] == 42
+    assert "UTC+07:00" in request["payload"]["text"]
+
+
+async def test_bot_saves_timezone(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    read_user_timezone_offset: Callable[[int], Awaitable[int | None]],
+) -> None:
+    await fake_telegram_server.push_message(text="/timezone +04:00")
+
+    request = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Часовой пояс сохранён" in request["payload"].get("text", ""),
+    )
+
+    assert "UTC+04:00" in request["payload"]["text"]
+    assert await read_user_timezone_offset(42) == 240
+
+
+async def test_bot_rejects_invalid_timezone_without_changing_saved_value(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    read_user_timezone_offset: Callable[[int], Awaitable[int | None]],
+) -> None:
+    await fake_telegram_server.push_message(text="/timezone -05:30")
+    await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Часовой пояс сохранён" in request["payload"].get("text", ""),
+    )
+
+    await fake_telegram_server.push_message(text="/timezone +14:30")
+    request = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Не удалось распознать" in request["payload"].get("text", ""),
+    )
+
+    assert "-12:00" in request["payload"]["text"]
+    assert "+14:00" in request["payload"]["text"]
+    assert await read_user_timezone_offset(42) == -330
 
 
 async def test_bot_subscribes_from_callback(

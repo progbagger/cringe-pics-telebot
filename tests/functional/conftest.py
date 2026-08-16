@@ -432,6 +432,23 @@ async def create_user_subscription(
     return create
 
 
+@pytest.fixture
+async def read_user_timezone_offset(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[int | None]]:
+    async def read(user_id: int) -> int | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            return await connection.fetchval(
+                "SELECT timezone_offset_minutes FROM users WHERE id = $1",
+                user_id,
+            )
+        finally:
+            await connection.close()
+
+    return read
+
+
 def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
     env = os.environ.copy()
     env.update(BOT_ENV)
