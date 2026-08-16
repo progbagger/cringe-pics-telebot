@@ -273,7 +273,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "click", specifier = ">=8.3.2" },
     { name = "redis", extras = ["hiredis"], specifier = ">=8.1.0" },
-    { name = "serpyco-rs", specifier = ">=1.20.0" },
+    { name = "serpyco-rs", specifier = ">=1.21.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.51" },
 ]
 
@@ -890,22 +890,30 @@ wheels = [
 
 [[package]]
 name = "serpyco-rs"
-version = "1.20.0"
+version = "1.21.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attributes-doc" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/60/042fb90286e9899cbca946605965addea9ca3048bc1a5f857507de440f30/serpyco_rs-1.20.0.tar.gz", hash = "sha256:67bc54c09083fc5dc5f1ae0bcc4aea8e96b6129154a8875078b1ba30fbd962a0", size = 87006, upload-time = "2026-03-23T13:13:07.225Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/68/d8/76dc98e4c23d2f92f5a2a6d1028efb7f35a304b17418171a2cd07df86d36/serpyco_rs-1.21.0.tar.gz", hash = "sha256:dbe770a0332ef5975e4f8a81ef390f2fcc32768c4480f74ffd06b5edf18949fe", size = 182429, upload-time = "2026-07-22T22:01:34.038Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/6f/22eb5ef913c93cb4aa316dff13c75e2b7b80a2e4dc7bb77c70c9f61cb591/serpyco_rs-1.20.0-cp314-cp314-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:3da3da1c0190e72d6bfb2c384ae2f27cfa8b1427494d97ad1e50d7098ae40b35", size = 939864, upload-time = "2026-03-23T13:12:44.159Z" },
-    { url = "https://files.pythonhosted.org/packages/17/19/cb683c66ccbb493a0986cc403b8843da5491b8564a43972f4f63bc5a9a4e/serpyco_rs-1.20.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:591955b43ece73b5e15830157820b1843a54b136f576aa2822bc816b6624576e", size = 506409, upload-time = "2026-03-23T13:12:45.916Z" },
-    { url = "https://files.pythonhosted.org/packages/19/84/2ea4f02d28041494d2db32d9628bbef876a34a4a30d4c959f85ca4b6cde1/serpyco_rs-1.20.0-cp314-cp314-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:9724ddc2229fe71beaa190ed95e0d0486db9b735359cf00e27cd11e0dc293af7", size = 527685, upload-time = "2026-03-23T13:12:47.242Z" },
-    { url = "https://files.pythonhosted.org/packages/bf/61/caf32f30829161e1c8ee9d31d70ea8aa55bb268f3458a0c5610396f75aa4/serpyco_rs-1.20.0-cp314-cp314-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:1e670555c81c4763376bf9d3718b13be0a8a39448d6f9e36a9d5144079beeb3b", size = 558600, upload-time = "2026-03-23T13:12:48.592Z" },
-    { url = "https://files.pythonhosted.org/packages/09/11/3cebfbdeab4fb1e542d064748f3aebad4404fce5a4d60dd517d42a7175a6/serpyco_rs-1.20.0-cp314-cp314-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:e50acab829aa88e5189e107e700fe7ff6e93315421772facbc45c1197b439cac", size = 547830, upload-time = "2026-03-23T13:12:50Z" },
-    { url = "https://files.pythonhosted.org/packages/07/23/7786a1be8ceb0c686194c06fe59a72d196d87b6ea061b6d07f39fadaf88f/serpyco_rs-1.20.0-cp314-cp314-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:cde3ed2635d1d92635670820da5a475f731f43d8e3e53cd5200d2ca86bd35931", size = 543355, upload-time = "2026-03-23T13:12:51.652Z" },
-    { url = "https://files.pythonhosted.org/packages/2e/fd/cb3dc91d29e539d9253b4b74705d7efdf84742480bd433598baff0a1d28b/serpyco_rs-1.20.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6e35bdf6f25edd115927b7c36b852ef6fa1b16230fa6a0aed490a130dad896a7", size = 506961, upload-time = "2026-03-23T13:12:53.039Z" },
-    { url = "https://files.pythonhosted.org/packages/bc/d5/68006308ddeccc459c5d3d60cdc4dc23f70007ace069c83c95220016f48a/serpyco_rs-1.20.0-cp314-cp314-win_amd64.whl", hash = "sha256:323e9b243dd70f2b74e0eaf645a6d4982912fc14604fc351a083d36879878fb2", size = 383084, upload-time = "2026-03-23T13:12:54.687Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/ff/ad6e0fe255408dfa978c268cdb5069de0683711378df9c9af121f9b7f08d/serpyco_rs-1.21.0-cp314-cp314-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:8c616bc12360215bc47898ae2144439287f0407e82a1ee2752e943cf00aa3f1c", size = 761125, upload-time = "2026-07-22T22:01:16.031Z" },
+    { url = "https://files.pythonhosted.org/packages/cd/26/adc158aa1b57bb1d8dedaac3095f75196bac9cd029feb9c1191735b7bced/serpyco_rs-1.21.0-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:cc6c678149a32290e6cd74e24d57164903e1ee96e3df9f6405daaa03bdaf0478", size = 419743, upload-time = "2026-07-22T22:01:17.075Z" },
+    { url = "https://files.pythonhosted.org/packages/a0/42/0e25a2a581c180886ea6f13e88c022f6e0ce03b8673cd1924cde568e211b/serpyco_rs-1.21.0-cp314-cp314-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:7077a95aabac7bbab7896daddf86a528220c694d1ce2f136621a0e7e3e36bbd8", size = 438464, upload-time = "2026-07-22T22:01:18.296Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/a5/e50347b9511ef7c6ca661f4ce358a839bf69afa73de8e743c8566c5e49da/serpyco_rs-1.21.0-cp314-cp314-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:86d6c55c1296cec3a527d25aa2aa13f4de2c7e192ffbe5a3f968cca99fce70a1", size = 466994, upload-time = "2026-07-22T22:01:19.348Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/f8/9dd68c5263de2aa249b49f11335bbdb42a42c138e36841ca82408ee47b55/serpyco_rs-1.21.0-cp314-cp314-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:f700779680bbbb75341db9045f9f53b8b2ad6699cc021e130b6a1eaed9cb4bcc", size = 464785, upload-time = "2026-07-22T22:01:20.448Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/13/8eaa5a5310db5fe0ea431aca240d7b6e8a5c5acfd91cd9d962e9e9879b88/serpyco_rs-1.21.0-cp314-cp314-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:5fcf9a887947cd8cc7562b33b74a4241aeca5b0ccfa3f4e83ae4fef83caf3fa8", size = 455551, upload-time = "2026-07-22T22:01:21.524Z" },
+    { url = "https://files.pythonhosted.org/packages/84/9d/23f0fcf1b4f36ebe962a03347907b99f1822154a2b7fdeae77367ac0f515/serpyco_rs-1.21.0-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5717dfc28ff7d3723872cf0f483376c874036a3005f3448a0a2687d10aff311e", size = 429470, upload-time = "2026-07-22T22:01:22.657Z" },
+    { url = "https://files.pythonhosted.org/packages/22/85/ab52b6ecb3baa1ecdfc5a5f2a6e5c8e7b3aeefa96d123f7b06d4030e7d91/serpyco_rs-1.21.0-cp314-cp314-win_amd64.whl", hash = "sha256:eba2912cb89fbc3859d0729ef609fae1bd87ba328b30dc9adfb2e8b1dd5f826b", size = 303562, upload-time = "2026-07-22T22:01:23.771Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/13/410203c316c13582b1d12db8b1f47e2aa4f152454d9170a4e7a2bb73bd9e/serpyco_rs-1.21.0-cp314-cp314t-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:38dcd24fcc7e58ad161d02db7c1cee71fd5fc58527351b2cd81c2edb23db1fb0", size = 755077, upload-time = "2026-07-22T22:01:24.845Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/a5/e4af02a3f09b17043b3343cc57062697c8e91599e1860c17f7a042f81013/serpyco_rs-1.21.0-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:667d70c253c32979da0c4932254db12d4ccb3337768708ce566eefa7a739429a", size = 414411, upload-time = "2026-07-22T22:01:25.917Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/20/2724075de22adf8b88498abbe0beb73f10472f883d5403e322cf95b22a06/serpyco_rs-1.21.0-cp314-cp314t-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:b997d43cf220bbf5c0f19412ba1bd7181ed5d8a91cecd91209121416720b3018", size = 431049, upload-time = "2026-07-22T22:01:27.142Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/3c/4ac3c58d807d4124efd3cc44ccaf93afaf315658fe165fff10a855e27b3c/serpyco_rs-1.21.0-cp314-cp314t-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:d24a87854f5c35bacd796d282a3bd19c32e3fc989efe69c056f77ff52b74ea58", size = 461733, upload-time = "2026-07-22T22:01:28.376Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/ab/b1ae4fc64374ff61cd04fa6866811096dc6094386126d45d0572ebca40f6/serpyco_rs-1.21.0-cp314-cp314t-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:03fa863ae0c22fcfb3129a364ebf178eb287dd0481cc5209d0a61ad0e1734eb8", size = 458762, upload-time = "2026-07-22T22:01:29.45Z" },
+    { url = "https://files.pythonhosted.org/packages/61/b3/07c9546d635f47c6c5c82656514673b653beb51f54043898746c71c9b578/serpyco_rs-1.21.0-cp314-cp314t-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:a7e9a1d0b02bf8577216c817953068b63d53f1afd11865daee86c90aa5387b4d", size = 450351, upload-time = "2026-07-22T22:01:30.446Z" },
+    { url = "https://files.pythonhosted.org/packages/36/cb/dbca99b8ad9baa6b1ef7cd68d19ed6c6917bc665c2632718e3e1d813dea7/serpyco_rs-1.21.0-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dc29452637ea0f05089dc9952fa0aa3cb90ad4ba607abb608075c91d9b7e5abb", size = 428664, upload-time = "2026-07-22T22:01:31.721Z" },
+    { url = "https://files.pythonhosted.org/packages/61/07/3bdae23dfd8d8b7962412e29120d7c78dc0802f298b075c7c4cae3bd48e8/serpyco_rs-1.21.0-cp314-cp314t-win_amd64.whl", hash = "sha256:64aeeca15b49918b60389e8cc3747f0124ea2b96dc4271b5e48b01f59d03bd0d", size = 300645, upload-time = "2026-07-22T22:01:32.941Z" },
 ]
 
 [[package]]
