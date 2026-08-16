@@ -120,8 +120,9 @@ class FakeTelegram:
             "chat": {"id": chat_id, "type": "private"},
             "text": text,
         }
-        if "reply_markup" in payload:
-            message["reply_markup"] = payload["reply_markup"]
+        reply_markup = payload.get("reply_markup")
+        if isinstance(reply_markup, dict) and "inline_keyboard" in reply_markup:
+            message["reply_markup"] = reply_markup
 
         return message
 

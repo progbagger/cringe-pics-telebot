@@ -2,7 +2,6 @@ from .connection import AlreadyConnectedError as AlreadyConnectedError
 from .connection import DbConnectionError as DbConnectionError
 from .connection import NotConnectedError as NotConnectedError
 from .connection import connect as connect
-from .connection import create_tables as create_tables
 from .connection import get_connection as get_connection
 from .connection import transaction as transaction
 from .entities import Subscription as Subscription
@@ -10,7 +9,9 @@ from .entities import SubscriptionType as SubscriptionType
 from .entities import User as User
 from .subscription import create_subscription as create_subscription
 from .subscription import delete_subscription as delete_subscription
-from .subscription import get_subscription_user_ids as get_subscription_user_ids
+from .subscription import get_subscription_users as get_subscription_users
 from .subscription import get_user_subscriptions as get_user_subscriptions
 from .subscription_types import get_subscription_types as get_subscription_types
 from .users import create_user as create_user
+from .users import get_user_timezone_offset as get_user_timezone_offset
+from .users import set_user_timezone_offset as set_user_timezone_offset

@@ -2,7 +2,7 @@ import logging
 from html import escape
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     CallbackQuery,
     InaccessibleMessage,
@@ -31,6 +31,13 @@ from cringe_pics_telebot.services.subscriptions import (
     subscribe,
     unsubscribe,
 )
+from cringe_pics_telebot.services.timezones import (
+    InvalidTimezoneOffsetError,
+    format_timezone_offset,
+    get_user_timezone_offset,
+    parse_timezone_offset,
+    set_user_timezone_offset,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,7 @@ async def handle_start(message: Message) -> None:
     category_commands = ", ".join(
         f"<code>{escape(subscription_type.name)}</code>" for subscription_type in subscription_types
     )
+    timezone_offset = format_timezone_offset(await get_user_timezone_offset(message.from_user.id))
     text = f"""\
 <b>Привет, {escape(message.from_user.first_name)}!</b>
 
@@ -62,7 +70,8 @@ async def handle_start(message: Message) -> None:
 
 <b>🔔 Настроить рассылки</b>
 <code>/list</code> или <code>/subscriptions</code> — подписаться на категорию или отписаться \
-от неё. Время отправки указано рядом с каждой категорией по новосибирскому времени.
+от неё. Время каждой категории применяется в твоём часовом поясе: UTC{timezone_offset}.
+<code>/timezone [+HH:MM]</code> — посмотреть или изменить часовой пояс.
 
 <b>💬 Отправить картинку в другой чат</b>
 Введи <code>@имя_бота</code> и название категории без <code>/</code>, затем выбери картинку. \
@@ -75,6 +84,40 @@ async def handle_start(message: Message) -> None:
     )
 
 
+@router.message(Command("timezone"))
+async def handle_timezone(message: Message, command: CommandObject) -> None:
+    if message.from_user is None:
+        logger.info("Received timezone command without from_user: %d", message.message_id)
+        return
+
+    if command.args is None:
+        timezone_offset = format_timezone_offset(await get_user_timezone_offset(message.from_user.id))
+        await message.answer(
+            f"Твой текущий часовой пояс: <b>UTC{timezone_offset}</b>.\n\n"
+            "Чтобы изменить его, отправь команду, например: <code>/timezone +04:00</code>."
+        )
+        return
+
+    try:
+        offset_minutes = parse_timezone_offset(command.args)
+    except InvalidTimezoneOffsetError:
+        await message.answer(
+            "Не удалось распознать часовой пояс. Укажи фиксированное смещение от "
+            "<code>-12:00</code> до <code>+14:00</code> в формате <code>±HH:MM</code>, "
+            "например <code>/timezone +04:00</code>."
+        )
+        return
+
+    await set_user_timezone_offset(
+        user_id=message.from_user.id,
+        offset_minutes=offset_minutes,
+    )
+    await message.answer(
+        f"Часовой пояс сохранён: <b>UTC{format_timezone_offset(offset_minutes)}</b>. "
+        "Время всех категорий теперь применяется в этом часовом поясе."
+    )
+
+
 @router.message(Command("list", "subscriptions"))
 @router.message(F.text.lower().contains("подписк"))
 async def show_subscriptions(message: Message) -> None:
@@ -83,13 +126,15 @@ async def show_subscriptions(message: Message) -> None:
         return
 
     subscriptions = await get_user_subscriptions(message.from_user.id)
+    timezone_offset = format_timezone_offset(await get_user_timezone_offset(message.from_user.id))
     await message.answer(
-        text="""\
+        text=f"""\
 Вот <b>список</b> твоих подписок.
 
 <b>Кликни</b> на подписку, чтобы <b>подписаться/отписаться</b> от рассылки.
 
-<i>Время по Новосибирску (GMT +7, MSK +4)</i>\
+<i>Время категорий — локальное, твой часовой пояс: UTC{timezone_offset}.</i>
+<i>Изменить его можно командой <code>/timezone</code>.</i>\
 """,
         reply_markup=create_inline_subscriptions_keyboard(subscriptions),
     )

@@ -1,9 +1,9 @@
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres import create_subscription, delete_subscription, transaction
 from cringe_pics_telebot.repositories.postgres import get_subscription_types as get_subscription_types_pg
-from cringe_pics_telebot.repositories.postgres import get_subscription_user_ids as get_subscription_user_ids_from_pg
+from cringe_pics_telebot.repositories.postgres import get_subscription_users as get_subscription_users_from_pg
 from cringe_pics_telebot.repositories.postgres import get_user_subscriptions as get_user_subscriptions_from_pg
-from cringe_pics_telebot.repositories.postgres.entities import CreateSubscription
+from cringe_pics_telebot.repositories.postgres.entities import CreateSubscription, User
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
 from cringe_pics_telebot.repositories.postgres.users import create_user
 
@@ -16,8 +16,8 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
     return await get_user_subscriptions_from_pg(user_id)
 
 
-async def get_subscription_user_ids(subscription_type_id: int) -> list[int]:
-    return await get_subscription_user_ids_from_pg(subscription_type_id)
+async def get_subscription_users(subscription_type_id: int) -> list[User]:
+    return await get_subscription_users_from_pg(subscription_type_id)
 
 
 async def subscribe(*, user_id: int, subscription_type_id: int) -> None:

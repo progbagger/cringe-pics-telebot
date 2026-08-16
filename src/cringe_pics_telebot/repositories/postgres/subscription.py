@@ -4,8 +4,8 @@ from sqlalchemy.dialects.postgresql import insert
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 
 from .connection import get_connection
-from .entities import CreateSubscription, Subscription
-from .tables import subscription_types, subscriptions
+from .entities import CreateSubscription, Subscription, User
+from .tables import subscription_types, subscriptions, users
 
 st = subscription_types
 s = subscriptions
@@ -60,18 +60,26 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
         ]
 
 
-async def get_subscription_user_ids(subscription_type_id: int) -> list[int]:
+async def get_subscription_users(subscription_type_id: int) -> list[User]:
     async with get_connection() as conn:
         rows = (
             await conn.execute(
-                select(s.c.user_id)
+                select(users)
+                .select_from(s.join(users, users.c.id == s.c.user_id))
                 .where(s.c.subscription_type_id == subscription_type_id)
                 .distinct()
-                .order_by(s.c.user_id)
+                .order_by(users.c.id)
             )
         ).fetchall()
 
-        return [row.user_id for row in rows]
+        return [
+            User(
+                id=row.id,
+                timezone_offset_minutes=row.timezone_offset_minutes,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
 
 
 async def delete_subscription(*, user_id: int, subscription_type_id: int) -> None:

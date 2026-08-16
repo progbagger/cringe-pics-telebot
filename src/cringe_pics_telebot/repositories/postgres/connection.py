@@ -5,8 +5,6 @@ from contextvars import ContextVar
 from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from ._metadata import _metadata
-
 _session: ContextVar[AsyncSession] = ContextVar("_session")
 _sessionmaker: ContextVar[async_sessionmaker] = ContextVar("_sessionmaker")
 _engine: ContextVar[AsyncEngine] = ContextVar("_asyncpg_engine")
@@ -87,13 +85,3 @@ async def transaction() -> AsyncGenerator[None]:
         else:
             async with conn.begin():
                 yield
-
-
-async def create_tables() -> None:
-    try:
-        engine = _engine.get()
-    except LookupError as e:
-        raise NotConnectedError from e
-
-    async with engine.begin() as tx:
-        await tx.run_sync(_metadata.create_all)

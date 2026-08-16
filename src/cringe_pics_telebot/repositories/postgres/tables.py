@@ -11,7 +11,17 @@ users = sa.Table(
     "users",
     _metadata,
     sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=False),
+    sa.Column(
+        "timezone_offset_minutes",
+        sa.SMALLINT,
+        nullable=False,
+        server_default=sa.text("420"),
+    ),
     _time_column("created_at"),
+    sa.CheckConstraint(
+        "timezone_offset_minutes BETWEEN -720 AND 840",
+        name="users_timezone_offset_minutes_range",
+    ),
 )
 
 
@@ -20,7 +30,7 @@ subscription_types = sa.Table(
     _metadata,
     sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=True),
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
-    sa.Column("time", sa.TIME(True), nullable=False),
+    sa.Column("time", sa.TIME(False), nullable=False),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
     _time_column("created_at"),
     _time_column("updated_at"),

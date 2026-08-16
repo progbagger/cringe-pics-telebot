@@ -25,7 +25,13 @@ build-backend = "uv_build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cringe_pics_telebot"]
 
+[tool.mypy]
+exclude = ["^alembic/"]
+
 [dependency-groups]
+migration = [
+  "alembic>=1.17.2",
+]
 dev = [
   "dotenv>=0.9.9",
   "mypy>=2.3.0",

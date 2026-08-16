@@ -94,6 +94,8 @@ jobs:
                 (filename) =>
                   filename.startsWith("src/") ||
                   filename.startsWith("docker/") ||
+                  filename.startsWith("alembic/") ||
+                  filename === "alembic.ini" ||
                   filename === "pyproject.toml" ||
                   filename === "uv.lock" ||
                   filename === "compose.yml",
@@ -183,5 +185,6 @@ jobs:
 
             git reset --hard "$DEPLOY_SHA"
 
+            docker compose run --rm bot uv run --isolated --no-dev --group migration alembic upgrade head
             docker compose up -d --build --remove-orphans --force-recreate
             docker compose ps

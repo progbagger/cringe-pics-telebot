@@ -7,7 +7,6 @@ from datetime import timedelta
 
 from cringe_pics_telebot.bot.bot import create_bot, dp
 from cringe_pics_telebot.repositories.postgres import connect as connect_postgres
-from cringe_pics_telebot.repositories.postgres import create_tables
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 from cringe_pics_telebot.services.subscription_broadcasts import DEFAULT_CHECK_INTERVAL, run_subscription_broadcasts
@@ -32,10 +31,6 @@ async def _connect_postgres() -> AsyncGenerator:
         host=host,
     ):
         logger.info("Connected to the database!")
-
-        logger.info("Creating tables...")
-        await create_tables()
-        logger.info("Tables created!")
 
         yield
 
