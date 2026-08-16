@@ -14,7 +14,14 @@ import aiohttp
 import asyncpg
 import pytest
 import pytest_asyncio
+from aiogram import Bot
 from redis import asyncio as redis
+
+from cringe_pics_telebot.bot.bot import create_bot
+from cringe_pics_telebot.repositories.postgres import connect as connect_postgres
+from cringe_pics_telebot.repositories.redis import connect as connect_redis
+from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
+from cringe_pics_telebot.services.subscription_broadcasts import run_due_subscription_broadcasts
 
 ROOT_DIR = Path(__file__).parents[2]
 FUNCTIONAL_DIR = ROOT_DIR / "tests" / "functional"
@@ -60,11 +67,11 @@ class DependencyPorts:
 
 
 SEEDED_SUBSCRIPTION_TYPES = (
-    FunctionalSubscriptionType(1, "/morning", time(8, 0, tzinfo=UTC), "morning"),
-    FunctionalSubscriptionType(2, "/day", time(13, 0, tzinfo=UTC), "day"),
-    FunctionalSubscriptionType(3, "/evening", time(19, 0, tzinfo=UTC), "evening"),
-    FunctionalSubscriptionType(4, "/night", time(23, 0, tzinfo=UTC), "night"),
-    FunctionalSubscriptionType(5, "/random", time(0, 0, tzinfo=UTC), "random"),
+    FunctionalSubscriptionType(1, "/morning", time(8, 0), "morning"),
+    FunctionalSubscriptionType(2, "/day", time(13, 0), "day"),
+    FunctionalSubscriptionType(3, "/evening", time(19, 0), "evening"),
+    FunctionalSubscriptionType(4, "/night", time(23, 0), "night"),
+    FunctionalSubscriptionType(5, "/random", time(0, 0), "random"),
 )
 
 
@@ -272,6 +279,7 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
     )
     await _wait_until_ready(lambda: _postgres_ready(dependency_ports), "Postgres")
     await _wait_until_ready(lambda: _redis_ready(dependency_ports), "Redis")
+    await _prepare_legacy_schema(dependency_ports)
     await _run_checked(
         "uv",
         "run",
@@ -284,6 +292,8 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         "head",
         env=_bot_env(dependency_ports),
     )
+    await _assert_schema_migrated(dependency_ports)
+    await _reset_database(dependency_ports)
 
     try:
         yield dependency_ports
@@ -364,7 +374,7 @@ async def bot_process(
         stderr=subprocess.PIPE,
     )
     try:
-        await fake_telegram_server.wait_for_request("getMe", timeout=15)
+        await fake_telegram_server.wait_for_request("getMe", timeout=30)
         yield process
     finally:
         await _terminate_process(process)
@@ -396,13 +406,23 @@ async def user_subscribed_to_morning(
 
 @pytest.fixture
 async def reset_functional_state(
-    docker_compose: DependencyPorts,
     bot_process: subprocess.Process,
+    reset_dependency_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]]:
+    async def reset(subscription_types: tuple[FunctionalSubscriptionType, ...]) -> None:
+        _raise_if_process_exited(bot_process, "bot")
+        await reset_dependency_state(subscription_types)
+
+    return reset
+
+
+@pytest.fixture
+async def reset_dependency_state(
+    docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
 ) -> Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]]:
     async def reset(subscription_types: tuple[FunctionalSubscriptionType, ...]) -> None:
-        _raise_if_process_exited(bot_process, "bot")
         await fake_telegram_server.reset()
         await fake_yandex_server.reset()
         await _reset_database(docker_compose)
@@ -426,8 +446,18 @@ async def seed_functional_subscription_types(
 async def create_user_subscription(
     docker_compose: DependencyPorts,
 ) -> Callable[..., Awaitable[None]]:
-    async def create(*, user_id: int, subscription_type_id: int) -> None:
-        await _insert_user_subscription(docker_compose, user_id=user_id, subscription_type_id=subscription_type_id)
+    async def create(
+        *,
+        user_id: int,
+        subscription_type_id: int,
+        timezone_offset_minutes: int = 420,
+    ) -> None:
+        await _insert_user_subscription(
+            docker_compose,
+            user_id=user_id,
+            subscription_type_id=subscription_type_id,
+            timezone_offset_minutes=timezone_offset_minutes,
+        )
 
     return create
 
@@ -449,6 +479,44 @@ async def read_user_timezone_offset(
     return read
 
 
+@pytest.fixture
+def run_subscription_broadcasts_at(
+    docker_compose: DependencyPorts,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+) -> Callable[[datetime], Awaitable[int]]:
+    async def run(now: datetime) -> int:
+        connect_yandex(
+            BOT_ENV["YANDEX_DISK_TOKEN"],
+            api_base_url=f"{fake_yandex_server.base_url}/v1/disk/",
+        )
+        async with (
+            connect_postgres(
+                username=POSTGRES_ENV["POSTGRES_USER"],
+                password=POSTGRES_ENV["POSTGRES_PASSWORD"],
+                database=POSTGRES_ENV["POSTGRES_DB"],
+                port=docker_compose.postgres,
+                host=POSTGRES_ENV["POSTGRES_HOST"],
+            ),
+            connect_redis(
+                username=REDIS_ENV["REDIS_USERNAME"],
+                password=REDIS_ENV["REDIS_PASSWORD"],
+                port=docker_compose.redis,
+                host=REDIS_ENV["REDIS_HOST"],
+            ),
+        ):
+            bot: Bot = create_bot(
+                BOT_ENV["TELEGRAM_BOT_TOKEN"],
+                api_base_url=fake_telegram_server.base_url,
+            )
+            try:
+                return await run_due_subscription_broadcasts(bot, now=now)
+            finally:
+                await bot.session.close()
+
+    return run
+
+
 def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
     env = os.environ.copy()
     env.update(BOT_ENV)
@@ -462,6 +530,74 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
         await connection.execute("TRUNCATE subscriptions, users, subscription_types RESTART IDENTITY CASCADE")
+    finally:
+        await connection.close()
+
+
+async def _prepare_legacy_schema(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.execute(
+            """
+            CREATE TABLE users (
+                id BIGINT PRIMARY KEY,
+                created_at TIME WITH TIME ZONE NOT NULL
+            );
+            CREATE TABLE subscription_types (
+                id BIGSERIAL PRIMARY KEY,
+                name VARCHAR NOT NULL UNIQUE,
+                time TIME WITH TIME ZONE NOT NULL,
+                s3_directory_path VARCHAR NOT NULL,
+                created_at TIME WITH TIME ZONE NOT NULL,
+                updated_at TIME WITH TIME ZONE NOT NULL
+            );
+            CREATE TABLE subscriptions (
+                id BIGSERIAL PRIMARY KEY,
+                subscription_type_id BIGINT NOT NULL REFERENCES subscription_types(id),
+                user_id BIGINT NOT NULL REFERENCES users(id),
+                created_at TIME WITH TIME ZONE NOT NULL
+            );
+            CREATE INDEX subscriptions_user_id_idx ON subscriptions(user_id);
+            """
+        )
+        await connection.execute(
+            "INSERT INTO users(id, created_at) VALUES($1, $2)",
+            1,
+            _database_time(),
+        )
+        await connection.execute(
+            """
+            INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
+            VALUES($1, $2, $3, $4, $4)
+            """,
+            "/migration-probe",
+            time(10, 0, tzinfo=UTC),
+            "migration-probe",
+            _database_time(),
+        )
+    finally:
+        await connection.close()
+
+
+async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert (
+            await connection.fetchval(
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'subscription_types'
+                  AND column_name = 'time'
+                """
+            )
+            == "time without time zone"
+        )
+        assert await connection.fetchval("SELECT time FROM subscription_types WHERE name = '/migration-probe'") == time(
+            10, 0
+        )
+        assert await connection.fetchval("SELECT timezone_offset_minutes FROM users WHERE id = 1") == 420
     finally:
         await connection.close()
 
@@ -497,12 +633,19 @@ async def _insert_user_subscription(
     *,
     user_id: int,
     subscription_type_id: int,
+    timezone_offset_minutes: int = 420,
 ) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
         await connection.execute(
-            "INSERT INTO users(id, created_at) VALUES($1, $2) ON CONFLICT DO NOTHING",
+            """
+            INSERT INTO users(id, timezone_offset_minutes, created_at)
+            VALUES($1, $2, $3)
+            ON CONFLICT (id) DO UPDATE
+            SET timezone_offset_minutes = EXCLUDED.timezone_offset_minutes
+            """,
             user_id,
+            timezone_offset_minutes,
             _database_time(),
         )
         await connection.execute(
