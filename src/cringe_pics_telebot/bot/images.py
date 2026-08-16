@@ -1,4 +1,5 @@
 import logging
+from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -42,15 +43,30 @@ async def handle_start(message: Message) -> None:
         logger.info("Received message without from_user: %d", message.message_id)
         return
 
-    subscription_types = await get_subscription_types() or []
+    subscription_types = sorted(
+        await get_subscription_types() or [],
+        key=lambda subscription_type: subscription_type.time,
+    )
+    category_commands = ", ".join(
+        f"<code>{escape(subscription_type.name)}</code>" for subscription_type in subscription_types
+    )
     text = f"""\
-<b>Приветствую, <i>{message.from_user.first_name}</i>!</b>
+<b>Привет, {escape(message.from_user.first_name)}!</b>
 
-Я - бот, который будет присылать тебе <b>кринжульки из WhatsApp</b>, \
-если ты, конечно, подпишешься на рассылку...
+<b>Что умеет бот</b>
+Присылаю кринжовые картинки из WhatsApp — по запросу или по расписанию.
 
-<code>/list</code> - <i>показать список доступных рассылок. \
-Тут же можно будет отписаться/подписаться на них.</i>\
+<b>🖼 Получить картинку сейчас</b>
+Нажми кнопку с категорией или отправь одну из команд:
+{category_commands}
+
+<b>🔔 Настроить рассылки</b>
+<code>/list</code> или <code>/subscriptions</code> — подписаться на категорию или отписаться \
+от неё. Время отправки указано рядом с каждой категорией по новосибирскому времени.
+
+<b>💬 Отправить картинку в другой чат</b>
+Введи <code>@имя_бота</code> и название категории без <code>/</code>, затем выбери картинку. \
+Первый результат 🎲 отправит случайную.
 """
 
     await message.answer(

@@ -37,8 +37,14 @@ async def test_bot_shows_start_screen_for_entry_points(
 
     payload = request["payload"]
     assert payload["chat_id"] == 42
-    assert "Приветствую" in payload["text"]
+    assert "Что умеет бот" in payload["text"]
     assert "Danil" in payload["text"]
+    assert (
+        "<code>/random</code>, <code>/morning</code>, <code>/day</code>, <code>/evening</code>, <code>/night</code>"
+    ) in payload["text"]
+    assert "<code>/list</code> или <code>/subscriptions</code>" in payload["text"]
+    assert "<code>@имя_бота</code>" in payload["text"]
+    assert "Первый результат 🎲" in payload["text"]
     assert _reply_keyboard_button_texts(payload) == [
         "Подписки",
         "/random",
@@ -327,7 +333,7 @@ async def test_bot_skips_scheduled_send_when_category_is_empty(
 
 def _is_start_answer(request: dict[str, Any]) -> bool:
     payload = request["payload"]
-    return payload.get("chat_id") == 42 and "Приветствую" in payload.get("text", "")
+    return payload.get("chat_id") == 42 and "Что умеет бот" in payload.get("text", "")
 
 
 def _is_subscription_list_answer(request: dict[str, Any]) -> bool:
