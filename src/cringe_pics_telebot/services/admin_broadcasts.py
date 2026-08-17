@@ -10,7 +10,7 @@ from cringe_pics_telebot.repositories.postgres import (
     complete_admin_broadcast,
     deactivate_user,
     finish_admin_broadcast_delivery,
-    get_active_users,
+    get_admin_broadcast_users,
     get_dispatchable_admin_broadcasts,
     reserve_admin_broadcast_deliveries,
     transaction,
@@ -61,12 +61,8 @@ async def run_due_admin_broadcasts(bot: Bot, *, now: datetime | None = None) -> 
     if not broadcasts:
         return 0
 
-    users = await get_active_users()
     sent_counts = await asyncio.gather(
-        *(
-            _process_admin_broadcast(bot=bot, broadcast=broadcast, users=users, now=current_time)
-            for broadcast in broadcasts
-        )
+        *(_process_admin_broadcast(bot=bot, broadcast=broadcast, now=current_time) for broadcast in broadcasts)
     )
     return sum(sent_counts)
 
@@ -75,10 +71,10 @@ async def _process_admin_broadcast(
     *,
     bot: Bot,
     broadcast: AdminBroadcast,
-    users: list[User],
     now: datetime,
 ) -> int:
     try:
+        users = await get_admin_broadcast_users(broadcast.id)
         due_user_ids = [user.id for user in users if is_admin_broadcast_due(broadcast, user=user, now=now)]
         async with transaction():
             deliveries = await reserve_admin_broadcast_deliveries(

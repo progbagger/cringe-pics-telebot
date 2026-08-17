@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -9,13 +10,20 @@ from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 from cringe_pics_telebot.repositories.postgres import (
     create_admin_broadcast,
     get_admin_broadcast,
+    get_admin_broadcast_recipient_ids,
     get_scheduled_admin_broadcasts,
+    set_admin_broadcast_recipients,
     soft_delete_admin_broadcast,
     transaction,
     update_admin_broadcast_message,
     update_admin_broadcast_schedule,
 )
 from cringe_pics_telebot.repositories.postgres.entities import AdminBroadcast, AdminBroadcastStatus
+from cringe_pics_telebot.services.admin_broadcast_recipients import (
+    MAX_EXTRA_RECIPIENTS,
+    InvalidAdminBroadcastRecipientsError,
+    parse_admin_broadcast_recipient_ids,
+)
 from cringe_pics_telebot.services.admin_broadcast_schedules import (
     AdminBroadcastSchedule,
     InvalidAdminBroadcastScheduleError,
@@ -32,6 +40,7 @@ from .admin_keyboards import (
     create_admin_broadcasts_keyboard,
     create_admin_form_cancel_keyboard,
     create_admin_panel_keyboard,
+    create_admin_recipients_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,8 +55,10 @@ router.callback_query.filter(IsAdministrator())
 class AdminBroadcastForm(StatesGroup):
     new_message = State()
     new_schedule = State()
+    new_recipients = State()
     edited_message = State()
     edited_schedule = State()
+    edited_recipients = State()
 
 
 @router.message(Command("admin"))
@@ -84,7 +95,9 @@ async def handle_admin_callback(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.message(AdminBroadcastForm.new_message)
 async def receive_new_broadcast_message(message: Message, state: FSMContext) -> None:
+    assert message.from_user is not None
     await state.update_data(
+        created_by_user_id=message.from_user.id,
         source_chat_id=message.chat.id,
         source_message_id=message.message_id,
     )
@@ -101,32 +114,26 @@ async def receive_new_broadcast_schedule(message: Message, state: FSMContext) ->
     if schedule is None:
         return
 
-    data = await state.get_data()
-    source_chat_id = data.get("source_chat_id")
-    source_message_id = data.get("source_message_id")
-    if not isinstance(source_chat_id, int) or not isinstance(source_message_id, int):
-        await state.clear()
-        await message.answer("Черновик потерян. Начните создание рассылки заново.")
-        return
+    await state.update_data(
+        scheduled_local_at=schedule.local_at,
+        timezone_offset_minutes=schedule.timezone_offset_minutes,
+    )
+    await state.set_state(AdminBroadcastForm.new_recipients)
+    await message.answer(
+        _recipients_prompt(),
+        reply_markup=create_admin_recipients_keyboard(),
+    )
 
-    assert message.from_user is not None
-    async with transaction():
-        broadcast = await create_admin_broadcast(
-            created_by_user_id=message.from_user.id,
-            source_chat_id=source_chat_id,
-            source_message_id=source_message_id,
-            scheduled_local_at=schedule.local_at,
-            timezone_offset_minutes=schedule.timezone_offset_minutes,
-        )
-    await state.clear()
-    formatted_schedule = format_admin_broadcast_schedule(
-        broadcast.scheduled_local_at,
-        broadcast.timezone_offset_minutes,
-    )
-    await _answer_with_broadcast_list(
-        message,
-        prefix=f"Рассылка запланирована на <b>{formatted_schedule}</b>.",
-    )
+
+@router.message(AdminBroadcastForm.new_recipients)
+async def receive_new_broadcast_recipients(message: Message, state: FSMContext) -> None:
+    recipient_ids = await _parse_recipient_ids_message(message)
+    if recipient_ids is None:
+        return
+    broadcast = await _create_broadcast_from_state(message=message, state=state, recipient_ids=recipient_ids)
+    if broadcast is None:
+        return
+    await _answer_with_broadcast_list(message, prefix=_created_broadcast_text(broadcast, len(recipient_ids)))
 
 
 @router.message(AdminBroadcastForm.edited_message)
@@ -175,6 +182,27 @@ async def receive_edited_broadcast_schedule(message: Message, state: FSMContext)
     await _answer_with_broadcast_list(message, prefix="Дата и время рассылки обновлены.")
 
 
+@router.message(AdminBroadcastForm.edited_recipients)
+async def receive_edited_broadcast_recipients(message: Message, state: FSMContext) -> None:
+    recipient_ids = await _parse_recipient_ids_message(message)
+    if recipient_ids is None:
+        return
+    broadcast_id = await _state_broadcast_id(state)
+    if broadcast_id is None:
+        await message.answer("Черновик потерян. Откройте рассылку заново.")
+        return
+    async with transaction():
+        updated = await set_admin_broadcast_recipients(
+            broadcast_id=broadcast_id,
+            user_ids=recipient_ids,
+        )
+    await state.clear()
+    if not updated:
+        await _answer_with_broadcast_list(message, prefix="Рассылка уже начала отправляться или недоступна.")
+        return
+    await _answer_with_broadcast_list(message, prefix="Дополнительные получатели обновлены.")
+
+
 async def _dispatch_admin_callback(
     *,
     callback_data: AdminCallbackData,
@@ -200,6 +228,8 @@ async def _dispatch_admin_callback(
             return await _start_edit_message(message, state, callback_data.broadcast_id)
         case AdminAction.edit_schedule:
             return await _start_edit_schedule(message, state, callback_data.broadcast_id)
+        case AdminAction.edit_recipients:
+            return await _start_edit_recipients(message, state, callback_data.broadcast_id)
         case AdminAction.delete_broadcast:
             await state.clear()
             return await _show_delete_confirmation(message, callback_data.broadcast_id)
@@ -212,6 +242,12 @@ async def _dispatch_admin_callback(
                 "<b>Админ-панель</b>\n\nСоздание или редактирование отменено.",
                 reply_markup=create_admin_panel_keyboard(),
             )
+        case AdminAction.skip_recipients:
+            broadcast = await _create_broadcast_from_state(message=message, state=state, recipient_ids=set())
+            if broadcast is None:
+                return "Черновик потерян. Начните создание рассылки заново."
+            await _edit_current_broadcast_list(message)
+            return _created_broadcast_text(broadcast, 0)
     return None
 
 
@@ -238,8 +274,9 @@ async def _show_broadcast(message: Message, broadcast_id: int) -> str | None:
     if broadcast is None:
         await _edit_current_broadcast_list(message)
         return "Рассылка уже начала отправляться или недоступна."
+    recipient_ids = await get_admin_broadcast_recipient_ids(broadcast.id)
     await message.edit_text(
-        _broadcast_details(broadcast),
+        _broadcast_details(broadcast, extra_recipient_count=len(recipient_ids)),
         reply_markup=create_admin_broadcast_keyboard(broadcast.id),
     )
     return None
@@ -266,6 +303,19 @@ async def _start_edit_schedule(message: Message, state: FSMContext, broadcast_id
     await state.set_data({"broadcast_id": broadcast_id})
     await message.edit_text(
         _schedule_prompt(prefix="Введите новую дату и время."),
+        reply_markup=create_admin_form_cancel_keyboard(),
+    )
+    return None
+
+
+async def _start_edit_recipients(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
+    if await _editable_broadcast(broadcast_id) is None:
+        await _edit_current_broadcast_list(message)
+        return "Рассылка уже начала отправляться или недоступна."
+    await state.set_state(AdminBroadcastForm.edited_recipients)
+    await state.set_data({"broadcast_id": broadcast_id})
+    await message.edit_text(
+        _recipients_prompt(prefix="Введите новый список дополнительных Telegram user ID."),
         reply_markup=create_admin_form_cancel_keyboard(),
     )
     return None
@@ -337,6 +387,55 @@ async def _parse_schedule_message(message: Message) -> AdminBroadcastSchedule | 
     return None
 
 
+async def _parse_recipient_ids_message(message: Message) -> set[int] | None:
+    if message.text is None:
+        await message.answer(_recipients_error("Список ID должен быть текстом."))
+        return None
+    try:
+        return parse_admin_broadcast_recipient_ids(message.text)
+    except InvalidAdminBroadcastRecipientsError:
+        await message.answer(_recipients_error("Не удалось распознать Telegram user ID."))
+        return None
+
+
+async def _create_broadcast_from_state(
+    *,
+    message: Message,
+    state: FSMContext,
+    recipient_ids: set[int],
+) -> AdminBroadcast | None:
+    data = await state.get_data()
+    created_by_user_id = data.get("created_by_user_id")
+    source_chat_id = data.get("source_chat_id")
+    source_message_id = data.get("source_message_id")
+    scheduled_local_at = data.get("scheduled_local_at")
+    timezone_offset_minutes = data.get("timezone_offset_minutes")
+    if not (
+        isinstance(created_by_user_id, int)
+        and isinstance(source_chat_id, int)
+        and isinstance(source_message_id, int)
+        and isinstance(scheduled_local_at, datetime)
+        and (timezone_offset_minutes is None or isinstance(timezone_offset_minutes, int))
+    ):
+        await state.clear()
+        return None
+
+    async with transaction():
+        broadcast = await create_admin_broadcast(
+            created_by_user_id=created_by_user_id,
+            source_chat_id=source_chat_id,
+            source_message_id=source_message_id,
+            scheduled_local_at=scheduled_local_at,
+            timezone_offset_minutes=timezone_offset_minutes,
+        )
+        await set_admin_broadcast_recipients(
+            broadcast_id=broadcast.id,
+            user_ids=recipient_ids,
+        )
+    await state.clear()
+    return broadcast
+
+
 async def _state_broadcast_id(state: FSMContext) -> int | None:
     broadcast_id = (await state.get_data()).get("broadcast_id")
     if not isinstance(broadcast_id, int):
@@ -345,12 +444,13 @@ async def _state_broadcast_id(state: FSMContext) -> int | None:
     return broadcast_id
 
 
-def _broadcast_details(broadcast: AdminBroadcast) -> str:
+def _broadcast_details(broadcast: AdminBroadcast, *, extra_recipient_count: int) -> str:
     return (
         f"<b>Рассылка #{broadcast.id}</b>\n\n"
         "Дата и время: "
         f"<b>{format_admin_broadcast_schedule(broadcast.scheduled_local_at, broadcast.timezone_offset_minutes)}</b>\n"
-        f"Исходное сообщение: <code>{broadcast.source_chat_id}/{broadcast.source_message_id}</code>"
+        f"Исходное сообщение: <code>{broadcast.source_chat_id}/{broadcast.source_message_id}</code>\n"
+        f"Дополнительных получателей: <b>{extra_recipient_count}</b>"
     )
 
 
@@ -366,6 +466,30 @@ def _schedule_prompt(*, prefix: str = "Введите дату и время о�
 
 def _schedule_error(reason: str) -> str:
     return f"{reason}\n\n{_schedule_prompt(prefix='Попробуйте ещё раз.')}"
+
+
+def _recipients_prompt(*, prefix: str = "Укажите дополнительные Telegram user ID.") -> str:
+    return (
+        f"{prefix}\n\n"
+        "Разделяйте ID пробелами, запятыми или переносами строк. "
+        "Эти пользователи будут добавлены к общей активной аудитории только для этой рассылки. "
+        f"Можно указать до {MAX_EXTRA_RECIPIENTS} ID. Отправьте <code>-</code>, чтобы очистить список."
+    )
+
+
+def _recipients_error(reason: str) -> str:
+    return f"{reason}\n\n{_recipients_prompt(prefix='Попробуйте ещё раз.')}"
+
+
+def _created_broadcast_text(broadcast: AdminBroadcast, extra_recipient_count: int) -> str:
+    formatted_schedule = format_admin_broadcast_schedule(
+        broadcast.scheduled_local_at,
+        broadcast.timezone_offset_minutes,
+    )
+    return (
+        f"Рассылка запланирована на <b>{formatted_schedule}</b>. "
+        f"Дополнительных получателей: <b>{extra_recipient_count}</b>."
+    )
 
 
 def _callback_message(callback: CallbackQuery) -> Message | None:

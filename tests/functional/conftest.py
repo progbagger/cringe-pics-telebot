@@ -593,6 +593,58 @@ async def read_admin_broadcasts(
 
 
 @pytest.fixture
+async def set_functional_admin_broadcast_recipients(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[None]]:
+    async def set_recipients(*, broadcast_id: int, user_ids: tuple[int, ...]) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.executemany(
+                """
+                INSERT INTO users(id, is_active, created_at)
+                VALUES($1, false, $2)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                [(user_id, _database_time()) for user_id in user_ids],
+            )
+            await connection.executemany(
+                """
+                INSERT INTO admin_broadcast_recipients(broadcast_id, user_id, created_at)
+                VALUES($1, $2, now())
+                ON CONFLICT (broadcast_id, user_id) DO NOTHING
+                """,
+                [(broadcast_id, user_id) for user_id in user_ids],
+            )
+        finally:
+            await connection.close()
+
+    return set_recipients
+
+
+@pytest.fixture
+async def read_admin_broadcast_recipient_ids(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[list[int]]]:
+    async def read(broadcast_id: int) -> list[int]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT user_id
+                FROM admin_broadcast_recipients
+                WHERE broadcast_id = $1
+                ORDER BY user_id
+                """,
+                broadcast_id,
+            )
+            return [row["user_id"] for row in rows]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_admin_broadcast_state(
     docker_compose: DependencyPorts,
 ) -> Callable[[int], Awaitable[tuple[str, list[tuple[int, str]]]]]:
@@ -735,6 +787,7 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
             """
             TRUNCATE
                 admin_broadcast_deliveries,
+                admin_broadcast_recipients,
                 admin_broadcasts,
                 administrators,
                 subscriptions,
@@ -814,6 +867,10 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         assert await connection.fetchval("SELECT is_active FROM users WHERE id = 1") is True
         assert await connection.fetchval("SELECT to_regclass('administrators')") == "administrators"
         assert await connection.fetchval("SELECT to_regclass('admin_broadcasts')") == "admin_broadcasts"
+        assert (
+            await connection.fetchval("SELECT to_regclass('admin_broadcast_recipients')")
+            == "admin_broadcast_recipients"
+        )
         assert (
             await connection.fetchval("SELECT to_regclass('admin_broadcast_deliveries')")
             == "admin_broadcast_deliveries"

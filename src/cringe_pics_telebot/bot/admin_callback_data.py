@@ -10,9 +10,11 @@ class AdminAction(StrEnum):
     edit_broadcast = "edit"
     edit_message = "message"
     edit_schedule = "schedule"
+    edit_recipients = "recipients"
     delete_broadcast = "delete"
     confirm_delete = "confirm_delete"
     cancel_form = "cancel"
+    skip_recipients = "skip_recipients"
 
 
 class AdminCallbackData(CallbackData, prefix="admin"):

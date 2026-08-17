@@ -2,7 +2,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Row
 
@@ -12,8 +12,9 @@ from .entities import (
     AdminBroadcastDelivery,
     AdminBroadcastDeliveryStatus,
     AdminBroadcastStatus,
+    User,
 )
-from .tables import admin_broadcast_deliveries, admin_broadcasts
+from .tables import admin_broadcast_deliveries, admin_broadcast_recipients, admin_broadcasts, users
 
 
 async def create_admin_broadcast(
@@ -94,6 +95,91 @@ async def update_admin_broadcast_schedule(
         scheduled_local_at=scheduled_local_at,
         timezone_offset_minutes=timezone_offset_minutes,
     )
+
+
+async def set_admin_broadcast_recipients(*, broadcast_id: int, user_ids: Iterable[int]) -> bool:
+    unique_user_ids = set(user_ids)
+    now = datetime.now(UTC)
+    async with get_connection() as conn:
+        broadcast_row = (
+            await conn.execute(
+                select(admin_broadcasts.c.status).where(admin_broadcasts.c.id == broadcast_id).with_for_update()
+            )
+        ).one_or_none()
+        if broadcast_row is None or AdminBroadcastStatus(broadcast_row.status) is not AdminBroadcastStatus.scheduled:
+            return False
+
+        if unique_user_ids:
+            await conn.execute(
+                insert(users)
+                .values(
+                    [
+                        {
+                            "id": user_id,
+                            "is_active": False,
+                            "created_at": now,
+                        }
+                        for user_id in unique_user_ids
+                    ]
+                )
+                .on_conflict_do_nothing(index_elements=[users.c.id])
+            )
+
+        await conn.execute(
+            delete(admin_broadcast_recipients).where(admin_broadcast_recipients.c.broadcast_id == broadcast_id)
+        )
+        if unique_user_ids:
+            await conn.execute(
+                insert(admin_broadcast_recipients).values(
+                    [
+                        {
+                            "broadcast_id": broadcast_id,
+                            "user_id": user_id,
+                            "created_at": now,
+                        }
+                        for user_id in unique_user_ids
+                    ]
+                )
+            )
+    return True
+
+
+async def get_admin_broadcast_recipient_ids(broadcast_id: int) -> list[int]:
+    async with get_connection() as conn:
+        return list(
+            (
+                await conn.scalars(
+                    select(admin_broadcast_recipients.c.user_id)
+                    .where(admin_broadcast_recipients.c.broadcast_id == broadcast_id)
+                    .order_by(admin_broadcast_recipients.c.user_id)
+                )
+            ).all()
+        )
+
+
+async def get_admin_broadcast_users(broadcast_id: int) -> list[User]:
+    recipient = admin_broadcast_recipients.alias("recipient")
+    async with get_connection() as conn:
+        rows = (
+            await conn.execute(
+                select(users)
+                .outerjoin(
+                    recipient,
+                    (recipient.c.broadcast_id == broadcast_id) & (recipient.c.user_id == users.c.id),
+                )
+                .where(or_(users.c.is_active.is_(True), recipient.c.user_id.is_not(None)))
+                .order_by(users.c.id)
+            )
+        ).all()
+    return [
+        User(
+            id=row.id,
+            timezone_offset_minutes=row.timezone_offset_minutes,
+            is_active=row.is_active,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 async def soft_delete_admin_broadcast(broadcast_id: int) -> bool:

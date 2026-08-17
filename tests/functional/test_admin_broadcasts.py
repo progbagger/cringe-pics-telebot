@@ -97,5 +97,29 @@ async def test_forbidden_user_is_deactivated_without_losing_profile(
     )
 
 
+async def test_explicit_inactive_recipient_is_added_to_one_broadcast(
+    fake_telegram_server: FakeTelegramServer,
+    create_functional_user: Callable[..., Awaitable[None]],
+    create_functional_admin_broadcast: Callable[..., Awaitable[int]],
+    set_functional_admin_broadcast_recipients: Callable[..., Awaitable[None]],
+    read_user_state: Callable[[int], Awaitable[tuple[int, bool] | None]],
+    run_admin_broadcasts_at: Callable[[datetime], Awaitable[int]],
+) -> None:
+    await create_functional_user(user_id=400, timezone_offset_minutes=240)
+    broadcast_id = await create_functional_admin_broadcast(
+        scheduled_local_at=datetime(2026, 8, 17, 10, 0),
+        timezone_offset_minutes=420,
+    )
+    await set_functional_admin_broadcast_recipients(
+        broadcast_id=broadcast_id,
+        user_ids=(900,),
+    )
+
+    assert await read_user_state(900) == (420, False)
+    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)) == 2
+    assert _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")) == [400, 900]
+    assert await read_user_state(900) == (420, False)
+
+
 def _copied_chat_ids(requests: list[dict[str, Any]]) -> list[int]:
     return sorted(int(request["payload"]["chat_id"]) for request in requests)

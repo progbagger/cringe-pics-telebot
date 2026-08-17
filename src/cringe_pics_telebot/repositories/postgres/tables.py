@@ -89,6 +89,28 @@ admin_broadcast_deliveries = sa.Table(
 )
 
 
+admin_broadcast_recipients = sa.Table(
+    "admin_broadcast_recipients",
+    _metadata,
+    sa.Column(
+        "broadcast_id",
+        sa.BIGINT,
+        sa.ForeignKey(admin_broadcasts.c.id),
+        primary_key=True,
+        nullable=False,
+    ),
+    sa.Column(
+        "user_id",
+        sa.BIGINT,
+        sa.ForeignKey(users.c.id),
+        primary_key=True,
+        nullable=False,
+    ),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Index("admin_broadcast_recipients_user_id_idx", "user_id"),
+)
+
+
 subscription_types = sa.Table(
     "subscription_types",
     _metadata,

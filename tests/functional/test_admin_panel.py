@@ -79,6 +79,8 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     fake_telegram_server: FakeTelegramServer,
     set_functional_administrator: Callable[..., Awaitable[None]],
     read_admin_broadcasts: Callable[[], Awaitable[list[dict[str, Any]]]],
+    read_admin_broadcast_recipient_ids: Callable[[int], Awaitable[list[int]]],
+    read_user_state: Callable[[int], Awaitable[tuple[int, bool] | None]],
 ) -> None:
     await set_functional_administrator(user_id=42)
     await fake_telegram_server.push_message(text="/admin")
@@ -107,6 +109,11 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     assert not await read_admin_broadcasts()
 
     await fake_telegram_server.push_message(text="20.08.2099 10:00")
+    await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "дополнительные Telegram user ID" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.push_message(text="700, 800 700")
     confirmation = await fake_telegram_server.wait_for_request(
         "sendMessage",
         predicate=lambda request: "Рассылка запланирована" in request["payload"].get("text", ""),
@@ -120,6 +127,9 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     assert broadcasts[0]["scheduled_local_at"] == datetime(2099, 8, 20, 10, 0)
     assert broadcasts[0]["timezone_offset_minutes"] is None
     assert broadcasts[0]["status"] == "scheduled"
+    assert await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]) == [700, 800]
+    assert await read_user_state(700) == (420, False)
+    assert await read_user_state(800) == (420, False)
     assert "Новая рассылка" in _inline_keyboard_button_texts(confirmation["payload"])
 
 
@@ -129,6 +139,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     set_functional_administrator: Callable[..., Awaitable[None]],
     create_functional_admin_broadcast: Callable[..., Awaitable[int]],
     read_admin_broadcast: Callable[[int], Awaitable[dict[str, Any] | None]],
+    read_admin_broadcast_recipient_ids: Callable[[int], Awaitable[list[int]]],
 ) -> None:
     await set_functional_administrator(user_id=42)
     broadcast_id = await create_functional_admin_broadcast(
@@ -187,8 +198,23 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     assert broadcast["source_message_id"] == 1
 
     await fake_telegram_server.push_callback_query(
-        data=_admin_callback(AdminAction.delete_broadcast, broadcast_id),
+        data=_admin_callback(AdminAction.edit_recipients, broadcast_id),
         message_id=103,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "новый список дополнительных" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.push_message(text="900 901")
+    await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Дополнительные получатели обновлены" in request["payload"].get("text", ""),
+    )
+    assert await read_admin_broadcast_recipient_ids(broadcast_id) == [900, 901]
+
+    await fake_telegram_server.push_callback_query(
+        data=_admin_callback(AdminAction.delete_broadcast, broadcast_id),
+        message_id=104,
     )
     await fake_telegram_server.wait_for_request(
         "editMessageText",
@@ -196,7 +222,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     )
     await fake_telegram_server.push_callback_query(
         data=_admin_callback(AdminAction.confirm_delete, broadcast_id),
-        message_id=104,
+        message_id=105,
     )
     await fake_telegram_server.wait_for_request(
         "answerCallbackQuery",
@@ -206,6 +232,47 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     assert broadcast is not None
     assert broadcast["status"] == "deleted"
     assert broadcast["deleted_at"] is not None
+
+
+async def test_admin_can_skip_explicit_recipients(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_admin_broadcasts: Callable[[], Awaitable[list[dict[str, Any]]]],
+    read_admin_broadcast_recipient_ids: Callable[[int], Awaitable[list[int]]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await fake_telegram_server.push_message(text="/admin")
+    await fake_telegram_server.wait_for_request("sendMessage")
+    await fake_telegram_server.push_callback_query(data=_admin_callback(AdminAction.broadcasts))
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Новая рассылка" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.push_message(text="Сообщение без дополнительных ID")
+    await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "ДД.ММ.ГГГГ" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.push_message(text="20.08.2099 10:00")
+    await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "дополнительные Telegram user ID" in request["payload"].get("text", ""),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_admin_callback(AdminAction.skip_recipients),
+        message_id=106,
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: "Дополнительных получателей" in request["payload"].get("text", ""),
+    )
+
+    broadcasts = await read_admin_broadcasts()
+    assert len(broadcasts) == 1
+    assert broadcasts[0]["created_by_user_id"] == 42
+    assert await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]) == []
 
 
 async def test_private_message_reactivates_user_without_resetting_timezone(

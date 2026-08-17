@@ -62,6 +62,10 @@ def create_admin_broadcast_keyboard(broadcast_id: int) -> InlineKeyboardMarkup:
         callback_data=_callback(AdminAction.edit_schedule, broadcast_id),
     )
     builder.button(
+        text="Изменить дополнительные ID",
+        callback_data=_callback(AdminAction.edit_recipients, broadcast_id),
+    )
+    builder.button(
         text="Удалить",
         callback_data=_callback(AdminAction.delete_broadcast, broadcast_id),
     )
@@ -90,6 +94,17 @@ def create_admin_broadcast_delete_keyboard(broadcast_id: int) -> InlineKeyboardM
 def create_admin_form_cancel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="Отмена", callback_data=_callback(AdminAction.cancel_form))
+    return builder.as_markup()
+
+
+def create_admin_recipients_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Пропустить",
+        callback_data=_callback(AdminAction.skip_recipients),
+    )
+    builder.button(text="Отмена", callback_data=_callback(AdminAction.cancel_form))
+    builder.adjust(1)
     return builder.as_markup()
 
 
