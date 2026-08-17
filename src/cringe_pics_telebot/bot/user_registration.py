@@ -15,7 +15,7 @@ class RegisterPrivateUserMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, Message) and event.from_user is not None and event.chat.type is ChatType.PRIVATE:
+        if isinstance(event, Message) and event.from_user is not None and event.chat.type == ChatType.PRIVATE:
             async with transaction():
                 await create_user(event.from_user.id)
 

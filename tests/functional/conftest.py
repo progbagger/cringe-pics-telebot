@@ -536,6 +536,63 @@ async def create_functional_admin_broadcast(
 
 
 @pytest.fixture
+async def set_functional_administrator(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[None]]:
+    async def set_administrator(*, user_id: int, enabled: bool = True) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            if enabled:
+                await connection.execute(
+                    """
+                    INSERT INTO administrators(user_id, created_at)
+                    VALUES($1, now())
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    user_id,
+                )
+            else:
+                await connection.execute("DELETE FROM administrators WHERE user_id = $1", user_id)
+        finally:
+            await connection.close()
+
+    return set_administrator
+
+
+@pytest.fixture
+async def read_admin_broadcast(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[dict[str, Any] | None]]:
+    async def read(broadcast_id: int) -> dict[str, Any] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            row = await connection.fetchrow(
+                "SELECT * FROM admin_broadcasts WHERE id = $1",
+                broadcast_id,
+            )
+            return dict(row) if row is not None else None
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def read_admin_broadcasts(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[list[dict[str, Any]]]]:
+    async def read() -> list[dict[str, Any]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch("SELECT * FROM admin_broadcasts ORDER BY id")
+            return [dict(row) for row in rows]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_admin_broadcast_state(
     docker_compose: DependencyPorts,
 ) -> Callable[[int], Awaitable[tuple[str, list[tuple[int, str]]]]]:

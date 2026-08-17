@@ -4,6 +4,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 
+from .admin import router as admin_router
 from .images import router as images_router
 from .inline import router as inline_router
 from .user_registration import RegisterPrivateUserMiddleware
@@ -11,6 +12,7 @@ from .user_registration import RegisterPrivateUserMiddleware
 dp = Dispatcher()
 dp.message.outer_middleware(RegisterPrivateUserMiddleware())
 dp.include_router(inline_router)
+dp.include_router(admin_router)
 dp.include_router(images_router)
 
 

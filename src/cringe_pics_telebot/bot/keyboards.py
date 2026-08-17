@@ -35,15 +35,19 @@ def create_inline_subscriptions_keyboard(
 
 def create_reply_keyboard(
     subscription_types: Iterable[SubscriptionType],
+    *,
+    is_admin: bool = False,
 ) -> ReplyKeyboardMarkup:
     reply_keyboard_builder = ReplyKeyboardBuilder()
 
+    if is_admin:
+        reply_keyboard_builder.button(text="Админ-панель")
     reply_keyboard_builder.button(text="Подписки")
 
     for subscription_type in sorted(subscription_types, key=lambda st: st.time):
         reply_keyboard_builder.button(text=subscription_type.name.capitalize())
 
-    reply_keyboard_builder.adjust(1, 3)
+    reply_keyboard_builder.adjust(*(1, 1, 3) if is_admin else (1, 3))
     return reply_keyboard_builder.as_markup(
         resize_keyboard=True,
         input_field_placeholder="Выберите категорию",
