@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import RowMapping
 
 from .connection import get_connection
 from .entities import (
@@ -40,13 +41,13 @@ async def create_admin_broadcast(
                 .returning(admin_broadcasts)
             )
         ).one()
-    return _admin_broadcast_from_row(row)
+    return _admin_broadcast_from_row(row._mapping)
 
 
 async def get_admin_broadcast(broadcast_id: int) -> AdminBroadcast | None:
     async with get_connection() as conn:
         row = (await conn.execute(select(admin_broadcasts).where(admin_broadcasts.c.id == broadcast_id))).one_or_none()
-    return _admin_broadcast_from_row(row) if row is not None else None
+    return _admin_broadcast_from_row(row._mapping) if row is not None else None
 
 
 async def get_scheduled_admin_broadcasts() -> list[AdminBroadcast]:
@@ -58,7 +59,7 @@ async def get_scheduled_admin_broadcasts() -> list[AdminBroadcast]:
                 .order_by(admin_broadcasts.c.scheduled_local_at, admin_broadcasts.c.id)
             )
         ).all()
-    return [_admin_broadcast_from_row(row) for row in rows]
+    return [_admin_broadcast_from_row(row._mapping) for row in rows]
 
 
 async def get_dispatchable_admin_broadcasts() -> list[AdminBroadcast]:
@@ -70,7 +71,7 @@ async def get_dispatchable_admin_broadcasts() -> list[AdminBroadcast]:
                 .order_by(admin_broadcasts.c.scheduled_local_at, admin_broadcasts.c.id)
             )
         ).all()
-    return [_admin_broadcast_from_row(row) for row in rows]
+    return [_admin_broadcast_from_row(row._mapping) for row in rows]
 
 
 async def update_admin_broadcast_message(*, broadcast_id: int, source_chat_id: int, source_message_id: int) -> bool:
@@ -114,7 +115,7 @@ async def soft_delete_admin_broadcast(broadcast_id: int) -> bool:
 async def reserve_admin_broadcast_deliveries(
     *, broadcast_id: int, user_ids: Iterable[int]
 ) -> list[AdminBroadcastDelivery]:
-    unique_user_ids = tuple(dict.fromkeys(user_ids))
+    unique_user_ids = set(user_ids)
     if not unique_user_ids:
         return []
 
@@ -156,7 +157,7 @@ async def reserve_admin_broadcast_deliveries(
                 .returning(admin_broadcast_deliveries)
             )
         ).all()
-    return [_admin_broadcast_delivery_from_row(row) for row in rows]
+    return [_admin_broadcast_delivery_from_row(row._mapping) for row in rows]
 
 
 async def finish_admin_broadcast_delivery(
@@ -206,30 +207,30 @@ async def _update_scheduled_broadcast(broadcast_id: int, **values: object) -> bo
     return result.scalar_one_or_none() is not None
 
 
-def _admin_broadcast_from_row(row: object) -> AdminBroadcast:
+def _admin_broadcast_from_row(row: RowMapping) -> AdminBroadcast:
     return AdminBroadcast(
-        id=row.id,  # type: ignore[attr-defined]
-        created_by_user_id=row.created_by_user_id,  # type: ignore[attr-defined]
-        source_chat_id=row.source_chat_id,  # type: ignore[attr-defined]
-        source_message_id=row.source_message_id,  # type: ignore[attr-defined]
-        scheduled_local_at=row.scheduled_local_at,  # type: ignore[attr-defined]
-        timezone_offset_minutes=row.timezone_offset_minutes,  # type: ignore[attr-defined]
-        status=AdminBroadcastStatus(row.status),  # type: ignore[attr-defined]
-        created_at=row.created_at,  # type: ignore[attr-defined]
-        updated_at=row.updated_at,  # type: ignore[attr-defined]
-        started_at=row.started_at,  # type: ignore[attr-defined]
-        completed_at=row.completed_at,  # type: ignore[attr-defined]
-        deleted_at=row.deleted_at,  # type: ignore[attr-defined]
+        id=row["id"],
+        created_by_user_id=row["created_by_user_id"],
+        source_chat_id=row["source_chat_id"],
+        source_message_id=row["source_message_id"],
+        scheduled_local_at=row["scheduled_local_at"],
+        timezone_offset_minutes=row["timezone_offset_minutes"],
+        status=AdminBroadcastStatus(row["status"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        started_at=row["started_at"],
+        completed_at=row["completed_at"],
+        deleted_at=row["deleted_at"],
     )
 
 
-def _admin_broadcast_delivery_from_row(row: object) -> AdminBroadcastDelivery:
+def _admin_broadcast_delivery_from_row(row: RowMapping) -> AdminBroadcastDelivery:
     return AdminBroadcastDelivery(
-        id=row.id,  # type: ignore[attr-defined]
-        broadcast_id=row.broadcast_id,  # type: ignore[attr-defined]
-        user_id=row.user_id,  # type: ignore[attr-defined]
-        status=AdminBroadcastDeliveryStatus(row.status),  # type: ignore[attr-defined]
-        attempted_at=row.attempted_at,  # type: ignore[attr-defined]
-        finished_at=row.finished_at,  # type: ignore[attr-defined]
-        error=row.error,  # type: ignore[attr-defined]
+        id=row["id"],
+        broadcast_id=row["broadcast_id"],
+        user_id=row["user_id"],
+        status=AdminBroadcastDeliveryStatus(row["status"]),
+        attempted_at=row["attempted_at"],
+        finished_at=row["finished_at"],
+        error=row["error"],
     )

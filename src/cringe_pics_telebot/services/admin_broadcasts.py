@@ -21,6 +21,7 @@ from cringe_pics_telebot.repositories.postgres.entities import (
     AdminBroadcastDeliveryStatus,
     User,
 )
+from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
 from cringe_pics_telebot.services.timezones import (
     MAX_TIMEZONE_OFFSET_MINUTES,
     MIN_TIMEZONE_OFFSET_MINUTES,
@@ -43,7 +44,7 @@ async def run_admin_broadcasts(
     sleep: Sleep = asyncio.sleep,
 ) -> None:
     now = now or _now
-    _validate_interval(interval)
+    validate_interval(interval)
     while True:
         try:
             await run_due_admin_broadcasts(bot, now=now())
@@ -51,11 +52,11 @@ async def run_admin_broadcasts(
             raise
         except Exception:
             logger.exception("Failed to process due admin broadcasts")
-        await sleep(_seconds_until_next_tick(current_time=now(), interval=interval))
+        await sleep(seconds_until_next_tick(current_time=now(), interval=interval))
 
 
 async def run_due_admin_broadcasts(bot: Bot, *, now: datetime | None = None) -> int:
-    current_time = _aware_datetime(now or _now())
+    current_time = aware_datetime(now or _now())
     broadcasts = await get_dispatchable_admin_broadcasts()
     if not broadcasts:
         return 0
@@ -176,33 +177,12 @@ def is_admin_broadcast_complete(broadcast: AdminBroadcast, *, now: datetime) -> 
 def _local_naive_datetime(value: datetime, *, offset_minutes: int) -> datetime:
     if not MIN_TIMEZONE_OFFSET_MINUTES <= offset_minutes <= MAX_TIMEZONE_OFFSET_MINUTES:
         raise ValueError("Timezone offset must be between -12:00 and +14:00")
-    return _aware_datetime(value).astimezone(timezone(timedelta(minutes=offset_minutes))).replace(tzinfo=None)
+    return aware_datetime(value).astimezone(timezone(timedelta(minutes=offset_minutes))).replace(tzinfo=None)
 
 
 def _delivery_error(error: Exception) -> str:
     return f"{type(error).__name__}: {error}"[:_MAX_ERROR_LENGTH]
 
 
-def _seconds_until_next_tick(*, current_time: datetime, interval: timedelta) -> float:
-    interval_seconds = interval.total_seconds()
-    current_second = current_time.second + current_time.microsecond / 1_000_000
-    seconds_after_boundary = current_second % interval_seconds
-    if seconds_after_boundary == 0:
-        return interval_seconds
-    return interval_seconds - seconds_after_boundary
-
-
-def _validate_interval(interval: timedelta) -> None:
-    interval_seconds = interval.total_seconds()
-    if interval_seconds <= 0 or interval_seconds > 60:
-        raise ValueError("Admin broadcast interval must be between 0 and 60 seconds")
-
-
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _aware_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value
