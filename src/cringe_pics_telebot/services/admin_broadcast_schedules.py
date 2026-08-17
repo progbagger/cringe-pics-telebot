@@ -76,3 +76,67 @@ def format_admin_broadcast_schedule(
     if timezone_offset_minutes is None:
         return f"{formatted} · локально" if short else f"{formatted} — локальное время каждого получателя"
     return f"{formatted} · UTC{format_timezone_offset(timezone_offset_minutes)}"
+
+
+def format_admin_broadcast_countdown(
+    local_at: datetime,
+    timezone_offset_minutes: int | None,
+    *,
+    viewer_timezone_offset_minutes: int,
+    now: datetime | None = None,
+) -> str:
+    effective_offset_minutes = (
+        viewer_timezone_offset_minutes if timezone_offset_minutes is None else timezone_offset_minutes
+    )
+    scheduled_at = local_at.replace(
+        tzinfo=timezone(timedelta(minutes=effective_offset_minutes)),
+    )
+    remaining_seconds = max(
+        0,
+        int((scheduled_at - aware_datetime(now or datetime.now(UTC))).total_seconds()),
+    )
+
+    if remaining_seconds >= 24 * 60 * 60:
+        days, remainder = divmod(remaining_seconds, 24 * 60 * 60)
+        hours, remainder = divmod(remainder, 60 * 60)
+        minutes = remainder // 60
+        return " ".join(
+            (
+                _format_duration_part(days, "день", "дня", "дней"),
+                _format_duration_part(hours, "час", "часа", "часов"),
+                _format_duration_part(minutes, "минута", "минуты", "минут"),
+            )
+        )
+
+    if remaining_seconds >= 60 * 60:
+        hours, remainder = divmod(remaining_seconds, 60 * 60)
+        minutes = remainder // 60
+        return " ".join(
+            (
+                _format_duration_part(hours, "час", "часа", "часов"),
+                _format_duration_part(minutes, "минута", "минуты", "минут"),
+            )
+        )
+
+    minutes, seconds = divmod(remaining_seconds, 60)
+    return " ".join(
+        (
+            _format_duration_part(minutes, "минута", "минуты", "минут"),
+            _format_duration_part(seconds, "секунда", "секунды", "секунд"),
+        )
+    )
+
+
+def _format_duration_part(value: int, singular: str, paucal: str, plural: str) -> str:
+    remainder = value % 100
+    if 11 <= remainder <= 14:
+        word = plural
+    else:
+        match value % 10:
+            case 1:
+                word = singular
+            case 2 | 3 | 4:
+                word = paucal
+            case _:
+                word = plural
+    return f"{value} {word}"

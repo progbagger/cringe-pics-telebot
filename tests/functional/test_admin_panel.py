@@ -162,6 +162,15 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     ]
 
     await fake_telegram_server.push_callback_query(
+        data=_admin_callback(AdminAction.edit_broadcast, broadcast_id),
+    )
+    broadcast_details = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Рассылка #" in request["payload"].get("text", ""),
+    )
+    assert "До отправки для вас: <b>" in broadcast_details["payload"]["text"]
+
+    await fake_telegram_server.push_callback_query(
         data=_admin_callback(AdminAction.edit_schedule, broadcast_id),
         message_id=101,
     )

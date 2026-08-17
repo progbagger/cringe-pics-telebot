@@ -28,9 +28,11 @@ from cringe_pics_telebot.services.admin_broadcast_schedules import (
     AdminBroadcastSchedule,
     InvalidAdminBroadcastScheduleError,
     PastAdminBroadcastScheduleError,
+    format_admin_broadcast_countdown,
     format_admin_broadcast_schedule,
     parse_admin_broadcast_schedule,
 )
+from cringe_pics_telebot.services.timezones import get_user_timezone_offset
 
 from .admin_access import IsAdministrator
 from .admin_callback_data import AdminAction, AdminCallbackData
@@ -84,6 +86,7 @@ async def handle_admin_callback(callback: CallbackQuery, state: FSMContext) -> N
             callback_data=callback_data,
             message=message,
             state=state,
+            viewer_user_id=callback.from_user.id,
         )
     except Exception:
         logger.exception("Failed to process admin callback %s", callback.data)
@@ -208,6 +211,7 @@ async def _dispatch_admin_callback(
     callback_data: AdminCallbackData,
     message: Message,
     state: FSMContext,
+    viewer_user_id: int,
 ) -> str | None:
     match callback_data.action:
         case AdminAction.panel:
@@ -223,7 +227,11 @@ async def _dispatch_admin_callback(
             await _start_new_broadcast(message=message, state=state)
         case AdminAction.edit_broadcast:
             await state.clear()
-            return await _show_broadcast(message, callback_data.broadcast_id)
+            return await _show_broadcast(
+                message,
+                callback_data.broadcast_id,
+                viewer_user_id=viewer_user_id,
+            )
         case AdminAction.edit_message:
             return await _start_edit_message(message, state, callback_data.broadcast_id)
         case AdminAction.edit_schedule:
@@ -269,14 +277,24 @@ async def _start_new_broadcast(*, message: Message, state: FSMContext) -> None:
     )
 
 
-async def _show_broadcast(message: Message, broadcast_id: int) -> str | None:
+async def _show_broadcast(
+    message: Message,
+    broadcast_id: int,
+    *,
+    viewer_user_id: int,
+) -> str | None:
     broadcast = await _editable_broadcast(broadcast_id)
     if broadcast is None:
         await _edit_current_broadcast_list(message)
         return "Рассылка уже начала отправляться или недоступна."
     recipient_ids = await get_admin_broadcast_recipient_ids(broadcast.id)
+    viewer_timezone_offset_minutes = await get_user_timezone_offset(viewer_user_id)
     await message.edit_text(
-        _broadcast_details(broadcast, extra_recipient_count=len(recipient_ids)),
+        _broadcast_details(
+            broadcast,
+            extra_recipient_count=len(recipient_ids),
+            viewer_timezone_offset_minutes=viewer_timezone_offset_minutes,
+        ),
         reply_markup=create_admin_broadcast_keyboard(broadcast.id),
     )
     return None
@@ -444,11 +462,23 @@ async def _state_broadcast_id(state: FSMContext) -> int | None:
     return broadcast_id
 
 
-def _broadcast_details(broadcast: AdminBroadcast, *, extra_recipient_count: int) -> str:
+def _broadcast_details(
+    broadcast: AdminBroadcast,
+    *,
+    extra_recipient_count: int,
+    viewer_timezone_offset_minutes: int,
+) -> str:
+    countdown_label = "До отправки для вас" if broadcast.timezone_offset_minutes is None else "До отправки"
+    countdown = format_admin_broadcast_countdown(
+        broadcast.scheduled_local_at,
+        broadcast.timezone_offset_minutes,
+        viewer_timezone_offset_minutes=viewer_timezone_offset_minutes,
+    )
     return (
         f"<b>Рассылка #{broadcast.id}</b>\n\n"
         "Дата и время: "
         f"<b>{format_admin_broadcast_schedule(broadcast.scheduled_local_at, broadcast.timezone_offset_minutes)}</b>\n"
+        f"{countdown_label}: <b>{countdown}</b>\n"
         f"Исходное сообщение: <code>{broadcast.source_chat_id}/{broadcast.source_message_id}</code>\n"
         f"Дополнительных получателей: <b>{extra_recipient_count}</b>"
     )
