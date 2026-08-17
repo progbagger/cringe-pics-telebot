@@ -12,6 +12,7 @@ class FakeTelegram:
         self._condition = asyncio.Condition()
         self._updates: list[dict[str, Any]] = []
         self._requests: list[dict[str, Any]] = []
+        self._forbidden_chat_ids: set[int] = set()
         self._next_update_id = 1
         self._next_message_id = 1
 
@@ -42,8 +43,14 @@ class FakeTelegram:
         async with self._condition:
             self._updates.clear()
             self._requests.clear()
+            self._forbidden_chat_ids.clear()
             self._condition.notify_all()
 
+        return web.json_response({"ok": True})
+
+    async def set_forbidden_chats(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        self._forbidden_chat_ids = {int(chat_id) for chat_id in payload.get("chat_ids", [])}
         return web.json_response({"ok": True})
 
     async def handle_bot_api(self, request: web.Request) -> web.Response:
@@ -56,6 +63,17 @@ class FakeTelegram:
                 "payload": payload,
             }
         )
+
+        chat_id = int(payload.get("chat_id") or 0)
+        if method == "copyMessage" and chat_id in self._forbidden_chat_ids:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error_code": 403,
+                    "description": "Forbidden: bot was blocked by the user",
+                },
+                status=403,
+            )
 
         match method:
             case "getMe":
@@ -75,6 +93,9 @@ class FakeTelegram:
                 result = self._sent_media_message_from_payload(payload, media_key="photo")
             case "sendAnimation":
                 result = self._sent_media_message_from_payload(payload, media_key="animation")
+            case "copyMessage":
+                self._next_message_id += 1
+                result = {"message_id": self._next_message_id}
             case "editMessageText" | "editMessageReplyMarkup":
                 result = self._message_from_payload(payload)
             case "answerCallbackQuery":
@@ -203,6 +224,7 @@ def create_app() -> web.Application:
     app.router.add_post("/test/updates", fake.push_update)
     app.router.add_get("/test/requests", fake.list_requests)
     app.router.add_post("/test/reset", fake.reset)
+    app.router.add_post("/test/forbidden-chats", fake.set_forbidden_chats)
     app.router.add_route("*", "/{bot_token}/{method}", fake.handle_bot_api)
     return app
 

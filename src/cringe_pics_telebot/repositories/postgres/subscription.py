@@ -76,6 +76,7 @@ async def get_subscription_users(subscription_type_id: int) -> list[User]:
             User(
                 id=row.id,
                 timezone_offset_minutes=row.timezone_offset_minutes,
+                is_active=row.is_active,
                 created_at=row.created_at,
             )
             for row in rows

@@ -9,6 +9,7 @@ from cringe_pics_telebot.bot.media import get_message_media_file_id, send_image_
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.services.random_image import get_random_image, update_image_cache
+from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
 from cringe_pics_telebot.services.subscriptions import get_subscription_types, get_subscription_users
 
 logger = logging.getLogger(__name__)
@@ -28,10 +29,10 @@ async def run_subscription_broadcasts(
     sleep: Sleep = asyncio.sleep,
 ) -> None:
     now = now or _now
-    _validate_interval(interval)
+    validate_interval(interval)
     while True:
         await run_due_subscription_broadcasts(bot, now=now())
-        await sleep(_seconds_until_next_tick(current_time=now(), interval=interval))
+        await sleep(seconds_until_next_tick(current_time=now(), interval=interval))
 
 
 async def run_due_subscription_broadcasts(bot: Bot, *, now: datetime | None = None) -> int:
@@ -131,7 +132,7 @@ async def _reserve_scheduled_send(*, subscription_type_id: int, user_id: int, cu
 
 
 def _dedupe_key(*, subscription_type_id: int, user_id: int, current_time: datetime) -> str:
-    minute = _aware_datetime(current_time).astimezone(UTC).strftime("%Y%m%d%H%M")
+    minute = aware_datetime(current_time).astimezone(UTC).strftime("%Y%m%d%H%M")
     return f"subscription-broadcast:{subscription_type_id}:{user_id}:{minute}"
 
 
@@ -141,32 +142,9 @@ def _same_local_minute(
     *,
     timezone_offset_minutes: int,
 ) -> bool:
-    local_time = _aware_datetime(current_time).astimezone(timezone(timedelta(minutes=timezone_offset_minutes)))
+    local_time = aware_datetime(current_time).astimezone(timezone(timedelta(minutes=timezone_offset_minutes)))
     return scheduled_time.hour == local_time.hour and scheduled_time.minute == local_time.minute
-
-
-def _seconds_until_next_tick(*, current_time: datetime, interval: timedelta) -> float:
-    interval_seconds = interval.total_seconds()
-    current_second = current_time.second + current_time.microsecond / 1_000_000
-    seconds_after_boundary = current_second % interval_seconds
-    if seconds_after_boundary == 0:
-        return interval_seconds
-
-    return interval_seconds - seconds_after_boundary
-
-
-def _validate_interval(interval: timedelta) -> None:
-    interval_seconds = interval.total_seconds()
-    if interval_seconds <= 0 or interval_seconds > 60:
-        raise ValueError("Subscription broadcast interval must be between 0 and 60 seconds")
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _aware_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-
-    return value

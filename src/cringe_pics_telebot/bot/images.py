@@ -15,7 +15,7 @@ from cringe_pics_telebot.bot.keyboards import (
 )
 from cringe_pics_telebot.bot.media import add_image_to_message, get_message_media_file_id
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
-from cringe_pics_telebot.repositories.postgres import SubscriptionType
+from cringe_pics_telebot.repositories.postgres import SubscriptionType, is_administrator
 from cringe_pics_telebot.repositories.postgres.connection import (
     transaction,
 )
@@ -80,7 +80,10 @@ async def handle_start(message: Message) -> None:
 
     await message.answer(
         text=text,
-        reply_markup=create_reply_keyboard(subscription_types),
+        reply_markup=create_reply_keyboard(
+            subscription_types,
+            is_admin=await is_administrator(message.from_user.id),
+        ),
     )
 
 

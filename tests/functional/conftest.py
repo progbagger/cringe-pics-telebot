@@ -21,6 +21,7 @@ from cringe_pics_telebot.bot.bot import create_bot
 from cringe_pics_telebot.repositories.postgres import connect as connect_postgres
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
+from cringe_pics_telebot.services.admin_broadcasts import run_due_admin_broadcasts
 from cringe_pics_telebot.services.subscription_broadcasts import run_due_subscription_broadcasts
 
 ROOT_DIR = Path(__file__).parents[2]
@@ -47,6 +48,7 @@ BOT_ENV = {
     "TELEGRAM_BOT_TOKEN": "123456:functional-test-token",
     "YANDEX_DISK_TOKEN": "functional-test-yandex-token",
     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.5",
+    "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.5",
 }
 
 logger = logging.getLogger(__name__)
@@ -84,6 +86,16 @@ class FakeTelegramServer:
         async with (
             aiohttp.ClientSession() as session,
             session.post(f"{self.base_url}/test/reset") as response,
+        ):
+            response.raise_for_status()
+
+    async def set_forbidden_chat_ids(self, *chat_ids: int) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/forbidden-chats",
+                json={"chat_ids": chat_ids},
+            ) as response,
         ):
             response.raise_for_status()
 
@@ -463,6 +475,223 @@ async def create_user_subscription(
 
 
 @pytest.fixture
+async def create_functional_user(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[None]]:
+    async def create(
+        *,
+        user_id: int,
+        timezone_offset_minutes: int = 420,
+        is_active: bool = True,
+    ) -> None:
+        await _insert_user(
+            docker_compose,
+            user_id=user_id,
+            timezone_offset_minutes=timezone_offset_minutes,
+            is_active=is_active,
+        )
+
+    return create
+
+
+@pytest.fixture
+async def create_functional_admin_broadcast(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[int]]:
+    async def create(
+        *,
+        scheduled_local_at: datetime,
+        timezone_offset_minutes: int | None = None,
+        created_by_user_id: int = 42,
+        source_chat_id: int = 42,
+        source_message_id: int = 100,
+    ) -> int:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            return await connection.fetchval(
+                """
+                INSERT INTO admin_broadcasts(
+                    created_by_user_id,
+                    source_chat_id,
+                    source_message_id,
+                    scheduled_local_at,
+                    timezone_offset_minutes,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES($1, $2, $3, $4, $5, 'scheduled', now(), now())
+                RETURNING id
+                """,
+                created_by_user_id,
+                source_chat_id,
+                source_message_id,
+                scheduled_local_at,
+                timezone_offset_minutes,
+            )
+        finally:
+            await connection.close()
+
+    return create
+
+
+@pytest.fixture
+async def set_functional_administrator(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[None]]:
+    async def set_administrator(*, user_id: int, enabled: bool = True) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            if enabled:
+                await connection.execute(
+                    """
+                    INSERT INTO administrators(user_id, created_at)
+                    VALUES($1, now())
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    user_id,
+                )
+            else:
+                await connection.execute("DELETE FROM administrators WHERE user_id = $1", user_id)
+        finally:
+            await connection.close()
+
+    return set_administrator
+
+
+@pytest.fixture
+async def read_admin_broadcast(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[dict[str, Any] | None]]:
+    async def read(broadcast_id: int) -> dict[str, Any] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            row = await connection.fetchrow(
+                "SELECT * FROM admin_broadcasts WHERE id = $1",
+                broadcast_id,
+            )
+            return dict(row) if row is not None else None
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def read_admin_broadcasts(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[list[dict[str, Any]]]]:
+    async def read() -> list[dict[str, Any]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch("SELECT * FROM admin_broadcasts ORDER BY id")
+            return [dict(row) for row in rows]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def set_functional_admin_broadcast_recipients(
+    docker_compose: DependencyPorts,
+) -> Callable[..., Awaitable[None]]:
+    async def set_recipients(*, broadcast_id: int, user_ids: tuple[int, ...]) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.executemany(
+                """
+                INSERT INTO users(id, is_active, created_at)
+                VALUES($1, false, $2)
+                ON CONFLICT (id) DO NOTHING
+                """,
+                [(user_id, _database_time()) for user_id in user_ids],
+            )
+            await connection.executemany(
+                """
+                INSERT INTO admin_broadcast_recipients(broadcast_id, user_id, created_at)
+                VALUES($1, $2, now())
+                ON CONFLICT (broadcast_id, user_id) DO NOTHING
+                """,
+                [(broadcast_id, user_id) for user_id in user_ids],
+            )
+        finally:
+            await connection.close()
+
+    return set_recipients
+
+
+@pytest.fixture
+async def read_admin_broadcast_recipient_ids(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[list[int]]]:
+    async def read(broadcast_id: int) -> list[int]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT user_id
+                FROM admin_broadcast_recipients
+                WHERE broadcast_id = $1
+                ORDER BY user_id
+                """,
+                broadcast_id,
+            )
+            return [row["user_id"] for row in rows]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def read_admin_broadcast_state(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[str, list[tuple[int, str]]]]]:
+    async def read(broadcast_id: int) -> tuple[str, list[tuple[int, str]]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            status = await connection.fetchval(
+                "SELECT status FROM admin_broadcasts WHERE id = $1",
+                broadcast_id,
+            )
+            deliveries = await connection.fetch(
+                """
+                SELECT user_id, status
+                FROM admin_broadcast_deliveries
+                WHERE broadcast_id = $1
+                ORDER BY user_id
+                """,
+                broadcast_id,
+            )
+            return status, [(row["user_id"], row["status"]) for row in deliveries]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def read_user_state(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[int, bool] | None]]:
+    async def read(user_id: int) -> tuple[int, bool] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            row = await connection.fetchrow(
+                "SELECT timezone_offset_minutes, is_active FROM users WHERE id = $1",
+                user_id,
+            )
+            if row is None:
+                return None
+            return row["timezone_offset_minutes"], row["is_active"]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_user_timezone_offset(
     docker_compose: DependencyPorts,
 ) -> Callable[[int], Awaitable[int | None]]:
@@ -517,6 +746,31 @@ def run_subscription_broadcasts_at(
     return run
 
 
+@pytest.fixture
+def run_admin_broadcasts_at(
+    docker_compose: DependencyPorts,
+    fake_telegram_server: FakeTelegramServer,
+) -> Callable[[datetime], Awaitable[int]]:
+    async def run(now: datetime) -> int:
+        async with connect_postgres(
+            username=POSTGRES_ENV["POSTGRES_USER"],
+            password=POSTGRES_ENV["POSTGRES_PASSWORD"],
+            database=POSTGRES_ENV["POSTGRES_DB"],
+            port=docker_compose.postgres,
+            host=POSTGRES_ENV["POSTGRES_HOST"],
+        ):
+            bot: Bot = create_bot(
+                BOT_ENV["TELEGRAM_BOT_TOKEN"],
+                api_base_url=fake_telegram_server.base_url,
+            )
+            try:
+                return await run_due_admin_broadcasts(bot, now=now)
+            finally:
+                await bot.session.close()
+
+    return run
+
+
 def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
     env = os.environ.copy()
     env.update(BOT_ENV)
@@ -529,7 +783,19 @@ def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
 async def _reset_database(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
-        await connection.execute("TRUNCATE subscriptions, users, subscription_types RESTART IDENTITY CASCADE")
+        await connection.execute(
+            """
+            TRUNCATE
+                admin_broadcast_deliveries,
+                admin_broadcast_recipients,
+                admin_broadcasts,
+                administrators,
+                subscriptions,
+                users,
+                subscription_types
+            RESTART IDENTITY CASCADE
+            """
+        )
     finally:
         await connection.close()
 
@@ -598,6 +864,17 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             10, 0
         )
         assert await connection.fetchval("SELECT timezone_offset_minutes FROM users WHERE id = 1") == 420
+        assert await connection.fetchval("SELECT is_active FROM users WHERE id = 1") is True
+        assert await connection.fetchval("SELECT to_regclass('administrators')") == "administrators"
+        assert await connection.fetchval("SELECT to_regclass('admin_broadcasts')") == "admin_broadcasts"
+        assert (
+            await connection.fetchval("SELECT to_regclass('admin_broadcast_recipients')")
+            == "admin_broadcast_recipients"
+        )
+        assert (
+            await connection.fetchval("SELECT to_regclass('admin_broadcast_deliveries')")
+            == "admin_broadcast_deliveries"
+        )
     finally:
         await connection.close()
 
@@ -635,19 +912,13 @@ async def _insert_user_subscription(
     subscription_type_id: int,
     timezone_offset_minutes: int = 420,
 ) -> None:
+    await _insert_user(
+        dependency_ports,
+        user_id=user_id,
+        timezone_offset_minutes=timezone_offset_minutes,
+    )
     connection = await _create_postgres_connection(dependency_ports)
     try:
-        await connection.execute(
-            """
-            INSERT INTO users(id, timezone_offset_minutes, created_at)
-            VALUES($1, $2, $3)
-            ON CONFLICT (id) DO UPDATE
-            SET timezone_offset_minutes = EXCLUDED.timezone_offset_minutes
-            """,
-            user_id,
-            timezone_offset_minutes,
-            _database_time(),
-        )
         await connection.execute(
             """
             INSERT INTO subscriptions(subscription_type_id, user_id, created_at)
@@ -655,6 +926,32 @@ async def _insert_user_subscription(
             """,
             subscription_type_id,
             user_id,
+            _database_time(),
+        )
+    finally:
+        await connection.close()
+
+
+async def _insert_user(
+    dependency_ports: DependencyPorts,
+    *,
+    user_id: int,
+    timezone_offset_minutes: int = 420,
+    is_active: bool = True,
+) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.execute(
+            """
+            INSERT INTO users(id, timezone_offset_minutes, is_active, created_at)
+            VALUES($1, $2, $3, $4)
+            ON CONFLICT (id) DO UPDATE
+            SET timezone_offset_minutes = EXCLUDED.timezone_offset_minutes,
+                is_active = EXCLUDED.is_active
+            """,
+            user_id,
+            timezone_offset_minutes,
+            is_active,
             _database_time(),
         )
     finally:
