@@ -5,6 +5,7 @@ import pytest
 from cringe_pics_telebot.services.admin_broadcast_schedules import (
     InvalidAdminBroadcastScheduleError,
     PastAdminBroadcastScheduleError,
+    format_admin_broadcast_countdown,
     format_admin_broadcast_schedule,
     parse_admin_broadcast_schedule,
 )
@@ -59,3 +60,75 @@ def test_reject_schedule_that_passed_in_latest_timezone() -> None:
             "17.08.2026 09:59",
             now=datetime(2026, 8, 17, 22, 0, tzinfo=UTC),
         )
+
+
+@pytest.mark.parametrize(
+    ("local_at", "timezone_offset_minutes", "viewer_timezone_offset_minutes", "now", "expected"),
+    [
+        (
+            datetime(2026, 8, 19, 13, 23),
+            240,
+            -300,
+            datetime(2026, 8, 17, 3, 0, tzinfo=UTC),
+            "2 дня 6 часов 23 минуты",
+        ),
+        (
+            datetime(2026, 8, 18, 3, 0),
+            0,
+            420,
+            datetime(2026, 8, 17, 3, 0, tzinfo=UTC),
+            "1 день 0 часов 0 минут",
+        ),
+        (
+            datetime(2026, 8, 17, 6, 5),
+            0,
+            420,
+            datetime(2026, 8, 17, 3, 0, tzinfo=UTC),
+            "3 часа 5 минут",
+        ),
+        (
+            datetime(2026, 8, 17, 4, 0),
+            0,
+            420,
+            datetime(2026, 8, 17, 3, 0, tzinfo=UTC),
+            "1 час 0 минут",
+        ),
+        (
+            datetime(2026, 8, 17, 3, 59, 7),
+            0,
+            420,
+            datetime(2026, 8, 17, 3, 0, tzinfo=UTC),
+            "59 минут 7 секунд",
+        ),
+        (
+            datetime(2026, 8, 17, 3, 0),
+            0,
+            420,
+            datetime(2026, 8, 17, 3, 1, tzinfo=UTC),
+            "0 минут 0 секунд",
+        ),
+        (
+            datetime(2026, 8, 17, 10, 0),
+            None,
+            420,
+            datetime(2026, 8, 17, 2, 30, tzinfo=UTC),
+            "30 минут 0 секунд",
+        ),
+    ],
+)
+def test_format_admin_broadcast_countdown(
+    local_at: datetime,
+    timezone_offset_minutes: int | None,
+    viewer_timezone_offset_minutes: int,
+    now: datetime,
+    expected: str,
+) -> None:
+    assert (
+        format_admin_broadcast_countdown(
+            local_at,
+            timezone_offset_minutes,
+            viewer_timezone_offset_minutes=viewer_timezone_offset_minutes,
+            now=now,
+        )
+        == expected
+    )
