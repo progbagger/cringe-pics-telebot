@@ -6,8 +6,10 @@ from aiogram.enums import ParseMode
 
 from .images import router as images_router
 from .inline import router as inline_router
+from .user_registration import RegisterPrivateUserMiddleware
 
 dp = Dispatcher()
+dp.message.outer_middleware(RegisterPrivateUserMiddleware())
 dp.include_router(inline_router)
 dp.include_router(images_router)
 
