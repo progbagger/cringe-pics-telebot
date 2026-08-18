@@ -243,6 +243,7 @@ def _subscription_type(subscription_type_id: int, name: str, directory: str) -> 
         name=name,
         time=time(13, 0, tzinfo=UTC),
         s3_directory_path=directory,
+        search_aliases=(),
         created_at=now,
         updated_at=now,
     )

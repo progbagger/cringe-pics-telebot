@@ -12,6 +12,8 @@ class SubscriptionType:
     """Время, когда срабатывает подписка"""
     s3_directory_path: str
     """Путь до папки с картинками в S3"""
+    search_aliases: tuple[str, ...]
+    """Дополнительные термины для inline-поиска"""
     created_at: datetime
     """Время создания типа подписки"""
     updated_at: datetime

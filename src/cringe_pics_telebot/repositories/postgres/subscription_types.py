@@ -15,6 +15,7 @@ async def get_subscription_types() -> list[SubscriptionType]:
                 name=row.name,
                 time=row.time,
                 s3_directory_path=row.s3_directory_path,
+                search_aliases=tuple(row.search_aliases),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
