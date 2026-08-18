@@ -118,6 +118,12 @@ subscription_types = sa.Table(
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
     sa.Column("time", sa.TIME(False), nullable=False),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
+    sa.Column(
+        "search_aliases",
+        sa.ARRAY(sa.Text),
+        nullable=False,
+        server_default=sa.text("'{}'::text[]"),
+    ),
     _time_column("created_at"),
     _time_column("updated_at"),
 )

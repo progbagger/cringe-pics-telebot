@@ -15,6 +15,7 @@ from aiogram.types import (
 )
 
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
+from cringe_pics_telebot.services.category_aliases import normalize_category_search_term
 from cringe_pics_telebot.services.inline_images import (
     MAX_INLINE_QUERY_RESULTS,
     CachedInlineImage,
@@ -56,23 +57,31 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
 
 
 async def _find_subscription_types(query: str) -> list[SubscriptionType]:
-    if not _normalize_category(query):
+    if not normalize_category_search_term(query):
         return []
 
     return [
         subscription_type
         for subscription_type in await get_subscription_types()
-        if category_matches_query(query, subscription_type.name)
+        if category_matches_query(
+            query,
+            subscription_type.name,
+            subscription_type.search_aliases,
+        )
     ]
 
 
-def category_matches_query(query: str, category: str) -> bool:
-    normalized_query = _normalize_category(query)
-    return bool(normalized_query) and normalized_query in _normalize_category(category)
+def category_matches_query(query: str, category: str, search_aliases: Sequence[str] = ()) -> bool:
+    normalized_query = normalize_category_search_term(query)
+    if not normalized_query:
+        return False
 
-
-def _normalize_category(category: str) -> str:
-    return category.strip().removeprefix("/").casefold()
+    normalized_terms = {
+        normalized_term
+        for term in (category, *search_aliases)
+        if (normalized_term := normalize_category_search_term(term))
+    }
+    return any(normalized_query in term for term in normalized_terms)
 
 
 async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:

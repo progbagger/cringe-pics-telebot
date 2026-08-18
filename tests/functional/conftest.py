@@ -60,6 +60,7 @@ class FunctionalSubscriptionType:
     name: str
     send_time: time
     s3_directory_path: str
+    search_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,11 +70,11 @@ class DependencyPorts:
 
 
 SEEDED_SUBSCRIPTION_TYPES = (
-    FunctionalSubscriptionType(1, "/morning", time(8, 0), "morning"),
-    FunctionalSubscriptionType(2, "/day", time(13, 0), "day"),
-    FunctionalSubscriptionType(3, "/evening", time(19, 0), "evening"),
-    FunctionalSubscriptionType(4, "/night", time(23, 0), "night"),
-    FunctionalSubscriptionType(5, "/random", time(0, 0), "random"),
+    FunctionalSubscriptionType(1, "/morning", time(8, 0), "morning", ("утро", "утренняя", "с утра")),
+    FunctionalSubscriptionType(2, "/day", time(13, 0), "day", ("день", "дневная")),
+    FunctionalSubscriptionType(3, "/evening", time(19, 0), "evening", ("вечер", "вечерняя")),
+    FunctionalSubscriptionType(4, "/night", time(23, 0), "night", ("ночь", "ночная")),
+    FunctionalSubscriptionType(5, "/random", time(0, 0), "random", ("рандом", "случайная")),
 )
 
 
@@ -292,6 +293,32 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
     await _wait_until_ready(lambda: _postgres_ready(dependency_ports), "Postgres")
     await _wait_until_ready(lambda: _redis_ready(dependency_ports), "Redis")
     await _prepare_legacy_schema(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
+        "0005",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_category_aliases_column_absent(dependency_ports)
     await _run_checked(
         "uv",
         "run",
@@ -571,6 +598,24 @@ async def read_admin_broadcast(
                 broadcast_id,
             )
             return dict(row) if row is not None else None
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def read_category_aliases(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[str, ...] | None]]:
+    async def read(category_id: int) -> tuple[str, ...] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            aliases = await connection.fetchval(
+                "SELECT search_aliases FROM subscription_types WHERE id = $1",
+                category_id,
+            )
+            return tuple(aliases) if aliases is not None else None
         finally:
             await connection.close()
 
@@ -865,6 +910,10 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         )
         assert await connection.fetchval("SELECT timezone_offset_minutes FROM users WHERE id = 1") == 420
         assert await connection.fetchval("SELECT is_active FROM users WHERE id = 1") is True
+        assert (
+            await connection.fetchval("SELECT search_aliases FROM subscription_types WHERE name = '/migration-probe'")
+            == []
+        )
         assert await connection.fetchval("SELECT to_regclass('administrators')") == "administrators"
         assert await connection.fetchval("SELECT to_regclass('admin_broadcasts')") == "admin_broadcasts"
         assert (
@@ -879,6 +928,25 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         await connection.close()
 
 
+async def _assert_category_aliases_column_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert not await connection.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'subscription_types'
+                  AND column_name = 'search_aliases'
+            )
+            """
+        )
+        assert await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'") == 1
+    finally:
+        await connection.close()
+
+
 async def _insert_subscription_types(
     dependency_ports: DependencyPorts,
     subscription_types: tuple[FunctionalSubscriptionType, ...],
@@ -887,8 +955,16 @@ async def _insert_subscription_types(
     try:
         await connection.executemany(
             """
-            INSERT INTO subscription_types(id, name, time, s3_directory_path, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $5)
+            INSERT INTO subscription_types(
+                id,
+                name,
+                time,
+                s3_directory_path,
+                search_aliases,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
             """,
             [
                 (
@@ -896,6 +972,7 @@ async def _insert_subscription_types(
                     subscription.name,
                     subscription.send_time,
                     subscription.s3_directory_path,
+                    list(subscription.search_aliases),
                     _database_time(),
                 )
                 for subscription in subscription_types

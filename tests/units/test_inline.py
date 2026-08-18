@@ -19,26 +19,34 @@ from cringe_pics_telebot.services.inline_images import CachedInlineImage, Linked
 
 
 @pytest.mark.parametrize(
-    ("query", "category", "matches"),
+    ("query", "category", "search_aliases", "matches"),
     [
-        ("day", "/day", True),
-        ("  DA ", "/day", True),
-        ("/d", "/day", True),
-        ("ING", "/evening", True),
-        ("", "/day", False),
-        (" / ", "/day", False),
-        ("night", "/day", False),
+        ("day", "/day", (), True),
+        ("  DA ", "/day", (), True),
+        ("/d", "/day", (), True),
+        ("ING", "/evening", (), True),
+        ("  УТР  ", "/morning", ("утро", "утренняя", "с утра"), True),
+        ("/ВЕЧЕРН", "/evening", ("вечер", "  Вечерняя "), True),
+        ("днев", "/day", ("", "   ", "/", "дневная", " ДНЕВНАЯ "), True),
+        ("", "/day", ("день",), False),
+        (" / ", "/day", ("день",), False),
+        ("night", "/day", ("день",), False),
     ],
 )
-def test_category_matches_query(query: str, category: str, matches: bool) -> None:
-    assert inline.category_matches_query(query, category) is matches
+def test_category_matches_query(
+    query: str,
+    category: str,
+    search_aliases: tuple[str, ...],
+    matches: bool,
+) -> None:
+    assert inline.category_matches_query(query, category, search_aliases) is matches
 
 
 async def test_find_subscription_types_returns_every_matching_category(monkeypatch: MonkeyPatch) -> None:
     subscription_types = [
-        _subscription_type(1, "/morning", "morning"),
+        _subscription_type(1, "/morning", "morning", search_aliases=("утро", " общее ", "/ОБЩЕЕ")),
         _subscription_type(2, "/day", "day"),
-        _subscription_type(3, "/evening", "evening"),
+        _subscription_type(3, "/evening", "evening", search_aliases=("вечер", "общее")),
         _subscription_type(4, "/night", "night"),
     ]
 
@@ -47,7 +55,7 @@ async def test_find_subscription_types_returns_every_matching_category(monkeypat
 
     monkeypatch.setattr(inline, "get_subscription_types", get_subscription_types)
 
-    assert await inline._find_subscription_types("  ING ") == [subscription_types[0], subscription_types[2]]
+    assert await inline._find_subscription_types(" /ОБЩ ") == [subscription_types[0], subscription_types[2]]
 
 
 async def test_get_inline_results_combines_categories_without_duplicate_paths(monkeypatch: MonkeyPatch) -> None:
@@ -236,13 +244,20 @@ def _inline_results(count: int) -> list[inline.InlineMediaResult]:
     ]
 
 
-def _subscription_type(subscription_type_id: int, name: str, directory: str) -> SubscriptionType:
+def _subscription_type(
+    subscription_type_id: int,
+    name: str,
+    directory: str,
+    *,
+    search_aliases: tuple[str, ...] = (),
+) -> SubscriptionType:
     now = datetime.now(UTC)
     return SubscriptionType(
         id=subscription_type_id,
         name=name,
         time=time(13, 0, tzinfo=UTC),
         s3_directory_path=directory,
+        search_aliases=search_aliases,
         created_at=now,
         updated_at=now,
     )

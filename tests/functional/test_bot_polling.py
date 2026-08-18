@@ -221,13 +221,15 @@ async def test_bot_sends_image_for_subscription_category(
     assert any(request["method"] == "download" for request in yandex_requests)
 
 
+@pytest.mark.parametrize("query", ["  dA ", "  ДНЕ "])
 async def test_bot_returns_day_images_for_partial_inline_query(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    query: str,
 ) -> None:
-    await fake_telegram_server.push_inline_query(query="  dA ")
+    await fake_telegram_server.push_inline_query(query=query)
 
     request = await fake_telegram_server.wait_for_request("answerInlineQuery")
 

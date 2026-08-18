@@ -1,8 +1,7 @@
 import logging
 from datetime import datetime
 
-from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InaccessibleMessage, Message
@@ -35,7 +34,7 @@ from cringe_pics_telebot.services.admin_broadcast_schedules import (
 from cringe_pics_telebot.services.timezones import get_user_timezone_offset
 
 from .admin_access import IsAdministrator
-from .admin_callback_data import AdminAction, AdminCallbackData
+from .admin_broadcast_callback_data import AdminBroadcastAction, AdminBroadcastCallbackData
 from .admin_keyboards import (
     create_admin_broadcast_delete_keyboard,
     create_admin_broadcast_keyboard,
@@ -47,9 +46,7 @@ from .admin_keyboards import (
 
 logger = logging.getLogger(__name__)
 
-ADMIN_PANEL_BUTTON = "Админ-панель"
-
-router = Router(name="admin")
+router = Router(name="admin_broadcasts")
 router.message.filter(IsAdministrator())
 router.callback_query.filter(IsAdministrator())
 
@@ -63,26 +60,16 @@ class AdminBroadcastForm(StatesGroup):
     edited_recipients = State()
 
 
-@router.message(Command("admin"))
-@router.message(F.text == ADMIN_PANEL_BUTTON)
-async def show_admin_panel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer(
-        "<b>Админ-панель</b>\n\nВыберите действие.",
-        reply_markup=create_admin_panel_keyboard(),
-    )
-
-
-@router.callback_query(AdminCallbackData.filter())
-async def handle_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(AdminBroadcastCallbackData.filter())
+async def handle_admin_broadcast_callback(callback: CallbackQuery, state: FSMContext) -> None:
     message = _callback_message(callback)
     if message is None or callback.data is None:
         await callback.answer("Сообщение панели недоступно.", show_alert=True)
         return
 
-    callback_data = AdminCallbackData.unpack(callback.data)
+    callback_data = AdminBroadcastCallbackData.unpack(callback.data)
     try:
-        notice = await _dispatch_admin_callback(
+        notice = await _dispatch_admin_broadcast_callback(
             callback_data=callback_data,
             message=message,
             state=state,
@@ -206,51 +193,45 @@ async def receive_edited_broadcast_recipients(message: Message, state: FSMContex
     await _answer_with_broadcast_list(message, prefix="Дополнительные получатели обновлены.")
 
 
-async def _dispatch_admin_callback(
+async def _dispatch_admin_broadcast_callback(
     *,
-    callback_data: AdminCallbackData,
+    callback_data: AdminBroadcastCallbackData,
     message: Message,
     state: FSMContext,
     viewer_user_id: int,
 ) -> str | None:
     match callback_data.action:
-        case AdminAction.panel:
-            await state.clear()
-            await message.edit_text(
-                "<b>Админ-панель</b>\n\nВыберите действие.",
-                reply_markup=create_admin_panel_keyboard(),
-            )
-        case AdminAction.broadcasts:
+        case AdminBroadcastAction.broadcasts:
             await state.clear()
             return await _show_broadcasts_or_start(message=message, state=state)
-        case AdminAction.new_broadcast:
+        case AdminBroadcastAction.new_broadcast:
             await _start_new_broadcast(message=message, state=state)
-        case AdminAction.edit_broadcast:
+        case AdminBroadcastAction.edit_broadcast:
             await state.clear()
             return await _show_broadcast(
                 message,
                 callback_data.broadcast_id,
                 viewer_user_id=viewer_user_id,
             )
-        case AdminAction.edit_message:
+        case AdminBroadcastAction.edit_message:
             return await _start_edit_message(message, state, callback_data.broadcast_id)
-        case AdminAction.edit_schedule:
+        case AdminBroadcastAction.edit_schedule:
             return await _start_edit_schedule(message, state, callback_data.broadcast_id)
-        case AdminAction.edit_recipients:
+        case AdminBroadcastAction.edit_recipients:
             return await _start_edit_recipients(message, state, callback_data.broadcast_id)
-        case AdminAction.delete_broadcast:
+        case AdminBroadcastAction.delete_broadcast:
             await state.clear()
             return await _show_delete_confirmation(message, callback_data.broadcast_id)
-        case AdminAction.confirm_delete:
+        case AdminBroadcastAction.confirm_delete:
             await state.clear()
             return await _delete_broadcast(message, callback_data.broadcast_id)
-        case AdminAction.cancel_form:
+        case AdminBroadcastAction.cancel_form:
             await state.clear()
             await message.edit_text(
                 "<b>Админ-панель</b>\n\nСоздание или редактирование отменено.",
                 reply_markup=create_admin_panel_keyboard(),
             )
-        case AdminAction.skip_recipients:
+        case AdminBroadcastAction.skip_recipients:
             broadcast = await _create_broadcast_from_state(message=message, state=state, recipient_ids=set())
             if broadcast is None:
                 return "Черновик потерян. Начните создание рассылки заново."

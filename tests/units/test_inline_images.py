@@ -199,6 +199,7 @@ def _subscription_type() -> SubscriptionType:
         name="/day",
         time=time(13, 0, tzinfo=UTC),
         s3_directory_path="day",
+        search_aliases=(),
         created_at=now,
         updated_at=now,
     )
