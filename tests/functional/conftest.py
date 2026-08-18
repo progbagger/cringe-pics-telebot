@@ -70,11 +70,11 @@ class DependencyPorts:
 
 
 SEEDED_SUBSCRIPTION_TYPES = (
-    FunctionalSubscriptionType(1, "/morning", time(8, 0), "morning"),
-    FunctionalSubscriptionType(2, "/day", time(13, 0), "day"),
-    FunctionalSubscriptionType(3, "/evening", time(19, 0), "evening"),
-    FunctionalSubscriptionType(4, "/night", time(23, 0), "night"),
-    FunctionalSubscriptionType(5, "/random", time(0, 0), "random"),
+    FunctionalSubscriptionType(1, "/morning", time(8, 0), "morning", ("утро", "утренняя", "с утра")),
+    FunctionalSubscriptionType(2, "/day", time(13, 0), "day", ("день", "дневная")),
+    FunctionalSubscriptionType(3, "/evening", time(19, 0), "evening", ("вечер", "вечерняя")),
+    FunctionalSubscriptionType(4, "/night", time(23, 0), "night", ("ночь", "ночная")),
+    FunctionalSubscriptionType(5, "/random", time(0, 0), "random", ("рандом", "случайная")),
 )
 
 
