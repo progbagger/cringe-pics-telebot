@@ -3,8 +3,7 @@ from enum import StrEnum
 from aiogram.filters.callback_data import CallbackData
 
 
-class AdminAction(StrEnum):
-    panel = "panel"
+class AdminBroadcastAction(StrEnum):
     broadcasts = "broadcasts"
     new_broadcast = "new"
     edit_broadcast = "edit"
@@ -17,6 +16,6 @@ class AdminAction(StrEnum):
     skip_recipients = "skip_recipients"
 
 
-class AdminCallbackData(CallbackData, prefix="admin"):
-    action: AdminAction
+class AdminBroadcastCallbackData(CallbackData, prefix="admin_broadcast"):
+    action: AdminBroadcastAction
     broadcast_id: int = 0

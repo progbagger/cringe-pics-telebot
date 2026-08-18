@@ -605,6 +605,24 @@ async def read_admin_broadcast(
 
 
 @pytest.fixture
+async def read_category_aliases(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[str, ...] | None]]:
+    async def read(category_id: int) -> tuple[str, ...] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            aliases = await connection.fetchval(
+                "SELECT search_aliases FROM subscription_types WHERE id = $1",
+                category_id,
+            )
+            return tuple(aliases) if aliases is not None else None
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_admin_broadcasts(
     docker_compose: DependencyPorts,
 ) -> Callable[[], Awaitable[list[dict[str, Any]]]]:
