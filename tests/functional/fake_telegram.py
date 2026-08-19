@@ -13,6 +13,7 @@ class FakeTelegram:
         self._updates: list[dict[str, Any]] = []
         self._requests: list[dict[str, Any]] = []
         self._forbidden_chat_ids: set[int] = set()
+        self._invalid_file_ids: set[str] = set()
         self._next_update_id = 1
         self._next_message_id = 1
 
@@ -44,6 +45,7 @@ class FakeTelegram:
             self._updates.clear()
             self._requests.clear()
             self._forbidden_chat_ids.clear()
+            self._invalid_file_ids.clear()
             self._condition.notify_all()
 
         return web.json_response({"ok": True})
@@ -51,6 +53,11 @@ class FakeTelegram:
     async def set_forbidden_chats(self, request: web.Request) -> web.Response:
         payload = await request.json()
         self._forbidden_chat_ids = {int(chat_id) for chat_id in payload.get("chat_ids", [])}
+        return web.json_response({"ok": True})
+
+    async def set_invalid_file_ids(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        self._invalid_file_ids = {str(file_id) for file_id in payload.get("file_ids", [])}
         return web.json_response({"ok": True})
 
     async def handle_bot_api(self, request: web.Request) -> web.Response:
@@ -73,6 +80,15 @@ class FakeTelegram:
                     "description": "Forbidden: bot was blocked by the user",
                 },
                 status=403,
+            )
+        if _request_media_id(method, payload) in self._invalid_file_ids:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: wrong file identifier/HTTP URL specified",
+                },
+                status=400,
             )
 
         match method:
@@ -222,6 +238,16 @@ def _is_uploaded_media(media: object) -> bool:
     return media_id.startswith(("attach://", "http://", "https://"))
 
 
+def _request_media_id(method: str, payload: dict[str, Any]) -> str | None:
+    if method == "sendPhoto":
+        return str(payload.get("photo"))
+    if method == "sendAnimation":
+        return str(payload.get("animation"))
+    if method == "editMessageMedia" and isinstance(payload.get("media"), dict):
+        return str(payload["media"].get("media"))
+    return None
+
+
 def create_app() -> web.Application:
     fake = FakeTelegram()
     app = web.Application()
@@ -230,6 +256,7 @@ def create_app() -> web.Application:
     app.router.add_get("/test/requests", fake.list_requests)
     app.router.add_post("/test/reset", fake.reset)
     app.router.add_post("/test/forbidden-chats", fake.set_forbidden_chats)
+    app.router.add_post("/test/invalid-file-ids", fake.set_invalid_file_ids)
     app.router.add_route("*", "/{bot_token}/{method}", fake.handle_bot_api)
     return app
 

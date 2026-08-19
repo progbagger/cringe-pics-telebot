@@ -22,6 +22,7 @@ from cringe_pics_telebot.repositories.postgres import connect as connect_postgre
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 from cringe_pics_telebot.services.admin_broadcasts import run_due_admin_broadcasts
+from cringe_pics_telebot.services.media_sync import MediaSyncSummary, synchronize_media_catalog
 from cringe_pics_telebot.services.subscription_broadcasts import run_due_subscription_broadcasts
 
 ROOT_DIR = Path(__file__).parents[2]
@@ -96,6 +97,16 @@ class FakeTelegramServer:
             session.post(
                 f"{self.base_url}/test/forbidden-chats",
                 json={"chat_ids": chat_ids},
+            ) as response,
+        ):
+            response.raise_for_status()
+
+    async def set_invalid_file_ids(self, *file_ids: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/invalid-file-ids",
+                json={"file_ids": file_ids},
             ) as response,
         ):
             response.raise_for_status()
@@ -816,6 +827,36 @@ def run_subscription_broadcasts_at(
                 return await run_due_subscription_broadcasts(bot, now=now)
             finally:
                 await bot.session.close()
+
+    return run
+
+
+@pytest.fixture
+def synchronize_functional_media_catalog(
+    docker_compose: DependencyPorts,
+    fake_yandex_server: FakeYandexServer,
+) -> Callable[[], Awaitable[MediaSyncSummary]]:
+    async def run() -> MediaSyncSummary:
+        connect_yandex(
+            BOT_ENV["YANDEX_DISK_TOKEN"],
+            api_base_url=f"{fake_yandex_server.base_url}/v1/disk/",
+        )
+        async with (
+            connect_postgres(
+                username=POSTGRES_ENV["POSTGRES_USER"],
+                password=POSTGRES_ENV["POSTGRES_PASSWORD"],
+                database=POSTGRES_ENV["POSTGRES_DB"],
+                port=docker_compose.postgres,
+                host=POSTGRES_ENV["POSTGRES_HOST"],
+            ),
+            connect_redis(
+                username=REDIS_ENV["REDIS_USERNAME"],
+                password=REDIS_ENV["REDIS_PASSWORD"],
+                port=docker_compose.redis,
+                host=REDIS_ENV["REDIS_HOST"],
+            ),
+        ):
+            return await synchronize_media_catalog()
 
     return run
 

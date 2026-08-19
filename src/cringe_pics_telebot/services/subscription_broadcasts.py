@@ -5,10 +5,11 @@ from datetime import UTC, datetime, time, timedelta, timezone
 
 from aiogram import Bot
 
-from cringe_pics_telebot.bot.media import get_message_media_file_id, send_image_to_chat
+from cringe_pics_telebot.bot.media import send_image_to_chat
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
-from cringe_pics_telebot.services.random_image import get_random_image, update_image_cache
+from cringe_pics_telebot.services.media_delivery import deliver_category_media
+from cringe_pics_telebot.services.random_image import get_random_image
 from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
 from cringe_pics_telebot.services.subscriptions import get_subscription_types, get_subscription_users
 
@@ -104,8 +105,11 @@ async def _send_scheduled_image_to_user(
     subscription_type: SubscriptionType,
 ) -> int:
     try:
-        image = await get_random_image(subscription_type.id)
-        message = await send_image_to_chat(bot=bot, chat_id=user_id, image=image)
+        media = await get_random_image(subscription_type.id)
+        await deliver_category_media(
+            media,
+            send=lambda image: send_image_to_chat(bot=bot, chat_id=user_id, image=image),
+        )
     except Exception:
         logger.exception(
             "Failed to send scheduled image for subscription type %d to user %d",
@@ -113,11 +117,6 @@ async def _send_scheduled_image_to_user(
             user_id,
         )
         return 0
-
-    try:
-        await update_image_cache(image_path=image.path, image_id=get_message_media_file_id(message))
-    except Exception:
-        logger.exception("Failed to update image %s in cache", image.path)
 
     return 1
 

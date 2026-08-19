@@ -13,18 +13,14 @@ from cringe_pics_telebot.bot.keyboards import (
     create_inline_subscriptions_keyboard,
     create_reply_keyboard,
 )
-from cringe_pics_telebot.bot.media import add_image_to_message, get_message_media_file_id
+from cringe_pics_telebot.bot.media import add_image_to_message
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
 from cringe_pics_telebot.repositories.postgres import SubscriptionType, is_administrator
 from cringe_pics_telebot.repositories.postgres.connection import (
     transaction,
 )
-from cringe_pics_telebot.services.random_image import (
-    CachedMedia,
-    LinkedMedia,
-    get_random_image,
-    update_image_cache,
-)
+from cringe_pics_telebot.services.media_delivery import deliver_category_media
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia, get_random_image
 from cringe_pics_telebot.services.subscriptions import (
     get_subscription_types,
     get_user_subscriptions,
@@ -217,18 +213,16 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
     sent_message = await message.reply("<i>Выбираю картинку</i>")
 
     try:
-        image = await get_random_image(subscription_type.id)
-        edited_message = await _add_image_to_chat_message(message=sent_message, image=image)
+        media = await get_random_image(subscription_type.id)
+        await deliver_category_media(
+            media,
+            send=lambda image: _add_image_to_chat_message(message=sent_message, image=image),
+        )
 
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)
         await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
         return
-
-    try:
-        await update_image_cache(image_path=image.path, image_id=get_message_media_file_id(edited_message))
-    except Exception:
-        logger.exception("Failed to update image %s in cache", image.path)
 
 
 @router.message()

@@ -17,16 +17,18 @@ from .tables import category_media
 
 
 async def get_category_media_by_subscription_types(
-    subscription_type_ids: Sequence[int],
+    subscription_type_ids: Sequence[int] | None,
     *,
     active_only: bool = True,
     ready_only: bool = False,
     with_for_update: bool = False,
 ) -> list[CategoryMedia]:
-    if not subscription_type_ids:
+    if subscription_type_ids is not None and not subscription_type_ids:
         return []
 
-    query = select(category_media).where(category_media.c.subscription_type_id.in_(subscription_type_ids))
+    query = select(category_media)
+    if subscription_type_ids is not None:
+        query = query.where(category_media.c.subscription_type_id.in_(subscription_type_ids))
     if active_only:
         query = query.where(category_media.c.is_active.is_(True))
     if ready_only:
