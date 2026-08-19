@@ -63,13 +63,15 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     evening = _subscription_type(3, "/evening", "evening")
 
     async def get_inline_images(
-        subscription_type: SubscriptionType,
+        subscription_types: list[SubscriptionType],
         *,
-        limit: int | None,
-    ) -> list[CachedMedia | LinkedMedia]:
-        assert limit is None
-        if subscription_type == morning:
-            return [
+        limit_per_category: int | None,
+    ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
+        assert subscription_types == [morning, evening]
+        assert limit_per_category is None
+        return [
+            (
+                morning,
                 CachedMedia(
                     name="shared.png",
                     mime_type="image/png",
@@ -77,6 +79,9 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
                     source_revision="sha256:shared",
                     id="telegram-shared",
                 ),
+            ),
+            (
+                morning,
                 LinkedMedia(
                     name="morning.png",
                     mime_type="image/png",
@@ -84,22 +89,26 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
                     source_revision="sha256:morning",
                     url="https://storage.example/morning.png",
                 ),
-            ]
-
-        return [
-            LinkedMedia(
-                name="duplicate.png",
-                mime_type="image/png",
-                path="shared/image.png",
-                source_revision="sha256:shared",
-                url="https://storage.example/duplicate.png",
             ),
-            LinkedMedia(
-                name="evening.png",
-                mime_type="image/png",
-                path="evening/image.png",
-                source_revision="sha256:evening",
-                url="https://storage.example/evening.png",
+            (
+                evening,
+                LinkedMedia(
+                    name="duplicate.png",
+                    mime_type="image/png",
+                    path="shared/image.png",
+                    source_revision="sha256:shared",
+                    url="https://storage.example/duplicate.png",
+                ),
+            ),
+            (
+                evening,
+                LinkedMedia(
+                    name="evening.png",
+                    mime_type="image/png",
+                    path="evening/image.png",
+                    source_revision="sha256:evening",
+                    url="https://storage.example/evening.png",
+                ),
             ),
         ]
 

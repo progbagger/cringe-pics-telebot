@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import logging
 import random
@@ -84,19 +83,15 @@ def category_matches_query(query: str, category: str, search_aliases: Sequence[s
 
 
 async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
-    images_by_subscription_type = await asyncio.gather(
-        *(get_inline_images(subscription_type, limit=None) for subscription_type in subscription_types)
-    )
     seen_paths: set[str] = set()
     results: list[InlineMediaResult] = []
 
-    for subscription_type, images in zip(subscription_types, images_by_subscription_type, strict=True):
-        for image in images:
-            if image.path in seen_paths:
-                continue
+    for subscription_type, image in await get_inline_images(subscription_types, limit_per_category=None):
+        if image.path in seen_paths:
+            continue
 
-            seen_paths.add(image.path)
-            results.append(_inline_result(image, subscription_type=subscription_type))
+        seen_paths.add(image.path)
+        results.append(_inline_result(image, subscription_type=subscription_type))
 
     return results
 
