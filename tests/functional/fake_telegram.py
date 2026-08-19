@@ -165,7 +165,7 @@ class FakeTelegram:
         else:
             message["photo"] = [
                 {
-                    "file_id": "functional-photo-file-id" if str(media_id).startswith("attach://") else str(media_id),
+                    "file_id": "functional-photo-file-id" if _is_uploaded_media(media_id) else str(media_id),
                     "file_unique_id": "functional-photo-file-unique-id",
                     "width": 1,
                     "height": 1,
@@ -179,7 +179,7 @@ class FakeTelegram:
 
         if media_key == "animation":
             message["animation"] = {
-                "file_id": "functional-animation-file-id" if media_id.startswith("attach://") else media_id,
+                "file_id": "functional-animation-file-id" if _is_uploaded_media(media_id) else media_id,
                 "file_unique_id": "functional-animation-file-unique-id",
                 "width": 1,
                 "height": 1,
@@ -188,7 +188,7 @@ class FakeTelegram:
         else:
             message["photo"] = [
                 {
-                    "file_id": "functional-photo-file-id" if media_id.startswith("attach://") else media_id,
+                    "file_id": "functional-photo-file-id" if _is_uploaded_media(media_id) else media_id,
                     "file_unique_id": "functional-photo-file-unique-id",
                     "width": 1,
                     "height": 1,
@@ -215,6 +215,11 @@ class FakeTelegram:
             return json.loads(value)
         except json.JSONDecodeError:
             return value
+
+
+def _is_uploaded_media(media: object) -> bool:
+    media_id = str(media)
+    return media_id.startswith(("attach://", "http://", "https://"))
 
 
 def create_app() -> web.Application:

@@ -2,19 +2,19 @@ import logging
 
 from aiogram import Bot
 from aiogram.types import (
-    BufferedInputFile,
     InputMediaAnimation,
     InputMediaPhoto,
     Message,
 )
 
 from cringe_pics_telebot.bot.helpers import HasFileId
-from cringe_pics_telebot.services.random_image import CachedMedia, DownloadedMedia, download_image
+from cringe_pics_telebot.repositories.yandex import get_download_urls
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 logger = logging.getLogger(__name__)
 
 
-async def add_image_to_message(*, message: Message, image: DownloadedMedia | CachedMedia) -> Message | bool:
+async def add_image_to_message(*, message: Message, image: LinkedMedia | CachedMedia) -> Message | bool:
     added_cached_image = False
     if isinstance(image, CachedMedia):
         try:
@@ -26,14 +26,15 @@ async def add_image_to_message(*, message: Message, image: DownloadedMedia | Cac
             added_cached_image = True
 
     if not added_cached_image:
-        edited_message = await message.edit_media(_input_media(image=image, media=await _image_file(image)))
-        logger.info("Downloaded and added image %s", image.path)
+        media_url = image.url if isinstance(image, LinkedMedia) else await _get_download_url(image.path)
+        edited_message = await message.edit_media(_input_media(image=image, media=media_url))
+        logger.info("Added image %s by URL", image.path)
 
     return edited_message
 
 
-async def send_image_to_chat(*, bot: Bot, chat_id: int, image: DownloadedMedia | CachedMedia) -> Message:
-    media = image.id if isinstance(image, CachedMedia) else await _image_file(image)
+async def send_image_to_chat(*, bot: Bot, chat_id: int, image: LinkedMedia | CachedMedia) -> Message:
+    media = image.id if isinstance(image, CachedMedia) else image.url
 
     if _is_animation(image):
         return await bot.send_animation(chat_id=chat_id, animation=media)
@@ -55,8 +56,8 @@ def get_message_media_file_id(message: Message) -> str:
 
 def _input_media(
     *,
-    image: DownloadedMedia | CachedMedia,
-    media: str | BufferedInputFile,
+    image: LinkedMedia | CachedMedia,
+    media: str,
 ) -> InputMediaAnimation | InputMediaPhoto:
     if _is_animation(image):
         return InputMediaAnimation(media=media)
@@ -64,17 +65,12 @@ def _input_media(
     return InputMediaPhoto(media=media)
 
 
-async def _image_file(image: DownloadedMedia | CachedMedia) -> BufferedInputFile:
-    image_data = image.data if isinstance(image, DownloadedMedia) else await download_image(image.path)
-    return BufferedInputFile(image_data, _image_filename(image))
+async def _get_download_url(path: str) -> str:
+    download_url, *_ = await get_download_urls([path])
+    if download_url is None:
+        raise RuntimeError(f"Failed to get download URL for {path}")
+    return download_url
 
 
-def _image_filename(image: DownloadedMedia | CachedMedia) -> str:
-    if _is_animation(image):
-        return f"{image.name}.gif"
-
-    return image.name
-
-
-def _is_animation(image: DownloadedMedia | CachedMedia) -> bool:
+def _is_animation(image: LinkedMedia | CachedMedia) -> bool:
     return "gif" in image.mime_type

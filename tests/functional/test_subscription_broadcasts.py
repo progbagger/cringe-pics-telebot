@@ -42,13 +42,20 @@ async def test_subscription_broadcasts_use_each_users_local_time_without_duplica
     assert _sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")) == [700]
 
     assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 6, 0, tzinfo=UTC)) == 1
-    assert _sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")) == [700, 400]
+    send_photo_requests = await fake_telegram_server.requests(method="sendPhoto")
+    assert _sent_chat_ids(send_photo_requests) == [700, 400]
+    assert [request["payload"]["photo"] for request in send_photo_requests] == [
+        f"{fake_yandex_server.base_url}/download/image.png",
+        "functional-photo-file-id",
+    ]
 
     yandex_requests = await fake_yandex_server.requests()
     assert {
         "method": "resources",
         "params": {"path": "app:/morning", "limit": "1000", "offset": "0"},
     } in yandex_requests
+    assert any(request["method"] == "resources/download" for request in yandex_requests)
+    assert not any(request["method"] == "download" for request in yandex_requests)
 
 
 async def test_subscription_broadcasts_skip_empty_category(

@@ -148,19 +148,3 @@ class YandexS3Client:
             params={"path": self._get_path_with_app(path), "fields": "href"},
         ) as response:
             return (await response.json())["href"]
-
-    async def download_file(self, path: str, dir: str | None = None) -> bytes:
-        """Скачивает файл по указанному пути.
-
-        Args:
-            path (str): Путь к файлу, который нужно скачать
-            dir (str | None, optional): Если путь неполный, можно присоединить к нему папку, указав этот параметр
-
-        Returns:
-            bytes: Скачанный файл в байтах
-        """
-
-        link = await self.get_download_url(path, dir=dir)
-
-        async with self._session.get(link) as response:
-            return await response.read()

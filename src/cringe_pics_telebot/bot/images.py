@@ -21,7 +21,7 @@ from cringe_pics_telebot.repositories.postgres.connection import (
 )
 from cringe_pics_telebot.services.random_image import (
     CachedMedia,
-    DownloadedMedia,
+    LinkedMedia,
     get_random_image,
     update_image_cache,
 )
@@ -236,7 +236,7 @@ async def unknown_message(message: Message) -> None:
     await handle_start(message)
 
 
-async def _add_image_to_chat_message(*, message: Message, image: DownloadedMedia | CachedMedia) -> Message:
+async def _add_image_to_chat_message(*, message: Message, image: LinkedMedia | CachedMedia) -> Message:
     result = await add_image_to_message(message=message, image=image)
 
     assert isinstance(result, Message)

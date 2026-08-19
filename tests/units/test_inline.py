@@ -15,7 +15,7 @@ from pytest import MonkeyPatch
 
 from cringe_pics_telebot.bot import inline
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
-from cringe_pics_telebot.services.inline_images import CachedInlineImage, LinkedInlineImage
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 
 @pytest.mark.parametrize(
@@ -66,17 +66,17 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
         subscription_type: SubscriptionType,
         *,
         limit: int | None,
-    ) -> list[CachedInlineImage | LinkedInlineImage]:
+    ) -> list[CachedMedia | LinkedMedia]:
         assert limit is None
         if subscription_type == morning:
             return [
-                CachedInlineImage(
+                CachedMedia(
                     name="shared.png",
                     mime_type="image/png",
                     path="shared/image.png",
-                    file_id="telegram-shared",
+                    id="telegram-shared",
                 ),
-                LinkedInlineImage(
+                LinkedMedia(
                     name="morning.png",
                     mime_type="image/png",
                     path="morning/image.png",
@@ -85,13 +85,13 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
             ]
 
         return [
-            LinkedInlineImage(
+            LinkedMedia(
                 name="duplicate.png",
                 mime_type="image/png",
                 path="shared/image.png",
                 url="https://storage.example/duplicate.png",
             ),
-            LinkedInlineImage(
+            LinkedMedia(
                 name="evening.png",
                 mime_type="image/png",
                 path="evening/image.png",

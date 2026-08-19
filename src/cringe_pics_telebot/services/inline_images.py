@@ -1,32 +1,22 @@
 import asyncio
 import logging
-from dataclasses import dataclass
 from typing import cast
 
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.repositories.yandex import Image, get_download_urls, list_dir
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 MAX_INLINE_QUERY_RESULTS = 50
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(slots=True)
-class CachedInlineImage(Image):
-    file_id: str
-
-
-@dataclass(slots=True)
-class LinkedInlineImage(Image):
-    url: str
-
-
 async def get_inline_images(
     subscription_type: SubscriptionType,
     *,
     limit: int | None = MAX_INLINE_QUERY_RESULTS,
-) -> list[CachedInlineImage | LinkedInlineImage]:
+) -> list[CachedMedia | LinkedMedia]:
     images: list[Image] = []
     async for image in list_dir(subscription_type.s3_directory_path):
         if limit is not None and len(images) >= limit:
@@ -43,15 +33,15 @@ async def get_inline_images(
         )
     )
 
-    results: list[CachedInlineImage | LinkedInlineImage] = []
+    results: list[CachedMedia | LinkedMedia] = []
     for image, file_id in zip(images, cached_file_ids, strict=True):
         if file_id is not None:
             results.append(
-                CachedInlineImage(
+                CachedMedia(
                     name=image.name,
                     mime_type=image.mime_type,
                     path=image.path,
-                    file_id=file_id,
+                    id=file_id,
                 )
             )
         else:
@@ -59,7 +49,7 @@ async def get_inline_images(
                 continue
 
             results.append(
-                LinkedInlineImage(
+                LinkedMedia(
                     name=image.name,
                     mime_type=image.mime_type,
                     path=image.path,

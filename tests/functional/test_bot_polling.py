@@ -209,7 +209,7 @@ async def test_bot_sends_image_for_subscription_category(
     edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
     assert edit_media["payload"]["chat_id"] == 42
     assert edit_media["payload"]["media"]["type"] == "photo"
-    assert edit_media["payload"]["media"]["media"].startswith("attach://")
+    assert edit_media["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
 
     yandex_requests = await fake_yandex_server.requests()
     expected_list_request = {
@@ -218,7 +218,7 @@ async def test_bot_sends_image_for_subscription_category(
     }
     assert expected_list_request in yandex_requests
     assert any(request["method"] == "resources/download" for request in yandex_requests)
-    assert any(request["method"] == "download" for request in yandex_requests)
+    assert not any(request["method"] == "download" for request in yandex_requests)
 
 
 @pytest.mark.parametrize("query", ["  dA ", "  ДНЕ "])

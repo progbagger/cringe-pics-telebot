@@ -8,7 +8,7 @@ from pytest import MonkeyPatch
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.repositories.yandex import Image
 from cringe_pics_telebot.services import inline_images
-from cringe_pics_telebot.services.inline_images import CachedInlineImage, LinkedInlineImage
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 
 async def test_get_inline_images_reuses_cached_ids_and_resolves_missing_urls(monkeypatch: MonkeyPatch) -> None:
@@ -38,13 +38,13 @@ async def test_get_inline_images_reuses_cached_ids_and_resolves_missing_urls(mon
     results = await inline_images.get_inline_images(_subscription_type())
 
     assert results == [
-        CachedInlineImage(
+        CachedMedia(
             name="cached.png",
             mime_type="image/png",
             path="day/cached.png",
-            file_id="telegram-file-id",
+            id="telegram-file-id",
         ),
-        LinkedInlineImage(
+        LinkedMedia(
             name="linked.gif",
             mime_type="image/gif",
             path="day/linked.gif",
@@ -118,11 +118,11 @@ async def test_get_inline_images_reads_cache_concurrently_and_preserves_storage_
         cache.complete(path, file_id=f"telegram-{path}")
 
     assert await images_task == [
-        CachedInlineImage(
+        CachedMedia(
             name=image.name,
             mime_type=image.mime_type,
             path=image.path,
-            file_id=f"telegram-{image.path}",
+            id=f"telegram-{image.path}",
         )
         for image in images
     ]
@@ -150,7 +150,7 @@ async def test_get_inline_images_treats_cache_error_as_miss(monkeypatch: MonkeyP
     monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
 
     assert await inline_images.get_inline_images(_subscription_type()) == [
-        LinkedInlineImage(
+        LinkedMedia(
             name=image.name,
             mime_type=image.mime_type,
             path=image.path,
@@ -183,7 +183,7 @@ async def test_get_inline_images_skips_only_missing_download_url(monkeypatch: Mo
     monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
 
     assert await inline_images.get_inline_images(_subscription_type()) == [
-        LinkedInlineImage(
+        LinkedMedia(
             name="available.png",
             mime_type="image/png",
             path="day/available.png",
