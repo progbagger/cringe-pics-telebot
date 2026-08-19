@@ -11,6 +11,7 @@ from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 from cringe_pics_telebot.services.admin_broadcasts import DEFAULT_CHECK_INTERVAL as ADMIN_BROADCAST_CHECK_INTERVAL
 from cringe_pics_telebot.services.admin_broadcasts import run_admin_broadcasts
+from cringe_pics_telebot.services.media_sync import DEFAULT_SYNC_INTERVAL, run_media_sync
 from cringe_pics_telebot.services.subscription_broadcasts import DEFAULT_CHECK_INTERVAL, run_subscription_broadcasts
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,10 @@ async def start_polling() -> None:
                 ADMIN_BROADCAST_CHECK_INTERVAL.total_seconds(),
             )
         )
-        broadcast_tasks = (
+        media_sync_interval = float(
+            os.environ.get("MEDIA_SYNC_INTERVAL_SECONDS", DEFAULT_SYNC_INTERVAL.total_seconds())
+        )
+        background_tasks = (
             asyncio.create_task(
                 run_subscription_broadcasts(
                     bot,
@@ -105,12 +109,13 @@ async def start_polling() -> None:
                     interval=timedelta(seconds=admin_broadcast_interval),
                 )
             ),
+            asyncio.create_task(run_media_sync(interval=timedelta(seconds=media_sync_interval))),
         )
         try:
             await dp.start_polling(bot)
         finally:
-            for broadcast_task in broadcast_tasks:
-                broadcast_task.cancel()
-            for broadcast_task in broadcast_tasks:
+            for background_task in background_tasks:
+                background_task.cancel()
+            for background_task in background_tasks:
                 with suppress(asyncio.CancelledError):
-                    await broadcast_task
+                    await background_task

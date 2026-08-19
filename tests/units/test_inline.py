@@ -15,7 +15,7 @@ from pytest import MonkeyPatch
 
 from cringe_pics_telebot.bot import inline
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
-from cringe_pics_telebot.services.inline_images import CachedInlineImage, LinkedInlineImage
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 
 @pytest.mark.parametrize(
@@ -63,39 +63,52 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     evening = _subscription_type(3, "/evening", "evening")
 
     async def get_inline_images(
-        subscription_type: SubscriptionType,
+        subscription_types: list[SubscriptionType],
         *,
-        limit: int | None,
-    ) -> list[CachedInlineImage | LinkedInlineImage]:
-        assert limit is None
-        if subscription_type == morning:
-            return [
-                CachedInlineImage(
+        limit_per_category: int | None,
+    ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
+        assert subscription_types == [morning, evening]
+        assert limit_per_category is None
+        return [
+            (
+                morning,
+                CachedMedia(
                     name="shared.png",
                     mime_type="image/png",
                     path="shared/image.png",
-                    file_id="telegram-shared",
+                    source_revision="sha256:shared",
+                    id="telegram-shared",
                 ),
-                LinkedInlineImage(
+            ),
+            (
+                morning,
+                LinkedMedia(
                     name="morning.png",
                     mime_type="image/png",
                     path="morning/image.png",
+                    source_revision="sha256:morning",
                     url="https://storage.example/morning.png",
                 ),
-            ]
-
-        return [
-            LinkedInlineImage(
-                name="duplicate.png",
-                mime_type="image/png",
-                path="shared/image.png",
-                url="https://storage.example/duplicate.png",
             ),
-            LinkedInlineImage(
-                name="evening.png",
-                mime_type="image/png",
-                path="evening/image.png",
-                url="https://storage.example/evening.png",
+            (
+                evening,
+                LinkedMedia(
+                    name="duplicate.png",
+                    mime_type="image/png",
+                    path="shared/image.png",
+                    source_revision="sha256:shared",
+                    url="https://storage.example/duplicate.png",
+                ),
+            ),
+            (
+                evening,
+                LinkedMedia(
+                    name="evening.png",
+                    mime_type="image/png",
+                    path="evening/image.png",
+                    source_revision="sha256:evening",
+                    url="https://storage.example/evening.png",
+                ),
             ),
         ]
 

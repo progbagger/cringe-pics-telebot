@@ -51,6 +51,34 @@ async def set_if_absent[T](*, key: str, value: T, cls: type[T], ttl: timedelta |
         return bool(result)
 
 
+async def refresh_if_value[T](*, key: str, value: T, cls: type[T], ttl: timedelta) -> bool:
+    async with get_connection() as conn:
+        serializer = get_serializer(cls)
+        expected = json.dumps(serializer.dump(value))
+        result = await conn.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+            1,
+            key,
+            expected,
+            int(ttl.total_seconds()),
+        )
+        return bool(result)
+
+
+async def delete_if_value[T](*, key: str, value: T, cls: type[T]) -> bool:
+    async with get_connection() as conn:
+        serializer = get_serializer(cls)
+        expected = json.dumps(serializer.dump(value))
+        result = await conn.eval(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            1,
+            key,
+            expected,
+        )
+        return bool(result)
+
+
 async def get[T](*, key: str, cls: type[T]) -> T | None:
     async with get_connection() as conn:
         value = await conn.get(name=key)

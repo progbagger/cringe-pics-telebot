@@ -1,63 +1,22 @@
 import random
 from dataclasses import dataclass
-from datetime import timedelta
 
-from cringe_pics_telebot.repositories import redis as cache
-from cringe_pics_telebot.repositories.postgres import get_subscription_types
-from cringe_pics_telebot.repositories.yandex import Image, list_dir
-from cringe_pics_telebot.repositories.yandex import download_file as download_file_from_s3
+from cringe_pics_telebot.repositories.postgres import CategoryMedia, get_category_media_by_subscription_types
+from cringe_pics_telebot.repositories.yandex import Image
 
 
-@dataclass
-class DownloadedMedia(Image):
-    data: bytes
-    """Данные скачанной картинки"""
+@dataclass(slots=True)
+class LinkedMedia(Image):
+    url: str
+    """Временная ссылка, по которой Telegram загрузит картинку"""
 
 
-@dataclass
+@dataclass(slots=True)
 class CachedMedia(Image):
     id: str
-    """ID of picture on Telegram servers"""
+    """Идентификатор картинки на серверах Telegram"""
 
 
-async def get_random_image(category_id: int | None = None) -> DownloadedMedia | CachedMedia:
-    subscription_types = {subscription.id: subscription for subscription in await get_subscription_types()}
-    if category_id is None:
-        category = random.choice(list(subscription_types.values()))
-    else:
-        category = subscription_types[category_id]
-
-    random_image = random.choice([image async for image in list_dir(category.s3_directory_path)])
-
-    image_data = await get_image_by_path(random_image.path)
-    match image_data:
-        case bytes():
-            return DownloadedMedia(
-                name=random_image.name,
-                mime_type=random_image.mime_type,
-                path=random_image.path,
-                data=image_data,
-            )
-
-        case str():
-            return CachedMedia(
-                name=random_image.name,
-                mime_type=random_image.mime_type,
-                path=random_image.path,
-                id=image_data,
-            )
-
-
-async def get_image_by_path(image_path: str) -> bytes | str:
-    if (cached_image := await cache.get(key=image_path, cls=str)) is not None:
-        return cached_image
-
-    return await download_image(image_path)
-
-
-async def download_image(image_path: str) -> bytes:
-    return await download_file_from_s3(image_path)
-
-
-async def update_image_cache(*, image_path: str, image_id: str) -> None:
-    await cache.set(key=image_path, value=image_id, cls=str, ttl=timedelta(days=7))
+async def get_random_image(category_id: int | None = None) -> CategoryMedia:
+    category_ids = None if category_id is None else [category_id]
+    return random.choice(await get_category_media_by_subscription_types(category_ids))

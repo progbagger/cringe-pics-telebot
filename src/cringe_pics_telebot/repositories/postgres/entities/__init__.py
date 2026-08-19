@@ -2,6 +2,11 @@ from .admin_broadcast import AdminBroadcast as AdminBroadcast
 from .admin_broadcast import AdminBroadcastStatus as AdminBroadcastStatus
 from .admin_broadcast_delivery import AdminBroadcastDelivery as AdminBroadcastDelivery
 from .admin_broadcast_delivery import AdminBroadcastDeliveryStatus as AdminBroadcastDeliveryStatus
+from .category_media import CategoryMedia as CategoryMedia
+from .category_media import CategoryMediaReconcileResult as CategoryMediaReconcileResult
+from .category_media import CategoryMediaSource as CategoryMediaSource
+from .category_media import CategoryMediaStatus as CategoryMediaStatus
+from .category_media import TelegramMediaType as TelegramMediaType
 from .subscription import CreateSubscription as CreateSubscription
 from .subscription import Subscription as Subscription
 from .subscription_type import SubscriptionType as SubscriptionType

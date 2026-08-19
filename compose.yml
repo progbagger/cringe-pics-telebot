@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres
+    image: postgres:18
     env_file: ./docker/postgres/.env
     ports:
       - 4243:5432

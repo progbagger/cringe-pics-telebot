@@ -1,4 +1,3 @@
-import asyncio
 import hashlib
 import logging
 import random
@@ -18,10 +17,9 @@ from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.services.category_aliases import normalize_category_search_term
 from cringe_pics_telebot.services.inline_images import (
     MAX_INLINE_QUERY_RESULTS,
-    CachedInlineImage,
-    LinkedInlineImage,
     get_inline_images,
 )
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
 logger = logging.getLogger(__name__)
@@ -85,19 +83,15 @@ def category_matches_query(query: str, category: str, search_aliases: Sequence[s
 
 
 async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
-    images_by_subscription_type = await asyncio.gather(
-        *(get_inline_images(subscription_type, limit=None) for subscription_type in subscription_types)
-    )
     seen_paths: set[str] = set()
     results: list[InlineMediaResult] = []
 
-    for subscription_type, images in zip(subscription_types, images_by_subscription_type, strict=True):
-        for image in images:
-            if image.path in seen_paths:
-                continue
+    for subscription_type, image in await get_inline_images(subscription_types, limit_per_category=None):
+        if image.path in seen_paths:
+            continue
 
-            seen_paths.add(image.path)
-            results.append(_inline_result(image, subscription_type=subscription_type))
+        seen_paths.add(image.path)
+        results.append(_inline_result(image, subscription_type=subscription_type))
 
     return results
 
@@ -139,20 +133,20 @@ def _shuffle_inline_results(
 
 
 def _inline_result(
-    image: CachedInlineImage | LinkedInlineImage,
+    image: CachedMedia | LinkedMedia,
     *,
     subscription_type: SubscriptionType,
 ) -> InlineMediaResult:
     result_id = hashlib.sha256(image.path.encode()).hexdigest()
     title = image.name
 
-    if isinstance(image, CachedInlineImage):
+    if isinstance(image, CachedMedia):
         if _is_animation(image):
-            return InlineQueryResultCachedGif(id=result_id, gif_file_id=image.file_id, title=title)
+            return InlineQueryResultCachedGif(id=result_id, gif_file_id=image.id, title=title)
 
         return InlineQueryResultCachedPhoto(
             id=result_id,
-            photo_file_id=image.file_id,
+            photo_file_id=image.id,
             title=title,
             description=f"Категория {subscription_type.name}",
         )
@@ -175,5 +169,5 @@ def _inline_result(
     )
 
 
-def _is_animation(image: CachedInlineImage | LinkedInlineImage) -> bool:
+def _is_animation(image: CachedMedia | LinkedMedia) -> bool:
     return "gif" in image.mime_type

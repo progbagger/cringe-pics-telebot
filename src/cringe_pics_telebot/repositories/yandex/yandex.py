@@ -1,6 +1,9 @@
+import hashlib
+import json
 import logging
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
+from datetime import datetime
 from itertools import count
 from typing import Any
 
@@ -14,7 +17,7 @@ _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, kw_only=True)
 class Image:
     name: str
     """Название изображения"""
@@ -22,6 +25,12 @@ class Image:
     """Мим-тип изображения"""
     path: str
     """Путь к изображению в S3"""
+    source_revision: str
+    """Стабильный идентификатор версии содержимого"""
+    size: int | None = None
+    """Размер файла в байтах"""
+    modified_at: datetime | None = None
+    """Время последнего изменения файла"""
 
 
 class YandexS3Client:
@@ -118,10 +127,14 @@ class YandexS3Client:
                         mime_type = None
 
                     if mime_type is not None and mime_type.startswith("image"):
+                        modified_at = datetime.fromisoformat(item["modified"])
                         yield Image(
                             name=image_path.split("/", 4)[-1],
                             mime_type=mime_type,
                             path=image_path,
+                            source_revision=resource_revision(item),
+                            size=item["size"],
+                            modified_at=modified_at,
                         )
 
                     items_count += 1
@@ -149,18 +162,18 @@ class YandexS3Client:
         ) as response:
             return (await response.json())["href"]
 
-    async def download_file(self, path: str, dir: str | None = None) -> bytes:
-        """Скачивает файл по указанному пути.
 
-        Args:
-            path (str): Путь к файлу, который нужно скачать
-            dir (str | None, optional): Если путь неполный, можно присоединить к нему папку, указав этот параметр
+def resource_revision(resource: dict[str, Any]) -> str:
+    for algorithm in ("sha256", "md5"):
+        if digest := resource.get(algorithm):
+            return f"{algorithm}:{str(digest).casefold()}"
 
-        Returns:
-            bytes: Скачанный файл в байтах
-        """
+    metadata = {
+        "modified": resource.get("modified"),
+        "size": resource.get("size"),
+    }
+    if None in metadata.values():
+        raise ValueError("Yandex resource has no hash or complete size/modified metadata")
 
-        link = await self.get_download_url(path, dir=dir)
-
-        async with self._session.get(link) as response:
-            return await response.read()
+    payload = json.dumps(metadata, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return f"metadata-sha256:{hashlib.sha256(payload.encode()).hexdigest()}"

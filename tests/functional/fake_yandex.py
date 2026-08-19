@@ -1,4 +1,6 @@
 import argparse
+from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 
 from aiohttp import web
@@ -13,6 +15,8 @@ IMAGE_BYTES = (
 class FakeYandex:
     def __init__(self) -> None:
         self._requests: list[dict[str, Any]] = []
+        self._directory_overrides: dict[str, list[dict[str, Any]]] = {}
+        self._failed_directories: set[str] = set()
 
     async def healthcheck(self, request: web.Request) -> web.Response:
         return web.json_response({"ok": True})
@@ -22,6 +26,19 @@ class FakeYandex:
 
     async def reset(self, request: web.Request) -> web.Response:
         self._requests.clear()
+        self._directory_overrides.clear()
+        self._failed_directories.clear()
+        return web.json_response({"ok": True})
+
+    async def configure_directory(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        directory = str(payload["directory"]).strip("/")
+        if payload.get("fail", False):
+            self._failed_directories.add(directory)
+            self._directory_overrides.pop(directory, None)
+        else:
+            self._failed_directories.discard(directory)
+            self._directory_overrides[directory] = list(payload.get("images", []))
         return web.json_response({"ok": True})
 
     async def resources(self, request: web.Request) -> web.Response:
@@ -29,20 +46,29 @@ class FakeYandex:
         self._requests.append({"method": "resources", "params": params})
 
         directory = params.get("path", "app:/functional").removeprefix("app:/").strip("/")
-        if directory == "empty":
-            items: list[dict[str, str]] = []
+        if directory in self._failed_directories:
+            raise web.HTTPServiceUnavailable(text="Functional Yandex listing failure")
+        if directory in self._directory_overrides:
+            items = [self._resource(directory, image) for image in self._directory_overrides[directory]]
+        elif directory == "empty":
+            items = []
         else:
             image_names = ["image.png", "second.png"] if directory == "day" else ["image.png"]
-            items = [
-                {
-                    "name": image_name,
-                    "mime_type": "image/png",
-                    "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/{image_name}",
-                }
-                for image_name in image_names
-            ]
+            items = [self._resource(directory, {"name": image_name}) for image_name in image_names]
 
         return web.json_response({"_embedded": {"items": items}})
+
+    @staticmethod
+    def _resource(directory: str, image: dict[str, Any]) -> dict[str, Any]:
+        image_name = str(image["name"])
+        return {
+            "name": image_name,
+            "mime_type": image.get("mime_type", "image/png"),
+            "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/{image_name}",
+            "sha256": image.get("sha256", sha256(f"{directory}/{image_name}".encode()).hexdigest()),
+            "size": image.get("size", len(IMAGE_BYTES)),
+            "modified": image.get("modified", datetime(2026, 8, 19, tzinfo=UTC).isoformat()),
+        }
 
     async def download_resource(self, request: web.Request) -> web.Response:
         params = dict(request.query)
@@ -65,6 +91,7 @@ def create_app() -> web.Application:
     app.router.add_get("/healthz", fake.healthcheck)
     app.router.add_get("/test/requests", fake.list_requests)
     app.router.add_post("/test/reset", fake.reset)
+    app.router.add_post("/test/directory", fake.configure_directory)
     app.router.add_get("/v1/disk/resources", fake.resources)
     app.router.add_get("/v1/disk/resources/download", fake.download_resource)
     app.router.add_get("/download/{path:.*}", fake.download_file)

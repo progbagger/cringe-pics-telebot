@@ -12,14 +12,29 @@ from .admin_broadcasts import soft_delete_admin_broadcast as soft_delete_admin_b
 from .admin_broadcasts import update_admin_broadcast_message as update_admin_broadcast_message
 from .admin_broadcasts import update_admin_broadcast_schedule as update_admin_broadcast_schedule
 from .administrators import is_administrator as is_administrator
+from .category_media import (
+    deactivate_category_media_missing_from_snapshot as deactivate_category_media_missing_from_snapshot,
+)
+from .category_media import get_category_media as get_category_media
+from .category_media import (
+    get_category_media_by_subscription_types as get_category_media_by_subscription_types,
+)
+from .category_media import invalidate_category_media_file_id as invalidate_category_media_file_id
+from .category_media import materialize_category_media as materialize_category_media
+from .category_media import upsert_category_media_snapshot as upsert_category_media_snapshot
 from .connection import AlreadyConnectedError as AlreadyConnectedError
 from .connection import DbConnectionError as DbConnectionError
 from .connection import NotConnectedError as NotConnectedError
 from .connection import connect as connect
 from .connection import get_connection as get_connection
 from .connection import transaction as transaction
+from .entities import CategoryMedia as CategoryMedia
+from .entities import CategoryMediaReconcileResult as CategoryMediaReconcileResult
+from .entities import CategoryMediaSource as CategoryMediaSource
+from .entities import CategoryMediaStatus as CategoryMediaStatus
 from .entities import Subscription as Subscription
 from .entities import SubscriptionType as SubscriptionType
+from .entities import TelegramMediaType as TelegramMediaType
 from .entities import User as User
 from .subscription import create_subscription as create_subscription
 from .subscription import delete_subscription as delete_subscription

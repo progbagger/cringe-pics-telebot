@@ -12,7 +12,7 @@ dependencies = [
   "click>=8.4.2",
   "redis[hiredis]>=8.1.0",
   "serpyco-rs>=1.21.0",
-  "sqlalchemy[asyncio]>=2.0.51",
+  "sqlalchemy[asyncio]>=2.1.0b3",
 ]
 
 [project.scripts]

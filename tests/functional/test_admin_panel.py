@@ -13,6 +13,7 @@ from cringe_pics_telebot.bot.admin_category_callback_data import (
     AdminCategoryAction,
     AdminCategoryCallbackData,
 )
+from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
     SEEDED_SUBSCRIPTION_TYPES,
     FakeTelegramServer,
@@ -92,7 +93,9 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
     fake_telegram_server: FakeTelegramServer,
     set_functional_administrator: Callable[..., Awaitable[None]],
     read_category_aliases: Callable[[int], Awaitable[tuple[str, ...] | None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
 ) -> None:
+    await synchronize_functional_media_catalog()
     await set_functional_administrator(user_id=42)
     await fake_telegram_server.push_message(text="/admin")
     await fake_telegram_server.wait_for_request("sendMessage")

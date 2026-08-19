@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
+from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
     FakeTelegramServer,
     FakeYandexServer,
@@ -197,7 +198,10 @@ async def test_bot_sends_image_for_subscription_category(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
 ) -> None:
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text=category_name)
 
     choosing_message = await fake_telegram_server.wait_for_request(
@@ -209,16 +213,45 @@ async def test_bot_sends_image_for_subscription_category(
     edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
     assert edit_media["payload"]["chat_id"] == 42
     assert edit_media["payload"]["media"]["type"] == "photo"
-    assert edit_media["payload"]["media"]["media"].startswith("attach://")
+    assert edit_media["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
 
     yandex_requests = await fake_yandex_server.requests()
-    expected_list_request = {
-        "method": "resources",
-        "params": {"path": f"app:/{category_name.removeprefix('/')}", "limit": "1000", "offset": "0"},
-    }
-    assert expected_list_request in yandex_requests
+    assert not any(request["method"] == "resources" for request in yandex_requests)
     assert any(request["method"] == "resources/download" for request in yandex_requests)
-    assert any(request["method"] == "download" for request in yandex_requests)
+    assert not any(request["method"] == "download" for request in yandex_requests)
+
+
+async def test_bot_recovers_invalid_catalog_file_id_once(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await fake_yandex_server.configure_directory("day", images=[{"name": "image.png"}])
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/day")
+    first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
+    assert first_edit["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.set_invalid_file_ids("functional-photo-file-id")
+    await fake_yandex_server.reset()
+    await fake_telegram_server.push_message(text="/day")
+    recovered_edit = await fake_telegram_server.wait_for_request(
+        "editMessageMedia",
+        predicate=lambda request: str(request["payload"]["media"]["media"]).startswith(fake_yandex_server.base_url),
+    )
+    assert recovered_edit["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
+
+    edits = await fake_telegram_server.requests(method="editMessageMedia")
+    assert [request["payload"]["media"]["media"] for request in edits] == [
+        "functional-photo-file-id",
+        f"{fake_yandex_server.base_url}/download/image.png",
+    ]
+    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
 
 
 @pytest.mark.parametrize("query", ["  dA ", "  ДНЕ "])
@@ -227,8 +260,11 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
     query: str,
 ) -> None:
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
     await fake_telegram_server.push_inline_query(query=query)
 
     request = await fake_telegram_server.wait_for_request("answerInlineQuery")
@@ -253,10 +289,7 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     assert all(len(result["id"]) == 64 for result in payload["results"])
 
     yandex_requests = await fake_yandex_server.requests()
-    assert {
-        "method": "resources",
-        "params": {"path": "app:/day", "limit": "1000", "offset": "0"},
-    } in yandex_requests
+    assert not any(request["method"] == "resources" for request in yandex_requests)
     assert {
         "method": "resources/download",
         "params": {"path": "app:/day/image.png", "fields": "href"},
@@ -289,8 +322,12 @@ async def test_bot_returns_empty_inline_results_for_known_empty_category_and_kee
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    fake_yandex_server: FakeYandexServer,
 ) -> None:
     await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/empty", time(0), "empty"),))
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
     await fake_telegram_server.push_inline_query(query="empty", query_id="inline-empty")
 
     request = await fake_telegram_server.wait_for_request(
@@ -307,8 +344,12 @@ async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_p
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    fake_yandex_server: FakeYandexServer,
 ) -> None:
     await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/broken", time(0), "broken"),))
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
     await fake_telegram_server.push_inline_query(query="broken", query_id="inline-broken")
 
     request = await fake_telegram_server.wait_for_request(
@@ -319,6 +360,65 @@ async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_p
 
     await fake_telegram_server.push_message(text="still running after Yandex failure")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+
+
+async def test_inline_uses_persisted_file_id_after_ordinary_delivery(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await fake_yandex_server.configure_directory("day", images=[{"name": "image.png"}])
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/day")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_telegram_server.push_inline_query(query="day", query_id="inline-ready")
+    answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-ready",
+    )
+
+    assert len(answer["payload"]["results"]) == 1
+    result = answer["payload"]["results"][0]
+    assert result["type"] == "photo"
+    assert result["photo_file_id"] == "functional-photo-file-id"
+    assert "photo_url" not in result
+    assert not await fake_yandex_server.requests()
+
+
+async def test_inline_excludes_media_deactivated_by_later_sync(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await fake_yandex_server.configure_directory(
+        "day",
+        images=[{"name": "image.png"}, {"name": "removed.png"}],
+    )
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.configure_directory("day", images=[{"name": "image.png"}])
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_inline_query(query="day", query_id="inline-active-only")
+    answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-active-only",
+    )
+
+    assert len(answer["payload"]["results"]) == 1
+    assert answer["payload"]["results"][0]["photo_url"] == f"{fake_yandex_server.base_url}/download/image.png"
+    requests = await fake_yandex_server.requests()
+    assert sum(request["method"] == "resources/download" for request in requests) == 1
+    assert not any("removed.png" in str(request) for request in requests)
 
 
 def _is_start_answer(request: dict[str, Any]) -> bool:
