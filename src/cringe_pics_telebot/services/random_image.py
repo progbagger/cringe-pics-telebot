@@ -33,6 +33,9 @@ async def get_random_image(category_id: int | None = None) -> LinkedMedia | Cach
             name=random_image.name,
             mime_type=random_image.mime_type,
             path=random_image.path,
+            source_revision=random_image.source_revision,
+            size=random_image.size,
+            modified_at=random_image.modified_at,
             id=cached_image,
         )
 
@@ -44,6 +47,9 @@ async def get_random_image(category_id: int | None = None) -> LinkedMedia | Cach
         name=random_image.name,
         mime_type=random_image.mime_type,
         path=random_image.path,
+        source_revision=random_image.source_revision,
+        size=random_image.size,
+        modified_at=random_image.modified_at,
         url=download_url,
     )
 

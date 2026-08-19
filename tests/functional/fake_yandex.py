@@ -1,4 +1,6 @@
 import argparse
+from datetime import UTC, datetime
+from hashlib import sha256
 from typing import Any
 
 from aiohttp import web
@@ -30,7 +32,7 @@ class FakeYandex:
 
         directory = params.get("path", "app:/functional").removeprefix("app:/").strip("/")
         if directory == "empty":
-            items: list[dict[str, str]] = []
+            items: list[dict[str, Any]] = []
         else:
             image_names = ["image.png", "second.png"] if directory == "day" else ["image.png"]
             items = [
@@ -38,6 +40,9 @@ class FakeYandex:
                     "name": image_name,
                     "mime_type": "image/png",
                     "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/{image_name}",
+                    "sha256": sha256(f"{directory}/{image_name}".encode()).hexdigest(),
+                    "size": len(IMAGE_BYTES),
+                    "modified": datetime(2026, 8, 19, tzinfo=UTC).isoformat(),
                 }
                 for image_name in image_names
             ]

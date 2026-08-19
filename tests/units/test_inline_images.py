@@ -13,8 +13,8 @@ from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 async def test_get_inline_images_reuses_cached_ids_and_resolves_missing_urls(monkeypatch: MonkeyPatch) -> None:
     images = [
-        Image(name="cached.png", mime_type="image/png", path="day/cached.png"),
-        Image(name="linked.gif", mime_type="image/gif", path="day/linked.gif"),
+        Image(name="cached.png", mime_type="image/png", path="day/cached.png", source_revision="sha256:cached"),
+        Image(name="linked.gif", mime_type="image/gif", path="day/linked.gif", source_revision="sha256:linked"),
     ]
     requested_paths: list[str] = []
 
@@ -42,12 +42,14 @@ async def test_get_inline_images_reuses_cached_ids_and_resolves_missing_urls(mon
             name="cached.png",
             mime_type="image/png",
             path="day/cached.png",
+            source_revision="sha256:cached",
             id="telegram-file-id",
         ),
         LinkedMedia(
             name="linked.gif",
             mime_type="image/gif",
             path="day/linked.gif",
+            source_revision="sha256:linked",
             url="https://storage.example/day/linked.gif",
         ),
     ]
@@ -69,7 +71,12 @@ async def test_get_inline_images_supports_limited_and_complete_results(
     async def list_images(directory: str) -> AsyncGenerator[Image]:
         assert directory == "day"
         for index in range(52):
-            yield Image(name=f"{index}.png", mime_type="image/png", path=f"day/{index}.png")
+            yield Image(
+                name=f"{index}.png",
+                mime_type="image/png",
+                path=f"day/{index}.png",
+                source_revision=f"sha256:{index}",
+            )
 
     async def cache_miss(*, key: str, cls: type[str]) -> None:
         assert key.startswith("day/")
@@ -92,9 +99,9 @@ async def test_get_inline_images_reads_cache_concurrently_and_preserves_storage_
     monkeypatch: MonkeyPatch,
 ) -> None:
     images = [
-        Image(name="first.png", mime_type="image/png", path="day/first.png"),
-        Image(name="second.png", mime_type="image/png", path="day/second.png"),
-        Image(name="third.png", mime_type="image/png", path="day/third.png"),
+        Image(name="first.png", mime_type="image/png", path="day/first.png", source_revision="sha256:first"),
+        Image(name="second.png", mime_type="image/png", path="day/second.png", source_revision="sha256:second"),
+        Image(name="third.png", mime_type="image/png", path="day/third.png", source_revision="sha256:third"),
     ]
     cache = _ControlledCache([image.path for image in images])
 
@@ -122,6 +129,7 @@ async def test_get_inline_images_reads_cache_concurrently_and_preserves_storage_
             name=image.name,
             mime_type=image.mime_type,
             path=image.path,
+            source_revision=image.source_revision,
             id=f"telegram-{image.path}",
         )
         for image in images
@@ -130,7 +138,12 @@ async def test_get_inline_images_reads_cache_concurrently_and_preserves_storage_
 
 
 async def test_get_inline_images_treats_cache_error_as_miss(monkeypatch: MonkeyPatch) -> None:
-    image = Image(name="fallback.png", mime_type="image/png", path="day/fallback.png")
+    image = Image(
+        name="fallback.png",
+        mime_type="image/png",
+        path="day/fallback.png",
+        source_revision="sha256:fallback",
+    )
 
     async def list_images(directory: str) -> AsyncGenerator[Image]:
         assert directory == "day"
@@ -154,6 +167,7 @@ async def test_get_inline_images_treats_cache_error_as_miss(monkeypatch: MonkeyP
             name=image.name,
             mime_type=image.mime_type,
             path=image.path,
+            source_revision=image.source_revision,
             url="https://storage.example/day/fallback.png",
         )
     ]
@@ -161,8 +175,18 @@ async def test_get_inline_images_treats_cache_error_as_miss(monkeypatch: MonkeyP
 
 async def test_get_inline_images_skips_only_missing_download_url(monkeypatch: MonkeyPatch) -> None:
     images = [
-        Image(name="available.png", mime_type="image/png", path="day/available.png"),
-        Image(name="unavailable.png", mime_type="image/png", path="day/unavailable.png"),
+        Image(
+            name="available.png",
+            mime_type="image/png",
+            path="day/available.png",
+            source_revision="sha256:available",
+        ),
+        Image(
+            name="unavailable.png",
+            mime_type="image/png",
+            path="day/unavailable.png",
+            source_revision="sha256:unavailable",
+        ),
     ]
 
     async def list_images(directory: str) -> AsyncGenerator[Image]:
@@ -187,6 +211,7 @@ async def test_get_inline_images_skips_only_missing_download_url(monkeypatch: Mo
             name="available.png",
             mime_type="image/png",
             path="day/available.png",
+            source_revision="sha256:available",
             url="https://storage.example/day/available.png",
         )
     ]

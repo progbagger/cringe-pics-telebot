@@ -5,6 +5,29 @@ from contextlib import asynccontextmanager
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.yandex import repo
+from cringe_pics_telebot.repositories.yandex.yandex import resource_revision
+
+
+def test_resource_revision_prefers_content_hash() -> None:
+    assert (
+        resource_revision(
+            {
+                "sha256": "ABCDEF",
+                "md5": "ignored",
+                "size": 12,
+                "modified": "2026-08-19T00:00:00+00:00",
+            }
+        )
+        == "sha256:abcdef"
+    )
+
+
+def test_resource_revision_has_deterministic_metadata_fallback() -> None:
+    first = resource_revision({"size": 12, "modified": "2026-08-19T00:00:00+00:00"})
+    second = resource_revision({"modified": "2026-08-19T00:00:00+00:00", "size": 12})
+
+    assert first == second
+    assert first.startswith("metadata-sha256:")
 
 
 async def test_get_download_urls_fetches_concurrently_and_preserves_input_order(monkeypatch: MonkeyPatch) -> None:

@@ -128,6 +128,60 @@ subscription_types = sa.Table(
     _time_column("updated_at"),
 )
 
+category_media = sa.Table(
+    "category_media",
+    _metadata,
+    sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=True),
+    sa.Column(
+        "subscription_type_id",
+        sa.BIGINT,
+        sa.ForeignKey(subscription_types.c.id),
+        nullable=False,
+    ),
+    sa.Column("source_path", sa.Text, nullable=False),
+    sa.Column("source_revision", sa.Text, nullable=False),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("mime_type", sa.Text, nullable=False),
+    sa.Column("telegram_media_type", sa.Text, nullable=False),
+    sa.Column("telegram_file_id", sa.Text, nullable=True),
+    sa.Column("telegram_file_unique_id", sa.Text, nullable=True),
+    sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column(
+        "status",
+        sa.Text,
+        sa.Computed(
+            "CASE WHEN NOT is_active THEN 'inactive' WHEN telegram_file_id IS NULL THEN 'pending' ELSE 'ready' END",
+            persisted=None,
+        ),
+    ),
+    sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("materialized_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.CheckConstraint("source_path <> ''", name="category_media_source_path_nonempty"),
+    sa.CheckConstraint("source_revision <> ''", name="category_media_source_revision_nonempty"),
+    sa.CheckConstraint(
+        "telegram_media_type IN ('photo', 'animation')",
+        name="category_media_telegram_media_type_values",
+    ),
+    sa.CheckConstraint(
+        "(telegram_file_id IS NULL AND telegram_file_unique_id IS NULL AND materialized_at IS NULL) OR "
+        "(telegram_file_id IS NOT NULL AND telegram_file_unique_id IS NOT NULL AND materialized_at IS NOT NULL)",
+        name="category_media_materialization_consistent",
+    ),
+    sa.UniqueConstraint(
+        "subscription_type_id",
+        "source_path",
+        name="category_media_subscription_type_source_path_key",
+    ),
+    sa.Index(
+        "category_media_active_category_idx",
+        "subscription_type_id",
+        "is_active",
+        "id",
+    ),
+)
+
 subscriptions = sa.Table(
     "subscriptions",
     _metadata,

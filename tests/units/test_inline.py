@@ -74,12 +74,14 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
                     name="shared.png",
                     mime_type="image/png",
                     path="shared/image.png",
+                    source_revision="sha256:shared",
                     id="telegram-shared",
                 ),
                 LinkedMedia(
                     name="morning.png",
                     mime_type="image/png",
                     path="morning/image.png",
+                    source_revision="sha256:morning",
                     url="https://storage.example/morning.png",
                 ),
             ]
@@ -89,12 +91,14 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
                 name="duplicate.png",
                 mime_type="image/png",
                 path="shared/image.png",
+                source_revision="sha256:shared",
                 url="https://storage.example/duplicate.png",
             ),
             LinkedMedia(
                 name="evening.png",
                 mime_type="image/png",
                 path="evening/image.png",
+                source_revision="sha256:evening",
                 url="https://storage.example/evening.png",
             ),
         ]

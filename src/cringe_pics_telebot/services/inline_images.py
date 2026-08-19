@@ -41,6 +41,9 @@ async def get_inline_images(
                     name=image.name,
                     mime_type=image.mime_type,
                     path=image.path,
+                    source_revision=image.source_revision,
+                    size=image.size,
+                    modified_at=image.modified_at,
                     id=file_id,
                 )
             )
@@ -53,6 +56,9 @@ async def get_inline_images(
                     name=image.name,
                     mime_type=image.mime_type,
                     path=image.path,
+                    source_revision=image.source_revision,
+                    size=image.size,
+                    modified_at=image.modified_at,
                     url=url,
                 )
             )

@@ -315,6 +315,19 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         "migration",
         "alembic",
         "downgrade",
+        "0006",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_category_media_table_absent(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
         "0005",
         env=_bot_env(dependency_ports),
     )
@@ -831,6 +844,7 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
         await connection.execute(
             """
             TRUNCATE
+                category_media,
                 admin_broadcast_deliveries,
                 admin_broadcast_recipients,
                 admin_broadcasts,
@@ -924,6 +938,28 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             await connection.fetchval("SELECT to_regclass('admin_broadcast_deliveries')")
             == "admin_broadcast_deliveries"
         )
+        assert int(await connection.fetchval("SHOW server_version_num")) >= 180000
+        assert await connection.fetchval("SELECT to_regclass('category_media')") == "category_media"
+        assert (
+            await connection.fetchval(
+                """
+                SELECT attgenerated
+                FROM pg_attribute
+                WHERE attrelid = 'category_media'::regclass
+                  AND attname = 'status'
+                """
+            )
+            == b"v"
+        )
+    finally:
+        await connection.close()
+
+
+async def _assert_category_media_table_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert await connection.fetchval("SELECT to_regclass('category_media')") is None
+        assert await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'") == 1
     finally:
         await connection.close()
 
