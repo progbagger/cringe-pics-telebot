@@ -8,6 +8,7 @@ import pytest
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
+    FakeStatsDServer,
     FakeTelegramServer,
     FakeYandexServer,
     FunctionalSubscriptionType,
@@ -257,6 +258,7 @@ async def test_bot_recovers_invalid_catalog_file_id_once(
 @pytest.mark.parametrize("query", ["  dA ", "  ДНЕ "])
 async def test_bot_returns_day_images_for_partial_inline_query(
     bot_process: subprocess.Process,
+    fake_statsd_server: FakeStatsDServer,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
@@ -300,9 +302,33 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     } in yandex_requests
     assert not any(request["method"] == "download" for request in yandex_requests)
 
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.scenarios.pending_only.total",
+        "functional.inline.stages.categories.lookup",
+        "functional.inline.stages.media.catalog",
+        "functional.inline.stages.media.urls",
+        "functional.inline.stages.results.prepare",
+        "functional.inline.stages.telegram.answer",
+        "functional.inline.dependencies.postgres.calls",
+        "functional.inline.dependencies.yandex.calls",
+        "functional.inline.dependencies.redis.calls",
+        "functional.inline.dependencies.telegram.calls",
+        "functional.inline.media.catalog_items",
+        "functional.inline.results.sent",
+    )
+    assert all(metrics[name]["type"] == "ms" for name in metrics if ".total" in name or ".stages." in name)
+    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 2
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 2
+    assert metrics["functional.inline.dependencies.redis.calls"]["value"] == 0
+    assert metrics["functional.inline.dependencies.telegram.calls"]["value"] == 1
+    assert metrics["functional.inline.media.catalog_items"]["value"] == 2
+    assert metrics["functional.inline.results.sent"]["value"] == 2
+
 
 async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_polling(
     bot_process: subprocess.Process,
+    fake_statsd_server: FakeStatsDServer,
     fake_telegram_server: FakeTelegramServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
 ) -> None:
@@ -314,12 +340,52 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
     )
     assert request["payload"]["results"] == []
 
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.scenarios.unknown_category.total",
+        "functional.inline.dependencies.postgres.calls",
+        "functional.inline.dependencies.yandex.calls",
+        "functional.inline.dependencies.redis.calls",
+        "functional.inline.dependencies.telegram.calls",
+    )
+    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 1
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
+    assert metrics["functional.inline.dependencies.redis.calls"]["value"] == 0
+    assert metrics["functional.inline.dependencies.telegram.calls"]["value"] == 1
+    assert not await fake_statsd_server.metrics(name="functional.inline.stages.media.catalog")
+
     await fake_telegram_server.push_message(text="still running")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
 
 
+async def test_bot_records_empty_inline_query_without_database_lookup(
+    bot_process: subprocess.Process,
+    fake_statsd_server: FakeStatsDServer,
+    fake_telegram_server: FakeTelegramServer,
+) -> None:
+    await fake_telegram_server.push_inline_query(query=" / ", query_id="inline-blank")
+
+    request = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-blank",
+    )
+    assert request["payload"]["results"] == []
+
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.scenarios.empty_query.total",
+        "functional.inline.dependencies.postgres.calls",
+        "functional.inline.dependencies.yandex.calls",
+        "functional.inline.dependencies.telegram.calls",
+    )
+    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 0
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
+    assert metrics["functional.inline.dependencies.telegram.calls"]["value"] == 1
+
+
 async def test_bot_returns_empty_inline_results_for_known_empty_category_and_keeps_polling(
     bot_process: subprocess.Process,
+    fake_statsd_server: FakeStatsDServer,
     fake_telegram_server: FakeTelegramServer,
     seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
     synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
@@ -336,12 +402,24 @@ async def test_bot_returns_empty_inline_results_for_known_empty_category_and_kee
     )
     assert request["payload"]["results"] == []
 
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.scenarios.known_empty.total",
+        "functional.inline.stages.media.catalog",
+        "functional.inline.dependencies.postgres.calls",
+        "functional.inline.dependencies.yandex.calls",
+    )
+    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 2
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
+    assert not await fake_statsd_server.metrics(name="functional.inline.stages.media.urls")
+
     await fake_telegram_server.push_message(text="still running after empty inline category")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
 
 
 async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_polling(
     bot_process: subprocess.Process,
+    fake_statsd_server: FakeStatsDServer,
     fake_telegram_server: FakeTelegramServer,
     seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
     synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
@@ -358,12 +436,23 @@ async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_p
     )
     assert request["payload"]["results"] == []
 
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.outcomes.partial_error.total",
+        "functional.inline.scenarios.pending_only.total",
+        "functional.inline.media.url_failures",
+        "functional.inline.results.sent",
+    )
+    assert metrics["functional.inline.media.url_failures"]["value"] == 1
+    assert metrics["functional.inline.results.sent"]["value"] == 0
+
     await fake_telegram_server.push_message(text="still running after Yandex failure")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
 
 
 async def test_inline_uses_persisted_file_id_after_ordinary_delivery(
     bot_process: subprocess.Process,
+    fake_statsd_server: FakeStatsDServer,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
@@ -390,6 +479,133 @@ async def test_inline_uses_persisted_file_id_after_ordinary_delivery(
     assert result["photo_file_id"] == "functional-photo-file-id"
     assert "photo_url" not in result
     assert not await fake_yandex_server.requests()
+
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.scenarios.catalog_only.total",
+        "functional.inline.media.ready_items",
+        "functional.inline.media.pending_items",
+        "functional.inline.dependencies.yandex.calls",
+    )
+    assert metrics["functional.inline.media.ready_items"]["value"] == 1
+    assert metrics["functional.inline.media.pending_items"]["value"] == 0
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
+
+
+async def test_inline_metrics_cover_mixed_ready_and_pending_media(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await fake_yandex_server.configure_directory(
+        "day",
+        images=[{"name": "first.png"}, {"name": "second.png"}],
+    )
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/day")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_statsd_server.reset()
+    await fake_telegram_server.push_inline_query(query="day", query_id="inline-mixed")
+    answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-mixed",
+    )
+
+    assert len(answer["payload"]["results"]) == 2
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.scenarios.mixed.total",
+        "functional.inline.media.ready_items",
+        "functional.inline.media.pending_items",
+        "functional.inline.dependencies.yandex.calls",
+    )
+    assert metrics["functional.inline.media.ready_items"]["value"] == 1
+    assert metrics["functional.inline.media.pending_items"]["value"] == 1
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 1
+
+
+async def test_inline_metrics_cover_multiple_categories(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    subscription_types = (
+        FunctionalSubscriptionType(1, "/first", time(0), "first", ("shared",)),
+        FunctionalSubscriptionType(2, "/second", time(0), "second", ("shared",)),
+    )
+    await seed_functional_subscription_types(subscription_types)
+    await fake_yandex_server.configure_directory("first", images=[{"name": "first.png"}])
+    await fake_yandex_server.configure_directory("second", images=[{"name": "second.png"}])
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+    await fake_statsd_server.reset()
+
+    await fake_telegram_server.push_inline_query(query="shared", query_id="inline-multiple")
+    answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-multiple",
+    )
+
+    assert len(answer["payload"]["results"]) == 2
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.category_sets.multiple.total",
+        "functional.inline.dependencies.postgres.calls",
+        "functional.inline.dependencies.yandex.calls",
+        "functional.inline.media.catalog_items",
+    )
+    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 2
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 2
+    assert metrics["functional.inline.media.catalog_items"]["value"] == 2
+
+
+async def test_inline_metrics_cover_large_catalog_and_telegram_limit(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/large", time(0), "large"),))
+    await fake_yandex_server.configure_directory(
+        "large",
+        images=[{"name": f"image-{index}.png"} for index in range(60)],
+    )
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+    await fake_statsd_server.reset()
+
+    await fake_telegram_server.push_inline_query(query="large", query_id="inline-large")
+    answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-large",
+    )
+
+    assert len(answer["payload"]["results"]) == 50
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.catalog_sizes.large.total",
+        "functional.inline.media.catalog_items",
+        "functional.inline.dependencies.yandex.calls",
+        "functional.inline.results.prepared",
+        "functional.inline.results.sent",
+    )
+    assert metrics["functional.inline.media.catalog_items"]["value"] == 60
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 60
+    assert metrics["functional.inline.results.prepared"]["value"] == 60
+    assert metrics["functional.inline.results.sent"]["value"] == 50
 
 
 async def test_inline_excludes_media_deactivated_by_later_sync(
@@ -424,6 +640,13 @@ async def test_inline_excludes_media_deactivated_by_later_sync(
 def _is_start_answer(request: dict[str, Any]) -> bool:
     payload = request["payload"]
     return payload.get("chat_id") == 42 and "Что умеет бот" in payload.get("text", "")
+
+
+async def _wait_for_metrics(
+    fake_statsd_server: FakeStatsDServer,
+    *names: str,
+) -> dict[str, dict[str, Any]]:
+    return {name: await fake_statsd_server.wait_for_metric(name) for name in names}
 
 
 def _is_subscription_list_answer(request: dict[str, Any]) -> bool:

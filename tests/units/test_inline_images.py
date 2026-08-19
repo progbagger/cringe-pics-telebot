@@ -10,6 +10,7 @@ from cringe_pics_telebot.repositories.postgres import (
     TelegramMediaType,
 )
 from cringe_pics_telebot.services import inline_images
+from cringe_pics_telebot.services.inline_metrics import InlineQueryMetrics
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 
@@ -31,29 +32,38 @@ async def test_get_inline_images_uses_catalog_ids_and_resolves_only_pending_urls
     monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
 
     subscription_type = _subscription_type()
-    assert await inline_images.get_inline_images([subscription_type]) == [
-        (
-            subscription_type,
-            CachedMedia(
-                name="1.png",
-                mime_type="image/png",
-                path="day/1.png",
-                source_revision="sha256:1",
-                id="telegram-file-id",
+    with InlineQueryMetrics.start(query_is_empty=False, clock=lambda: 1) as metrics:
+        assert await inline_images.get_inline_images([subscription_type]) == [
+            (
+                subscription_type,
+                CachedMedia(
+                    name="1.png",
+                    mime_type="image/png",
+                    path="day/1.png",
+                    source_revision="sha256:1",
+                    id="telegram-file-id",
+                ),
             ),
-        ),
-        (
-            subscription_type,
-            LinkedMedia(
-                name="2.png",
-                mime_type="image/png",
-                path="day/2.png",
-                source_revision="sha256:2",
-                url="https://storage.example/day/2.png",
+            (
+                subscription_type,
+                LinkedMedia(
+                    name="2.png",
+                    mime_type="image/png",
+                    path="day/2.png",
+                    source_revision="sha256:2",
+                    url="https://storage.example/day/2.png",
+                ),
             ),
-        ),
-    ]
+        ]
     assert requested_paths == ["day/2.png"]
+    assert metrics.counts.catalog_media == 2
+    assert metrics.counts.selected_media == 2
+    assert metrics.counts.ready_media == 1
+    assert metrics.counts.pending_media == 1
+    assert metrics.counts.url_successes == 1
+    assert metrics.counts.url_failures == 0
+    assert metrics.counts.postgres_calls == 1
+    assert metrics.counts.yandex_calls == 1
 
 
 async def test_get_inline_images_limits_before_resolving_urls(monkeypatch: MonkeyPatch) -> None:

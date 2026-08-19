@@ -8,6 +8,14 @@ from cringe_pics_telebot.repositories.postgres import (
 from cringe_pics_telebot.repositories.yandex import get_download_urls
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
+from .inline_metrics import (
+    MEDIA_CATALOG_STAGE,
+    MEDIA_URLS_STAGE,
+    RESULTS_PREPARE_STAGE,
+    get_inline_query_metrics,
+    inline_query_stage,
+)
+
 MAX_INLINE_QUERY_RESULTS = 50
 
 
@@ -16,7 +24,11 @@ async def get_inline_images(
     *,
     limit_per_category: int | None = MAX_INLINE_QUERY_RESULTS,
 ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
-    media = await get_category_media_by_subscription_types([item.id for item in subscription_types])
+    media = await _get_catalog_media([item.id for item in subscription_types])
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.catalog_media = len(media)
+
     media_by_category: dict[int, list[CategoryMedia]] = {}
     for item in media:
         category_media = media_by_category.setdefault(item.subscription_type_id, [])
@@ -32,14 +44,49 @@ async def get_inline_images(
                 selected_media.append(item)
 
     pending_paths = list(dict.fromkeys(item.source_path for item in selected_media if item.telegram_file_id is None))
-    download_urls_by_path = dict(
-        zip(
-            pending_paths,
-            await get_download_urls(pending_paths) if pending_paths else [],
-            strict=True,
-        )
+    if metrics is not None:
+        metrics.counts.selected_media = len(selected_media)
+        metrics.counts.ready_media = len(selected_media) - len(pending_paths)
+        metrics.counts.pending_media = len(pending_paths)
+
+    if pending_paths:
+        download_urls = await _get_media_urls(pending_paths)
+        if metrics is not None:
+            metrics.counts.url_successes += sum(url is not None for url in download_urls)
+            metrics.counts.url_failures += sum(url is None for url in download_urls)
+    else:
+        download_urls = []
+    download_urls_by_path = dict(zip(pending_paths, download_urls, strict=True))
+    return _prepare_inline_image_results(
+        selected_media,
+        subscription_types=subscription_types,
+        download_urls_by_path=download_urls_by_path,
     )
 
+
+@inline_query_stage(MEDIA_CATALOG_STAGE)
+async def _get_catalog_media(subscription_type_ids: list[int]) -> list[CategoryMedia]:
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.postgres_calls += 1
+    return await get_category_media_by_subscription_types(subscription_type_ids)
+
+
+@inline_query_stage(MEDIA_URLS_STAGE)
+async def _get_media_urls(paths: list[str]) -> list[str | None]:
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.yandex_calls += len(paths)
+    return await get_download_urls(paths)
+
+
+@inline_query_stage(RESULTS_PREPARE_STAGE)
+def _prepare_inline_image_results(
+    selected_media: list[CategoryMedia],
+    *,
+    subscription_types: Sequence[SubscriptionType],
+    download_urls_by_path: dict[str, str | None],
+) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
     subscription_types_by_id = {item.id: item for item in subscription_types}
     results: list[tuple[SubscriptionType, CachedMedia | LinkedMedia]] = []
     for item in selected_media:
