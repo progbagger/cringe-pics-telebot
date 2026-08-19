@@ -248,6 +248,22 @@ class FakeYandexServer:
             body = await response.json()
             return body["result"]
 
+    async def configure_directory(
+        self,
+        directory: str,
+        *,
+        images: list[dict[str, Any]] | None = None,
+        fail: bool = False,
+    ) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/directory",
+                json={"directory": directory, "images": images or [], "fail": fail},
+            ) as response,
+        ):
+            response.raise_for_status()
+
     async def wait_for_request(
         self,
         method: str,
