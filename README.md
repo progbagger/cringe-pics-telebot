@@ -51,7 +51,7 @@ cd cringe-pics-telebot
 
 ### 2. Настроить переменные окружения
 
-Создайте четыре файла. Они игнорируются Git и не должны попадать в репозиторий.
+Создайте четыре обязательных файла. Они игнорируются Git и не должны попадать в репозиторий.
 
 `docker/bot/.env`:
 
@@ -81,6 +81,20 @@ REDIS_HOST=redis
 ```dotenv
 YANDEX_DISK_TOKEN=<OAuth-токен Яндекс Диска>
 ```
+
+Чтобы отправлять метрики на существующий внешний Graphite/StatsD, скопируйте пример и укажите доступный из bot container адрес StatsD:
+
+```bash
+cp docker/statsd/.env.example docker/statsd/.env
+```
+
+```dotenv
+STATSD_HOST=statsd.example.com
+STATSD_PORT=8125
+STATSD_PREFIX=cringe_pics_telebot
+```
+
+StatsD использует UDP. Проект не запускает Graphite и не управляет его хранилищем или dashboard; на внешнем сервере и в firewall должен быть разрешён UDP-трафик от bot host к указанному порту. Если `docker/statsd/.env` отсутствует, метрики отключены. Если endpoint настроен, но port некорректен или адрес не разрешается, бот завершает startup с явной ошибкой конфигурации. Ошибка UDP-отправки после успешного запуска не останавливает polling.
 
 Дополнительно в `docker/bot/.env` можно задать:
 

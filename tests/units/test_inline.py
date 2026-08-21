@@ -1,6 +1,9 @@
+import asyncio
+import json
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, time
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from aiogram.types import (
@@ -246,6 +249,69 @@ async def test_answer_inline_query_prepares_results_and_disables_telegram_cache(
     ]
 
 
+async def test_answer_inline_query_records_handled_result_error(
+    monkeypatch: MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    subscription_type = _subscription_type(2, "/day", "day")
+    query = _FakeInlineQuery(query="day")
+
+    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+        return [subscription_type]
+
+    async def get_inline_results(subscription_types: list[SubscriptionType]) -> list[inline.InlineMediaResult]:
+        raise RuntimeError("catalog unavailable")
+
+    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_get_inline_results", get_inline_results)
+
+    with caplog.at_level(logging.INFO):
+        await inline.answer_inline_query(cast(InlineQuery, query))
+
+    assert query.results == []
+    event = _last_inline_metrics_event(caplog)
+    assert event["outcome"] == "handled_error"
+    assert event["counts"]["telegram_calls"] == 1
+
+
+async def test_answer_inline_query_records_and_propagates_unhandled_error(
+    monkeypatch: MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    query = _FakeInlineQuery(query="day")
+
+    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+
+    with caplog.at_level(logging.INFO), pytest.raises(RuntimeError, match="database unavailable"):
+        await inline.answer_inline_query(cast(InlineQuery, query))
+
+    event = _last_inline_metrics_event(caplog)
+    assert event["outcome"] == "unhandled_error"
+    assert event["counts"]["telegram_calls"] == 0
+
+
+async def test_answer_inline_query_records_and_propagates_cancellation(
+    monkeypatch: MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    query = _FakeInlineQuery(query="day")
+
+    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+
+    with caplog.at_level(logging.INFO), pytest.raises(asyncio.CancelledError):
+        await inline.answer_inline_query(cast(InlineQuery, query))
+
+    event = _last_inline_metrics_event(caplog)
+    assert event["outcome"] == "cancelled"
+    assert event["counts"]["telegram_calls"] == 0
+
+
 def _inline_results(count: int) -> list[inline.InlineMediaResult]:
     return [
         InlineQueryResultPhoto(
@@ -298,3 +364,11 @@ class _FakeInlineQuery:
 
 class _FakeUser:
     id = 42
+
+
+def _last_inline_metrics_event(caplog: pytest.LogCaptureFixture) -> dict[str, Any]:
+    return next(
+        json.loads(message)
+        for message in reversed(caplog.messages)
+        if message.startswith("{") and '"event":"inline_query_metrics"' in message
+    )

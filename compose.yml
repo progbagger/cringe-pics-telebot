@@ -39,6 +39,8 @@ services:
       - ./docker/postgres/.env
       - ./docker/redis/.env
       - ./docker/yandex/.env
+      - path: ./docker/statsd/.env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy

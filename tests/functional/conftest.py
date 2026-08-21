@@ -294,6 +294,43 @@ class FakeYandexServer:
         raise TimeoutError(f"Yandex request {method!r} was not received in {timeout} seconds")
 
 
+@dataclass(slots=True)
+class FakeStatsDServer:
+    base_url: str
+    udp_host: str
+    udp_port: int
+    process: subprocess.Process
+
+    async def reset(self) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/reset") as response,
+        ):
+            response.raise_for_status()
+
+    async def metrics(self, *, name: str | None = None) -> list[dict[str, Any]]:
+        params = {"name": name} if name is not None else None
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.base_url}/test/metrics", params=params) as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
+
+    async def wait_for_metric(self, name: str, *, timeout: float = 10) -> dict[str, Any]:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                f"{self.base_url}/test/wait",
+                params={"name": name, "timeout": timeout},
+            ) as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
+
+
 @pytest_asyncio.fixture(scope="session", loop_scope="session", autouse=True)
 async def docker_compose() -> AsyncIterator[DependencyPorts]:
     dependency_ports = DependencyPorts(postgres=_get_unused_tcp_port(), redis=_get_unused_tcp_port())
@@ -434,14 +471,47 @@ async def fake_yandex_server() -> AsyncIterator[FakeYandexServer]:
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def fake_statsd_server() -> AsyncIterator[FakeStatsDServer]:
+    http_port = _get_unused_tcp_port()
+    udp_port = _get_unused_udp_port()
+    process = await subprocess.create_subprocess_exec(
+        sys.executable,
+        str(FUNCTIONAL_DIR / "fake_statsd.py"),
+        "--http-port",
+        str(http_port),
+        "--udp-port",
+        str(udp_port),
+        cwd=ROOT_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    server = FakeStatsDServer(
+        base_url=f"http://127.0.0.1:{http_port}",
+        udp_host="127.0.0.1",
+        udp_port=udp_port,
+        process=process,
+    )
+    await _wait_until_ready(lambda: _http_ready(f"{server.base_url}/healthz"), "fake StatsD")
+
+    try:
+        yield server
+    finally:
+        await _terminate_process(process)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def bot_process(
     docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
 ) -> AsyncIterator[subprocess.Process]:
     env = _bot_env(docker_compose)
     env["TELEGRAM_API_BASE_URL"] = fake_telegram_server.base_url
     env["YANDEX_DISK_API_BASE_URL"] = f"{fake_yandex_server.base_url}/v1/disk/"
+    env["STATSD_HOST"] = fake_statsd_server.udp_host
+    env["STATSD_PORT"] = str(fake_statsd_server.udp_port)
+    env["STATSD_PREFIX"] = "functional"
 
     process = await subprocess.create_subprocess_exec(
         "uv",
@@ -465,10 +535,12 @@ async def seeded_subscription_types(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
 ) -> tuple[FunctionalSubscriptionType, ...]:
     _raise_if_process_exited(bot_process, "bot")
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
+    await fake_statsd_server.reset()
     await _reset_database(docker_compose)
     await _flush_redis(docker_compose)
     await _insert_subscription_types(docker_compose, SEEDED_SUBSCRIPTION_TYPES)
@@ -500,10 +572,12 @@ async def reset_dependency_state(
     docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
 ) -> Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]]:
     async def reset(subscription_types: tuple[FunctionalSubscriptionType, ...]) -> None:
         await fake_telegram_server.reset()
         await fake_yandex_server.reset()
+        await fake_statsd_server.reset()
         await _reset_database(docker_compose)
         await _flush_redis(docker_compose)
         await _insert_subscription_types(docker_compose, subscription_types)
@@ -1228,6 +1302,12 @@ def _raise_if_process_exited(process: subprocess.Process, name: str) -> None:
 
 def _get_unused_tcp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _get_unused_udp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
 

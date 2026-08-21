@@ -6,6 +6,7 @@ from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import timedelta
 
 from cringe_pics_telebot.bot.bot import create_bot, dp
+from cringe_pics_telebot.helpers.metrics import configured_metrics
 from cringe_pics_telebot.repositories.postgres import connect as connect_postgres
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
@@ -72,6 +73,7 @@ async def _connect_redis() -> AsyncGenerator:
 async def start_polling() -> None:
     connectors = (_connect_postgres, _create_yandex_client, _connect_redis)
     async with AsyncExitStack() as stack:
+        stack.enter_context(configured_metrics())
         for connector in connectors:
             await stack.enter_async_context(connector())
 
