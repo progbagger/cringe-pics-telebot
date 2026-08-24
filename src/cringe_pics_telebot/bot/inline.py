@@ -19,6 +19,14 @@ from cringe_pics_telebot.services.inline_images import (
     MAX_INLINE_QUERY_RESULTS,
     get_inline_images,
 )
+from cringe_pics_telebot.services.inline_metrics import (
+    CATEGORIES_LOOKUP_STAGE,
+    RESULTS_PREPARE_STAGE,
+    TELEGRAM_ANSWER_STAGE,
+    InlineQueryMetrics,
+    get_inline_query_metrics,
+    inline_query_stage,
+)
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
@@ -35,29 +43,40 @@ router = Router(name="inline")
 
 @router.inline_query()
 async def answer_inline_query(inline_query: InlineQuery) -> None:
-    subscription_types = await _find_subscription_types(inline_query.query)
-    if not subscription_types:
-        await inline_query.answer([], cache_time=0, is_personal=True)
-        return
+    with InlineQueryMetrics.start(
+        query_is_empty=not bool(normalize_category_search_term(inline_query.query)),
+    ) as metrics:
+        subscription_types = await _find_subscription_types(inline_query.query)
+        metrics.counts.matched_categories = len(subscription_types)
 
-    try:
-        results = _prepare_inline_results(await _get_inline_results(subscription_types))
-    except Exception:
-        logger.exception(
-            "Failed to prepare inline results for user %d and categories %s",
-            inline_query.from_user.id,
-            ", ".join(subscription_type.name for subscription_type in subscription_types),
-        )
-        results = []
+        if not subscription_types:
+            await _answer_inline_query(inline_query, [])
+            return
 
-    answer_results: list[InlineQueryResultUnion] = [*results[:MAX_INLINE_QUERY_RESULTS]]
-    await inline_query.answer(answer_results, cache_time=0, is_personal=True)
+        try:
+            raw_results = await _get_inline_results(subscription_types)
+            metrics.counts.results_prepared = len(raw_results)
+            results = _prepare_inline_results(raw_results)
+        except Exception:
+            metrics.set_outcome("handled_error")
+            logger.exception("Failed to prepare inline results; correlation_id=%s", metrics.correlation_id)
+            results = []
+
+        if metrics.counts.url_failures and metrics.outcome == "success":
+            metrics.set_outcome("partial_error")
+        answer_results: list[InlineQueryResultUnion] = [*results[:MAX_INLINE_QUERY_RESULTS]]
+        metrics.counts.results_sent = len(answer_results)
+        await _answer_inline_query(inline_query, answer_results)
 
 
+@inline_query_stage(CATEGORIES_LOOKUP_STAGE)
 async def _find_subscription_types(query: str) -> list[SubscriptionType]:
     if not normalize_category_search_term(query):
         return []
 
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.postgres_calls += 1
     return [
         subscription_type
         for subscription_type in await get_subscription_types()
@@ -83,10 +102,18 @@ def category_matches_query(query: str, category: str, search_aliases: Sequence[s
 
 
 async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
+    images = await get_inline_images(subscription_types, limit_per_category=None)
+    return _build_inline_results(images)
+
+
+@inline_query_stage(RESULTS_PREPARE_STAGE)
+def _build_inline_results(
+    images: list[tuple[SubscriptionType, CachedMedia | LinkedMedia]],
+) -> list[InlineMediaResult]:
     seen_paths: set[str] = set()
     results: list[InlineMediaResult] = []
 
-    for subscription_type, image in await get_inline_images(subscription_types, limit_per_category=None):
+    for subscription_type, image in images:
         if image.path in seen_paths:
             continue
 
@@ -96,6 +123,18 @@ async def _get_inline_results(subscription_types: list[SubscriptionType]) -> lis
     return results
 
 
+@inline_query_stage(TELEGRAM_ANSWER_STAGE)
+async def _answer_inline_query(
+    inline_query: InlineQuery,
+    results: list[InlineQueryResultUnion],
+) -> None:
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.telegram_calls += 1
+    await inline_query.answer(results, cache_time=0, is_personal=True)
+
+
+@inline_query_stage(RESULTS_PREPARE_STAGE)
 def _prepare_inline_results(
     results: list[InlineMediaResult],
     *,
