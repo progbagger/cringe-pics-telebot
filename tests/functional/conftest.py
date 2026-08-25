@@ -519,8 +519,8 @@ async def bot_process(
         "bot",
         cwd=ROOT_DIR,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
         await fake_telegram_server.wait_for_request("getMe", timeout=30)

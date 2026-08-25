@@ -67,11 +67,8 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
 
     async def get_inline_images(
         subscription_types: list[SubscriptionType],
-        *,
-        limit_per_category: int | None,
     ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
         assert subscription_types == [morning, evening]
-        assert limit_per_category is None
         return [
             (
                 morning,
@@ -174,6 +171,46 @@ def test_prepare_inline_results_chooses_before_limit_and_deduplicates_selected_m
     assert [result.id for result in results] == [
         f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 2)
     ]
+
+
+def test_prepare_inline_results_prefers_cached_for_random_and_keeps_status_groups() -> None:
+    results: list[inline.InlineMediaResult] = [
+        InlineQueryResultPhoto(
+            id="linked-1",
+            photo_url="https://storage.example/linked-1.png",
+            thumbnail_url="https://storage.example/linked-1.png",
+        ),
+        InlineQueryResultCachedPhoto(id="cached-1", photo_file_id="telegram-1"),
+        InlineQueryResultPhoto(
+            id="linked-2",
+            photo_url="https://storage.example/linked-2.png",
+            thumbnail_url="https://storage.example/linked-2.png",
+        ),
+        InlineQueryResultCachedPhoto(id="cached-2", photo_file_id="telegram-2"),
+    ]
+    chooser_inputs: list[list[str]] = []
+    shuffler_inputs: list[list[str]] = []
+
+    def choose_last(items: Sequence[inline.InlineMediaResult]) -> inline.InlineMediaResult:
+        chooser_inputs.append([item.id for item in items])
+        return items[-1]
+
+    def reverse(items: list[inline.InlineMediaResult]) -> None:
+        shuffler_inputs.append([item.id for item in items])
+        items.reverse()
+
+    prepared = inline._prepare_inline_results(
+        results,
+        chooser=choose_last,
+        shuffler=reverse,
+    )
+    random_result = cast(InlineQueryResultCachedPhoto, prepared[0])
+
+    assert chooser_inputs == [["cached-1", "cached-2"]]
+    assert shuffler_inputs == [["cached-1"], ["linked-1", "linked-2"]]
+    assert random_result.photo_file_id == "telegram-2"
+    assert random_result.title == inline.RANDOM_INLINE_RESULT_TITLE
+    assert [result.id for result in prepared[1:]] == ["cached-1", "linked-2", "linked-1"]
 
 
 def test_prepare_inline_results_returns_empty_results() -> None:
