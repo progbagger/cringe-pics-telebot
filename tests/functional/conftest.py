@@ -519,8 +519,8 @@ async def bot_process(
         "bot",
         cwd=ROOT_DIR,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
         await fake_telegram_server.wait_for_request("getMe", timeout=30)
@@ -861,6 +861,51 @@ async def read_user_timezone_offset(
                 "SELECT timezone_offset_minutes FROM users WHERE id = $1",
                 user_id,
             )
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def set_functional_category_media_file_ids(
+    docker_compose: DependencyPorts,
+) -> Callable[[dict[str, str | None]], Awaitable[None]]:
+    async def set_file_ids(file_ids_by_path: dict[str, str | None]) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.executemany(
+                """
+                UPDATE category_media
+                SET telegram_file_id = $2,
+                    telegram_file_unique_id = CASE WHEN $2::text IS NULL THEN NULL ELSE 'unique:' || $2 END,
+                    materialized_at = CASE WHEN $2::text IS NULL THEN NULL ELSE now() END,
+                    updated_at = now()
+                WHERE source_path = $1
+                """,
+                list(file_ids_by_path.items()),
+            )
+        finally:
+            await connection.close()
+
+    return set_file_ids
+
+
+@pytest.fixture
+async def read_functional_category_media_states(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[dict[str, tuple[str, str | None]]]]:
+    async def read() -> dict[str, tuple[str, str | None]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT source_path, status, telegram_file_id
+                FROM category_media
+                ORDER BY source_path
+                """
+            )
+            return {row["source_path"]: (row["status"], row["telegram_file_id"]) for row in rows}
         finally:
             await connection.close()
 

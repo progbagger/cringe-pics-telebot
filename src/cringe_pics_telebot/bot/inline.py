@@ -102,7 +102,7 @@ def category_matches_query(query: str, category: str, search_aliases: Sequence[s
 
 
 async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
-    images = await get_inline_images(subscription_types, limit_per_category=None)
+    images = await get_inline_images(subscription_types)
     return _build_inline_results(images)
 
 
@@ -144,17 +144,21 @@ def _prepare_inline_results(
     if not results:
         return []
 
-    selected_result = (chooser or random.choice)(results)
+    cached_results = [result for result in results if _is_cached_inline_result(result)]
+    linked_results = [result for result in results if not _is_cached_inline_result(result)]
+    selected_result = (chooser or random.choice)(cached_results or linked_results)
     random_result = selected_result.model_copy(
         update={
             "id": _random_result_id(selected_result.id),
             "title": RANDOM_INLINE_RESULT_TITLE,
         }
     )
-    ordinary_results = [result for result in results if result.id != selected_result.id]
-    shuffled_results = _shuffle_inline_results(ordinary_results, shuffler=shuffler)
+    ordinary_cached = [result for result in cached_results if result.id != selected_result.id]
+    ordinary_linked = [result for result in linked_results if result.id != selected_result.id]
+    shuffled_cached = _shuffle_inline_results(ordinary_cached, shuffler=shuffler) if ordinary_cached else []
+    shuffled_linked = _shuffle_inline_results(ordinary_linked, shuffler=shuffler) if ordinary_linked else []
 
-    return [random_result, *shuffled_results[: MAX_INLINE_QUERY_RESULTS - 1]]
+    return [random_result, *shuffled_cached, *shuffled_linked][:MAX_INLINE_QUERY_RESULTS]
 
 
 def _random_result_id(result_id: str) -> str:
@@ -169,6 +173,10 @@ def _shuffle_inline_results(
     shuffled_results = results.copy()
     (shuffler or random.shuffle)(shuffled_results)
     return shuffled_results
+
+
+def _is_cached_inline_result(result: InlineMediaResult) -> bool:
+    return isinstance(result, InlineQueryResultCachedGif | InlineQueryResultCachedPhoto)
 
 
 def _inline_result(

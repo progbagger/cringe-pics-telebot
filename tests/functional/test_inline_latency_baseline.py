@@ -127,7 +127,7 @@ async def test_collect_inline_latency_baseline(
         expected_results=50,
         expected_counts={
             "dependencies.postgres.calls": 2,
-            "dependencies.yandex.calls": 60,
+            "dependencies.yandex.calls": 50,
             "dependencies.redis.calls": 0,
             "dependencies.telegram.calls": 1,
             "media.catalog_items": 60,

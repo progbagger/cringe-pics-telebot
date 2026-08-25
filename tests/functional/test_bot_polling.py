@@ -222,6 +222,36 @@ async def test_bot_sends_image_for_subscription_category(
     assert not any(request["method"] == "download" for request in yandex_requests)
 
 
+async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    set_functional_category_media_file_ids: Callable[[dict[str, str | None]], Awaitable[None]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+) -> None:
+    await fake_yandex_server.configure_directory(
+        "day",
+        images=[{"name": "ready.png"}, {"name": "pending.png"}],
+    )
+    await synchronize_functional_media_catalog()
+    await set_functional_category_media_file_ids({"day/ready.png": "functional-ready-file-id"})
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/day")
+    edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
+
+    assert edit_media["payload"]["media"]["media"] == (f"{fake_yandex_server.base_url}/download/pending.png")
+    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
+    states = await read_functional_category_media_states()
+    assert {path: state for path, state in states.items() if path.startswith("day/")} == {
+        "day/pending.png": ("ready", "functional-photo-file-id"),
+        "day/ready.png": ("ready", "functional-ready-file-id"),
+    }
+
+
 async def test_bot_recovers_invalid_catalog_file_id_once(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
@@ -603,9 +633,56 @@ async def test_inline_metrics_cover_large_catalog_and_telegram_limit(
         "functional.inline.results.sent",
     )
     assert metrics["functional.inline.media.catalog_items"]["value"] == 60
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 60
-    assert metrics["functional.inline.results.prepared"]["value"] == 60
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 50
+    assert metrics["functional.inline.results.prepared"]["value"] == 50
     assert metrics["functional.inline.results.sent"]["value"] == 50
+
+
+async def test_inline_uses_ready_media_to_fill_limit_without_pending_urls(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    set_functional_category_media_file_ids: Callable[[dict[str, str | None]], Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/large", time(0), "large"),))
+    await fake_yandex_server.configure_directory(
+        "large",
+        images=[{"name": f"image-{index}.png"} for index in range(51)],
+    )
+    await synchronize_functional_media_catalog()
+    await set_functional_category_media_file_ids(
+        {f"large/image-{index}.png": f"functional-ready-{index}" for index in range(50)}
+    )
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_statsd_server.reset()
+
+    await fake_telegram_server.push_inline_query(query="large", query_id="inline-ready-limit")
+    answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-ready-limit",
+    )
+
+    results = answer["payload"]["results"]
+    assert len(results) == 50
+    assert results[0]["title"] == "🎲 Выбрать случайную картинку"
+    assert all("photo_file_id" in result and "photo_url" not in result for result in results)
+    assert not await fake_yandex_server.requests()
+
+    metrics = await _wait_for_metrics(
+        fake_statsd_server,
+        "functional.inline.media.catalog_items",
+        "functional.inline.media.ready_items",
+        "functional.inline.media.pending_items",
+        "functional.inline.dependencies.yandex.calls",
+    )
+    assert metrics["functional.inline.media.catalog_items"]["value"] == 51
+    assert metrics["functional.inline.media.ready_items"]["value"] == 50
+    assert metrics["functional.inline.media.pending_items"]["value"] == 0
+    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
 
 
 async def test_inline_excludes_media_deactivated_by_later_sync(

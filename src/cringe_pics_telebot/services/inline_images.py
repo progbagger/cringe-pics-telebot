@@ -1,4 +1,5 @@
-from collections.abc import Sequence
+import random
+from collections.abc import Callable, MutableSequence, Sequence
 
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -18,32 +19,28 @@ from .inline_metrics import (
 
 MAX_INLINE_QUERY_RESULTS = 50
 
+type MediaShuffler = Callable[[MutableSequence[CategoryMedia]], None]
+
 
 async def get_inline_images(
     subscription_types: Sequence[SubscriptionType],
     *,
-    limit_per_category: int | None = MAX_INLINE_QUERY_RESULTS,
+    limit: int | None = MAX_INLINE_QUERY_RESULTS,
+    shuffler: MediaShuffler | None = None,
 ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
     media = await _get_catalog_media([item.id for item in subscription_types])
     metrics = get_inline_query_metrics()
     if metrics is not None:
         metrics.counts.catalog_media = len(media)
 
-    media_by_category: dict[int, list[CategoryMedia]] = {}
-    for item in media:
-        category_media = media_by_category.setdefault(item.subscription_type_id, [])
-        if limit_per_category is None or len(category_media) < limit_per_category:
-            category_media.append(item)
+    selected_media = _select_inline_media(
+        media,
+        subscription_types=subscription_types,
+        limit=limit,
+        shuffler=shuffler,
+    )
 
-    selected_media: list[CategoryMedia] = []
-    seen_paths: set[str] = set()
-    for subscription_type in subscription_types:
-        for item in media_by_category.get(subscription_type.id, []):
-            if item.source_path not in seen_paths:
-                seen_paths.add(item.source_path)
-                selected_media.append(item)
-
-    pending_paths = list(dict.fromkeys(item.source_path for item in selected_media if item.telegram_file_id is None))
+    pending_paths = [item.source_path for item in selected_media if item.telegram_file_id is None]
     if metrics is not None:
         metrics.counts.selected_media = len(selected_media)
         metrics.counts.ready_media = len(selected_media) - len(pending_paths)
@@ -62,6 +59,34 @@ async def get_inline_images(
         subscription_types=subscription_types,
         download_urls_by_path=download_urls_by_path,
     )
+
+
+def _select_inline_media(
+    media: Sequence[CategoryMedia],
+    *,
+    subscription_types: Sequence[SubscriptionType],
+    limit: int | None,
+    shuffler: MediaShuffler | None = None,
+) -> list[CategoryMedia]:
+    media_by_category: dict[int, list[CategoryMedia]] = {}
+    for item in media:
+        media_by_category.setdefault(item.subscription_type_id, []).append(item)
+
+    media_by_path: dict[str, CategoryMedia] = {}
+    for subscription_type in subscription_types:
+        for item in media_by_category.get(subscription_type.id, []):
+            existing = media_by_path.get(item.source_path)
+            if existing is None or (existing.telegram_file_id is None and item.telegram_file_id is not None):
+                media_by_path[item.source_path] = item
+
+    ready = [item for item in media_by_path.values() if item.telegram_file_id is not None]
+    pending = [item for item in media_by_path.values() if item.telegram_file_id is None]
+    shuffle = shuffler or random.shuffle
+    shuffle(ready)
+    shuffle(pending)
+
+    selected = [*ready, *pending]
+    return selected if limit is None else selected[:limit]
 
 
 @inline_query_stage(MEDIA_CATALOG_STAGE)

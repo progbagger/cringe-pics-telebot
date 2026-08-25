@@ -1,15 +1,19 @@
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, time, timedelta, timezone
 
 from aiogram import Bot
 
 from cringe_pics_telebot.bot.media import send_image_to_chat
 from cringe_pics_telebot.repositories import redis as cache
-from cringe_pics_telebot.repositories.postgres import SubscriptionType
+from cringe_pics_telebot.repositories.postgres import (
+    CategoryMedia,
+    SubscriptionType,
+    get_category_media_by_subscription_types,
+)
 from cringe_pics_telebot.services.media_delivery import deliver_category_media
-from cringe_pics_telebot.services.random_image import get_random_image
+from cringe_pics_telebot.services.random_image import choose_random_image
 from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
 from cringe_pics_telebot.services.subscriptions import get_subscription_types, get_subscription_users
 
@@ -69,6 +73,10 @@ async def _broadcast_subscription_type(*, bot: Bot, subscription_type: Subscript
     if not users:
         return 0
 
+    media = await get_category_media_by_subscription_types([subscription_type.id])
+    if not media:
+        return 0
+
     reservations = await asyncio.gather(
         *(
             _reserve_scheduled_send(
@@ -90,6 +98,7 @@ async def _broadcast_subscription_type(*, bot: Bot, subscription_type: Subscript
                 bot=bot,
                 user_id=user_id,
                 subscription_type=subscription_type,
+                media=media,
             )
             for user_id in reserved_user_ids
         )
@@ -103,11 +112,12 @@ async def _send_scheduled_image_to_user(
     bot: Bot,
     user_id: int,
     subscription_type: SubscriptionType,
+    media: Sequence[CategoryMedia],
 ) -> int:
     try:
-        media = await get_random_image(subscription_type.id)
+        selected_media = choose_random_image(media)
         await deliver_category_media(
-            media,
+            selected_media,
             send=lambda image: send_image_to_chat(bot=bot, chat_id=user_id, image=image),
         )
     except Exception:
