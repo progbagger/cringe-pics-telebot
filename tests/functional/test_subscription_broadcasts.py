@@ -81,6 +81,44 @@ async def test_subscription_broadcasts_skip_empty_category(
     assert not await fake_yandex_server.requests()
 
 
+async def test_subscription_broadcast_prefers_pending_media_over_ready(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    set_functional_category_media_file_ids: Callable[[dict[str, str | None]], Awaitable[None]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+) -> None:
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/morning", time(10, 0), "morning"),))
+    await create_user_subscription(
+        user_id=700,
+        subscription_type_id=1,
+        timezone_offset_minutes=7 * 60,
+    )
+    await fake_yandex_server.configure_directory(
+        "morning",
+        images=[{"name": "ready.png"}, {"name": "pending.png"}],
+    )
+    await synchronize_functional_media_catalog()
+    await set_functional_category_media_file_ids({"morning/ready.png": "functional-ready-file-id"})
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+
+    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)) == 1
+
+    send_photo_requests = await fake_telegram_server.requests(method="sendPhoto")
+    assert [request["payload"]["photo"] for request in send_photo_requests] == [
+        f"{fake_yandex_server.base_url}/download/pending.png"
+    ]
+    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
+    assert await read_functional_category_media_states() == {
+        "morning/pending.png": ("ready", "functional-photo-file-id"),
+        "morning/ready.png": ("ready", "functional-ready-file-id"),
+    }
+
+
 async def test_concurrent_scheduled_recipients_materialize_one_pending_revision_once(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,

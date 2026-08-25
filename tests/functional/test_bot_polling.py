@@ -222,6 +222,36 @@ async def test_bot_sends_image_for_subscription_category(
     assert not any(request["method"] == "download" for request in yandex_requests)
 
 
+async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    set_functional_category_media_file_ids: Callable[[dict[str, str | None]], Awaitable[None]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+) -> None:
+    await fake_yandex_server.configure_directory(
+        "day",
+        images=[{"name": "ready.png"}, {"name": "pending.png"}],
+    )
+    await synchronize_functional_media_catalog()
+    await set_functional_category_media_file_ids({"day/ready.png": "functional-ready-file-id"})
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/day")
+    edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
+
+    assert edit_media["payload"]["media"]["media"] == (f"{fake_yandex_server.base_url}/download/pending.png")
+    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
+    states = await read_functional_category_media_states()
+    assert {path: state for path, state in states.items() if path.startswith("day/")} == {
+        "day/pending.png": ("ready", "functional-photo-file-id"),
+        "day/ready.png": ("ready", "functional-ready-file-id"),
+    }
+
+
 async def test_bot_recovers_invalid_catalog_file_id_once(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
