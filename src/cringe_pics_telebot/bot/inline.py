@@ -17,6 +17,7 @@ from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.services.category_aliases import normalize_category_search_term
 from cringe_pics_telebot.services.inline_images import (
     MAX_INLINE_QUERY_RESULTS,
+    get_inline_category_images,
     get_inline_images,
 )
 from cringe_pics_telebot.services.inline_metrics import (
@@ -29,6 +30,8 @@ from cringe_pics_telebot.services.inline_metrics import (
 )
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import get_subscription_types
+
+from .keyboards import format_category_button_text
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +46,8 @@ router = Router(name="inline")
 
 @router.inline_query()
 async def answer_inline_query(inline_query: InlineQuery) -> None:
-    with InlineQueryMetrics.start(
-        query_is_empty=not bool(normalize_category_search_term(inline_query.query)),
-    ) as metrics:
+    query_is_empty = not bool(normalize_category_search_term(inline_query.query))
+    with InlineQueryMetrics.start(query_is_empty=query_is_empty) as metrics:
         subscription_types = await _find_subscription_types(inline_query.query)
         metrics.counts.matched_categories = len(subscription_types)
 
@@ -54,9 +56,13 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
             return
 
         try:
-            raw_results = await _get_inline_results(subscription_types)
+            raw_results = (
+                await _get_inline_category_results(subscription_types)
+                if query_is_empty
+                else await _get_inline_results(subscription_types)
+            )
             metrics.counts.results_prepared = len(raw_results)
-            results = _prepare_inline_results(raw_results)
+            results = raw_results if query_is_empty else _prepare_inline_results(raw_results)
         except Exception:
             metrics.set_outcome("handled_error")
             logger.exception("Failed to prepare inline results; correlation_id=%s", metrics.correlation_id)
@@ -71,15 +77,16 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
 
 @inline_query_stage(CATEGORIES_LOOKUP_STAGE)
 async def _find_subscription_types(query: str) -> list[SubscriptionType]:
-    if not normalize_category_search_term(query):
-        return []
-
     metrics = get_inline_query_metrics()
     if metrics is not None:
         metrics.counts.postgres_calls += 1
+    subscription_types = await get_subscription_types()
+    if not normalize_category_search_term(query):
+        return subscription_types
+
     return [
         subscription_type
-        for subscription_type in await get_subscription_types()
+        for subscription_type in subscription_types
         if category_matches_query(
             query,
             subscription_type.name,
@@ -104,6 +111,26 @@ def category_matches_query(query: str, category: str, search_aliases: Sequence[s
 async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
     images = await get_inline_images(subscription_types)
     return _build_inline_results(images)
+
+
+async def _get_inline_category_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
+    images = await get_inline_category_images(subscription_types)
+    return _build_inline_category_results(images)
+
+
+@inline_query_stage(RESULTS_PREPARE_STAGE)
+def _build_inline_category_results(
+    images: list[tuple[SubscriptionType, CachedMedia | LinkedMedia]],
+) -> list[InlineMediaResult]:
+    return [
+        _inline_result(image, subscription_type=subscription_type).model_copy(
+            update={
+                "id": _category_result_id(subscription_type, image),
+                "title": f"🎲 {format_category_button_text(subscription_type)}",
+            }
+        )
+        for subscription_type, image in images
+    ]
 
 
 @inline_query_stage(RESULTS_PREPARE_STAGE)
@@ -163,6 +190,11 @@ def _prepare_inline_results(
 
 def _random_result_id(result_id: str) -> str:
     return hashlib.sha256(f"random:{result_id}".encode()).hexdigest()
+
+
+def _category_result_id(subscription_type: SubscriptionType, image: CachedMedia | LinkedMedia) -> str:
+    identity = f"category-random:{subscription_type.id}:{image.path}:{image.source_revision}"
+    return hashlib.sha256(identity.encode()).hexdigest()
 
 
 def _shuffle_inline_results(
