@@ -2,6 +2,7 @@ from types import TracebackType
 from typing import Self
 
 import pytest
+from hamcrest import assert_that, equal_to, instance_of, is_, same_instance
 
 from cringe_pics_telebot.helpers.metrics import (
     CounterMetric,
@@ -19,7 +20,7 @@ from cringe_pics_telebot.helpers.metrics import (
 def test_stopwatch_uses_injected_monotonic_clock() -> None:
     clock = iter((10.0, 10.125)).__next__
 
-    assert Stopwatch.start(clock=clock).elapsed_milliseconds() == 125
+    assert_that(Stopwatch.start(clock=clock).elapsed_milliseconds(), equal_to(125))
 
 
 def test_create_metrics_sink_disables_metrics_without_host() -> None:
@@ -32,8 +33,8 @@ def test_create_metrics_sink_disables_metrics_without_host() -> None:
 
     sink = create_metrics_sink({}, client_factory=client_factory)
 
-    assert isinstance(sink, NullMetricsSink)
-    assert factory_called is False
+    assert_that(sink, instance_of(NullMetricsSink))
+    assert_that(factory_called, is_(False))
 
 
 def test_create_metrics_sink_uses_external_endpoint_and_emits_pipeline() -> None:
@@ -60,19 +61,29 @@ def test_create_metrics_sink_uses_external_endpoint_and_emits_pipeline() -> None
         ]
     )
 
-    assert isinstance(sink, StatsDMetricsSink)
-    assert client_arguments == {
-        "host": "metrics.example.com",
-        "port": 18125,
-        "prefix": "test_bot",
-    }
-    assert client.pipeline_entered is True
-    assert client.pipeline_exited is True
-    assert client.calls == [
-        ("timing", "inline.total", 12.5),
-        ("counter", "inline.requests", 2),
-        ("gauge", "inline.results", 49),
-    ]
+    assert_that(sink, instance_of(StatsDMetricsSink))
+    assert_that(
+        client_arguments,
+        equal_to(
+            {
+                "host": "metrics.example.com",
+                "port": 18125,
+                "prefix": "test_bot",
+            }
+        ),
+    )
+    assert_that(client.pipeline_entered, is_(True))
+    assert_that(client.pipeline_exited, is_(True))
+    assert_that(
+        client.calls,
+        equal_to(
+            [
+                ("timing", "inline.total", 12.5),
+                ("counter", "inline.requests", 2),
+                ("gauge", "inline.results", 49),
+            ]
+        ),
+    )
 
 
 def test_create_metrics_sink_fails_fast_for_invalid_port() -> None:
@@ -93,8 +104,8 @@ def test_statsd_sink_fails_open_when_pipeline_fails() -> None:
 
     StatsDMetricsSink(client).emit([TimingMetric("inline.total", 10)])
 
-    assert client.pipeline_entered is True
-    assert client.pipeline_exited is True
+    assert_that(client.pipeline_entered, is_(True))
+    assert_that(client.pipeline_exited, is_(True))
 
 
 def test_configured_metrics_restores_previous_sink_and_closes_client() -> None:
@@ -105,10 +116,10 @@ def test_configured_metrics_restores_previous_sink_and_closes_client() -> None:
         {"STATSD_HOST": "metrics.example.com"},
         client_factory=lambda **kwargs: client,
     ) as configured_sink:
-        assert get_metrics_sink() is configured_sink
+        assert_that(get_metrics_sink(), same_instance(configured_sink))
 
-    assert get_metrics_sink() is previous_sink
-    assert client.closed is True
+    assert_that(get_metrics_sink(), same_instance(previous_sink))
+    assert_that(client.closed, is_(True))
 
 
 class _RecordingStatsDClient:

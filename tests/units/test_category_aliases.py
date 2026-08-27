@@ -1,4 +1,5 @@
 import pytest
+from hamcrest import assert_that, equal_to
 
 from cringe_pics_telebot.services.category_aliases import (
     InvalidCategoryAliasesError,
@@ -7,10 +8,9 @@ from cringe_pics_telebot.services.category_aliases import (
 
 
 def test_parse_category_search_aliases_preserves_first_unique_spelling() -> None:
-    assert parse_category_search_aliases("  полдень  \n/ДЕНЬ\nдень\n\n с обеда \n / \nПОЛДЕНЬ") == (
-        "полдень",
-        "/ДЕНЬ",
-        "с обеда",
+    assert_that(
+        parse_category_search_aliases("  полдень  \n/ДЕНЬ\nдень\n\n с обеда \n / \nПОЛДЕНЬ"),
+        equal_to(("полдень", "/ДЕНЬ", "с обеда")),
     )
 
 

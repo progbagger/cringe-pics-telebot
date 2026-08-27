@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 from datetime import time, timedelta
 
 import pytest
+from hamcrest import assert_that, empty, equal_to, is_, same_instance
 
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import (
@@ -60,9 +61,9 @@ async def test_sync_reconciles_changes_isolates_failures_and_honors_lease(
         ),
     ):
         first = await synchronize_media_catalog()
-        assert first.categories == 2
-        assert first.failed == 0
-        assert first.discovered == first.created == 3
+        assert_that(first.categories, equal_to(2))
+        assert_that(first.failed, equal_to(0))
+        assert_that((first.discovered, first.created), equal_to((3, 3)))
 
         await fake_yandex_server.configure_directory(
             "day",
@@ -74,18 +75,18 @@ async def test_sync_reconciles_changes_isolates_failures_and_honors_lease(
         await fake_yandex_server.configure_directory("broken", fail=True)
 
         second = await synchronize_media_catalog()
-        assert second.categories == 1
-        assert second.failed == 1
-        assert second.discovered == 2
-        assert second.created == second.changed == second.deactivated == 1
+        assert_that(second.categories, equal_to(1))
+        assert_that(second.failed, equal_to(1))
+        assert_that(second.discovered, equal_to(2))
+        assert_that((second.created, second.changed, second.deactivated), equal_to((1, 1, 1)))
 
         media = await get_category_media_by_subscription_types([1, 2], active_only=False)
         by_path = {item.source_path: item for item in media}
-        assert by_path["day/image.png"].source_revision == "sha256:changed"
-        assert by_path["day/image.png"].status is CategoryMediaStatus.pending
-        assert by_path["day/second.png"].status is CategoryMediaStatus.inactive
-        assert by_path["day/third.png"].status is CategoryMediaStatus.pending
-        assert by_path["broken/image.png"].is_active is True
+        assert_that(by_path["day/image.png"].source_revision, equal_to("sha256:changed"))
+        assert_that(by_path["day/image.png"].status, same_instance(CategoryMediaStatus.pending))
+        assert_that(by_path["day/second.png"].status, same_instance(CategoryMediaStatus.inactive))
+        assert_that(by_path["day/third.png"].status, same_instance(CategoryMediaStatus.pending))
+        assert_that(by_path["broken/image.png"].is_active, is_(True))
 
         await cache.set(
             key=MEDIA_SYNC_LEASE_KEY,
@@ -95,8 +96,11 @@ async def test_sync_reconciles_changes_isolates_failures_and_honors_lease(
         )
         requests_before_skip = len(await fake_yandex_server.requests())
         skipped = await synchronize_media_catalog()
-        assert skipped.acquired is False
-        assert len(await fake_yandex_server.requests()) == requests_before_skip
+        assert_that(skipped.acquired, is_(False))
+        assert_that(len(await fake_yandex_server.requests()), equal_to(requests_before_skip))
 
     requests = await fake_yandex_server.requests()
-    assert not any(request["method"] in {"resources/download", "download"} for request in requests)
+    assert_that(
+        {request["method"] for request in requests} & {"resources/download", "download"},
+        empty(),
+    )

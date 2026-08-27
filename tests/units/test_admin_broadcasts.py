@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+from hamcrest import assert_that, is_
+
 from cringe_pics_telebot.repositories.postgres.entities import (
     AdminBroadcast,
     AdminBroadcastStatus,
@@ -15,8 +17,8 @@ def test_broadcast_without_override_uses_each_users_timezone() -> None:
     broadcast = _broadcast(scheduled_local_at=datetime(2026, 8, 17, 10, 0))
     current_time = datetime(2026, 8, 17, 3, 0, tzinfo=UTC)
 
-    assert is_admin_broadcast_due(broadcast, user=_user(700, 420), now=current_time)
-    assert not is_admin_broadcast_due(broadcast, user=_user(400, 240), now=current_time)
+    assert_that(is_admin_broadcast_due(broadcast, user=_user(700, 420), now=current_time), is_(True))
+    assert_that(is_admin_broadcast_due(broadcast, user=_user(400, 240), now=current_time), is_(False))
 
 
 def test_broadcast_override_uses_one_fixed_timezone_for_all_users() -> None:
@@ -26,21 +28,27 @@ def test_broadcast_override_uses_one_fixed_timezone_for_all_users() -> None:
     )
     current_time = datetime(2026, 8, 17, 3, 0, tzinfo=UTC)
 
-    assert is_admin_broadcast_due(broadcast, user=_user(700, 420), now=current_time)
-    assert is_admin_broadcast_due(broadcast, user=_user(400, 240), now=current_time)
-    assert is_admin_broadcast_due(broadcast, user=_user(-500, -300), now=current_time)
+    assert_that(is_admin_broadcast_due(broadcast, user=_user(700, 420), now=current_time), is_(True))
+    assert_that(is_admin_broadcast_due(broadcast, user=_user(400, 240), now=current_time), is_(True))
+    assert_that(is_admin_broadcast_due(broadcast, user=_user(-500, -300), now=current_time), is_(True))
 
 
 def test_local_broadcast_completes_only_after_latest_supported_timezone() -> None:
     broadcast = _broadcast(scheduled_local_at=datetime(2026, 8, 17, 10, 0))
 
-    assert not is_admin_broadcast_complete(
-        broadcast,
-        now=datetime(2026, 8, 17, 21, 59, tzinfo=UTC),
+    assert_that(
+        is_admin_broadcast_complete(
+            broadcast,
+            now=datetime(2026, 8, 17, 21, 59, tzinfo=UTC),
+        ),
+        is_(False),
     )
-    assert is_admin_broadcast_complete(
-        broadcast,
-        now=datetime(2026, 8, 17, 22, 0, tzinfo=UTC),
+    assert_that(
+        is_admin_broadcast_complete(
+            broadcast,
+            now=datetime(2026, 8, 17, 22, 0, tzinfo=UTC),
+        ),
+        is_(True),
     )
 
 

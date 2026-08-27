@@ -8,6 +8,7 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendPhoto
 from aiogram.types import Message
+from hamcrest import assert_that, equal_to, has_length, instance_of, same_instance
 
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -36,12 +37,11 @@ async def test_ready_media_is_sent_without_redis_or_yandex(monkeypatch: pytest.M
 
     result = await media_delivery.deliver_category_media(_media(file_id="ready-file-id"), send=send)
 
-    assert result is send.return_value
-    await_args = send.await_args
-    assert await_args is not None
-    sent_media = await_args.args[0]
-    assert isinstance(sent_media, CachedMedia)
-    assert sent_media.id == "ready-file-id"
+    assert_that(result, same_instance(send.return_value))
+    assert_that(send.await_args_list, has_length(1))
+    sent_media = send.await_args_list[0].args[0]
+    assert_that(sent_media, instance_of(CachedMedia))
+    assert_that(sent_media.id, equal_to("ready-file-id"))
     acquire.assert_not_awaited()
     download.assert_not_awaited()
 
@@ -63,11 +63,10 @@ async def test_pending_media_is_materialized_after_real_send(monkeypatch: pytest
 
     await media_delivery.deliver_category_media(media, send=send)
 
-    await_args = send.await_args
-    assert await_args is not None
-    sent_media = await_args.args[0]
-    assert isinstance(sent_media, LinkedMedia)
-    assert sent_media.url == "https://media.test/image.png"
+    assert_that(send.await_args_list, has_length(1))
+    sent_media = send.await_args_list[0].args[0]
+    assert_that(sent_media, instance_of(LinkedMedia))
+    assert_that(sent_media.url, equal_to("https://media.test/image.png"))
     materialize.assert_awaited_once_with(
         media_id=media.id,
         source_revision=media.source_revision,
@@ -124,7 +123,7 @@ async def test_concurrent_delivery_uploads_pending_revision_once(monkeypatch: py
     await asyncio.gather(owner, waiter)
 
     download.assert_awaited_once()
-    assert acquire_calls == 2
+    assert_that(acquire_calls, equal_to(2))
 
 
 async def test_invalid_file_id_is_cleared_and_retried_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,8 +149,8 @@ async def test_invalid_file_id_is_cleared_and_retried_once(monkeypatch: pytest.M
     await media_delivery.deliver_category_media(ready, send=send)
 
     invalidate.assert_awaited_once_with(media_id=ready.id, telegram_file_id="invalid-file-id")
-    assert isinstance(send.await_args_list[0].args[0], CachedMedia)
-    assert isinstance(send.await_args_list[1].args[0], LinkedMedia)
+    assert_that(send.await_args_list[0].args[0], instance_of(CachedMedia))
+    assert_that(send.await_args_list[1].args[0], instance_of(LinkedMedia))
 
 
 async def test_cancellation_releases_owner_lease_without_materializing(monkeypatch: pytest.MonkeyPatch) -> None:

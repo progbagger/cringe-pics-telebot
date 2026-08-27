@@ -3,6 +3,7 @@ from typing import cast
 
 import pytest
 from aiogram import Bot
+from hamcrest import assert_that, equal_to, is_
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.postgres import (
@@ -39,13 +40,13 @@ def test_same_local_minute(
     timezone_offset_minutes: int,
     expected: bool,
 ) -> None:
-    assert (
+    assert_that(
         _same_local_minute(
             scheduled_time,
             current_time,
             timezone_offset_minutes=timezone_offset_minutes,
-        )
-        is expected
+        ),
+        is_(expected),
     )
 
 
@@ -61,7 +62,7 @@ async def test_broadcast_fetches_media_once_and_prefers_pending_for_every_recipi
     delivered: list[CategoryMedia] = []
 
     async def get_users(subscription_type_id: int) -> list[User]:
-        assert subscription_type_id == subscription_type.id
+        assert_that(subscription_type_id, equal_to(subscription_type.id))
         return users
 
     async def get_media(category_ids: list[int]) -> list[CategoryMedia]:
@@ -85,9 +86,9 @@ async def test_broadcast_fetches_media_once_and_prefers_pending_for_every_recipi
         current_time=now,
     )
 
-    assert sent == 2
-    assert requested_category_ids == [[subscription_type.id]]
-    assert delivered == [pending, pending]
+    assert_that(sent, equal_to(2))
+    assert_that(requested_category_ids, equal_to([[subscription_type.id]]))
+    assert_that(delivered, equal_to([pending, pending]))
 
 
 async def test_broadcast_does_not_reserve_empty_category(monkeypatch: MonkeyPatch) -> None:
@@ -114,8 +115,8 @@ async def test_broadcast_does_not_reserve_empty_category(monkeypatch: MonkeyPatc
         current_time=datetime(2026, 8, 25, 3, 0, tzinfo=UTC),
     )
 
-    assert sent == 0
-    assert reservation_attempted is False
+    assert_that(sent, equal_to(0))
+    assert_that(reservation_attempted, is_(False))
 
 
 def _subscription_type() -> SubscriptionType:

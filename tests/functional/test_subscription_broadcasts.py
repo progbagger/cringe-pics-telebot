@@ -3,6 +3,7 @@ from datetime import UTC, datetime, time
 from typing import Any
 
 import pytest
+from hamcrest import assert_that, empty, equal_to, has_item
 
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
@@ -41,22 +42,27 @@ async def test_subscription_broadcasts_use_each_users_local_time_without_duplica
     await synchronize_functional_media_catalog()
     await fake_yandex_server.reset()
 
-    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)) == 1
-    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, 45, tzinfo=UTC)) == 0
-    assert _sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")) == [700]
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)), equal_to(1))
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, 45, tzinfo=UTC)), equal_to(0))
+    assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
 
-    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 6, 0, tzinfo=UTC)) == 1
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 8, 16, 6, 0, tzinfo=UTC)), equal_to(1))
     send_photo_requests = await fake_telegram_server.requests(method="sendPhoto")
-    assert _sent_chat_ids(send_photo_requests) == [700, 400]
-    assert [request["payload"]["photo"] for request in send_photo_requests] == [
-        f"{fake_yandex_server.base_url}/download/image.png",
-        "functional-photo-file-id",
-    ]
+    assert_that(_sent_chat_ids(send_photo_requests), equal_to([700, 400]))
+    assert_that(
+        [request["payload"]["photo"] for request in send_photo_requests],
+        equal_to(
+            [
+                f"{fake_yandex_server.base_url}/download/image.png",
+                "functional-photo-file-id",
+            ]
+        ),
+    )
 
-    yandex_requests = await fake_yandex_server.requests()
-    assert not any(request["method"] == "resources" for request in yandex_requests)
-    assert any(request["method"] == "resources/download" for request in yandex_requests)
-    assert not any(request["method"] == "download" for request in yandex_requests)
+    yandex_methods = [request["method"] for request in await fake_yandex_server.requests()]
+    assert_that([method for method in yandex_methods if method == "resources"], empty())
+    assert_that(yandex_methods, has_item("resources/download"))
+    assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
 async def test_subscription_broadcasts_skip_empty_category(
@@ -76,9 +82,9 @@ async def test_subscription_broadcasts_skip_empty_category(
     await synchronize_functional_media_catalog()
     await fake_yandex_server.reset()
 
-    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)) == 0
-    assert not await fake_telegram_server.requests(method="sendPhoto")
-    assert not await fake_yandex_server.requests()
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)), equal_to(0))
+    assert_that(await fake_telegram_server.requests(method="sendPhoto"), empty())
+    assert_that(await fake_yandex_server.requests(), empty())
 
 
 async def test_subscription_broadcast_prefers_pending_media_over_ready(
@@ -106,17 +112,26 @@ async def test_subscription_broadcast_prefers_pending_media_over_ready(
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
 
-    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)) == 1
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)), equal_to(1))
 
     send_photo_requests = await fake_telegram_server.requests(method="sendPhoto")
-    assert [request["payload"]["photo"] for request in send_photo_requests] == [
-        f"{fake_yandex_server.base_url}/download/pending.png"
-    ]
-    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
-    assert await read_functional_category_media_states() == {
-        "morning/pending.png": ("ready", "functional-photo-file-id"),
-        "morning/ready.png": ("ready", "functional-ready-file-id"),
-    }
+    assert_that(
+        [request["payload"]["photo"] for request in send_photo_requests],
+        equal_to([f"{fake_yandex_server.base_url}/download/pending.png"]),
+    )
+    assert_that(
+        sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()),
+        equal_to(1),
+    )
+    assert_that(
+        await read_functional_category_media_states(),
+        equal_to(
+            {
+                "morning/pending.png": ("ready", "functional-photo-file-id"),
+                "morning/ready.png": ("ready", "functional-ready-file-id"),
+            }
+        ),
+    )
 
 
 async def test_concurrent_scheduled_recipients_materialize_one_pending_revision_once(
@@ -137,14 +152,17 @@ async def test_concurrent_scheduled_recipients_materialize_one_pending_revision_
     await synchronize_functional_media_catalog()
     await fake_yandex_server.reset()
 
-    assert await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)) == 2
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC)), equal_to(2))
 
     send_photo_requests = await fake_telegram_server.requests(method="sendPhoto")
-    assert sorted(_sent_chat_ids(send_photo_requests)) == [701, 702]
+    assert_that(sorted(_sent_chat_ids(send_photo_requests)), equal_to([701, 702]))
     sent_media = [request["payload"]["photo"] for request in send_photo_requests]
-    assert sent_media.count(f"{fake_yandex_server.base_url}/download/image.png") == 1
-    assert sent_media.count("functional-photo-file-id") == 1
-    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
+    assert_that(sent_media.count(f"{fake_yandex_server.base_url}/download/image.png"), equal_to(1))
+    assert_that(sent_media.count("functional-photo-file-id"), equal_to(1))
+    assert_that(
+        sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()),
+        equal_to(1),
+    )
 
 
 def _sent_chat_ids(requests: list[dict[str, Any]]) -> list[int]:

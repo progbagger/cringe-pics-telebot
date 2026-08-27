@@ -1,4 +1,5 @@
 import pytest
+from hamcrest import assert_that, equal_to
 
 from cringe_pics_telebot.services.timezones import (
     InvalidTimezoneOffsetError,
@@ -19,7 +20,7 @@ from cringe_pics_telebot.services.timezones import (
     ],
 )
 def test_parse_timezone_offset(value: str, expected: int) -> None:
-    assert parse_timezone_offset(value) == expected
+    assert_that(parse_timezone_offset(value), equal_to(expected))
 
 
 @pytest.mark.parametrize(
@@ -52,4 +53,4 @@ def test_parse_timezone_offset_rejects_invalid_values(value: str) -> None:
     ],
 )
 def test_format_timezone_offset(offset_minutes: int, expected: str) -> None:
-    assert format_timezone_offset(offset_minutes) == expected
+    assert_that(format_timezone_offset(offset_minutes), equal_to(expected))

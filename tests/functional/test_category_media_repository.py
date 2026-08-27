@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, time
 
 import pytest
+from hamcrest import assert_that, empty, equal_to, none, not_none, same_instance
 
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMediaSource,
@@ -41,12 +42,15 @@ async def test_reconcile_materialize_and_replace_revision(docker_compose: Depend
             sources=[source],
             seen_at=first_seen,
         )
-        assert result.discovered == result.created == 1
-        assert result.changed == result.reactivated == result.deactivated == result.unchanged == 0
+        assert_that((result.discovered, result.created), equal_to((1, 1)))
+        assert_that(
+            (result.changed, result.reactivated, result.deactivated, result.unchanged),
+            equal_to((0, 0, 0, 0)),
+        )
 
         media, *_ = await get_category_media_by_subscription_types([1])
-        assert media.status is CategoryMediaStatus.pending
-        assert media.last_seen_at == first_seen
+        assert_that(media.status, same_instance(CategoryMediaStatus.pending))
+        assert_that(media.last_seen_at, equal_to(first_seen))
 
         async with transaction():
             materialized = await materialize_category_media(
@@ -56,32 +60,37 @@ async def test_reconcile_materialize_and_replace_revision(docker_compose: Depend
                 telegram_file_unique_id="telegram-unique-id",
                 materialized_at=materialized_at,
             )
-        assert materialized is not None
-        assert materialized.status is CategoryMediaStatus.ready
+        assert_that(
+            [item.status for item in [materialized] if item is not None],
+            equal_to([CategoryMediaStatus.ready]),
+        )
 
         unchanged = await reconcile_category_media_snapshot(
             subscription_type_id=1,
             sources=[source],
             seen_at=second_seen,
         )
-        assert unchanged.unchanged == 1
+        assert_that(unchanged.unchanged, equal_to(1))
         ready, *_ = await get_category_media_by_subscription_types([1], ready_only=True)
-        assert ready.telegram_file_id == "telegram-file-id"
-        assert ready.last_seen_at == second_seen
-        assert ready.updated_at == materialized_at
+        assert_that(ready.telegram_file_id, equal_to("telegram-file-id"))
+        assert_that(ready.last_seen_at, equal_to(second_seen))
+        assert_that(ready.updated_at, equal_to(materialized_at))
 
         changed = await reconcile_category_media_snapshot(
             subscription_type_id=1,
             sources=[_source(source.source_path, revision="sha256:second")],
             seen_at=datetime(2026, 8, 19, 4, tzinfo=UTC),
         )
-        assert changed.changed == 1
+        assert_that(changed.changed, equal_to(1))
         pending = await get_category_media(media.id)
-        assert pending is not None
-        assert pending.status is CategoryMediaStatus.pending
-        assert pending.telegram_file_id is None
-        assert pending.telegram_file_unique_id is None
-        assert pending.materialized_at is None
+        assert_that(
+            [
+                (item.status, item.telegram_file_id, item.telegram_file_unique_id, item.materialized_at)
+                for item in [pending]
+                if item is not None
+            ],
+            equal_to([(CategoryMediaStatus.pending, None, None, None)]),
+        )
 
 
 async def test_deactivate_and_reactivate_same_revision_preserves_file_id(
@@ -93,27 +102,31 @@ async def test_deactivate_and_reactivate_same_revision_preserves_file_id(
         await reconcile_category_media_snapshot(subscription_type_id=1, sources=[source])
         media, *_ = await get_category_media_by_subscription_types([1])
         async with transaction():
-            assert await materialize_category_media(
-                media_id=media.id,
-                source_revision=source.source_revision,
-                telegram_file_id="telegram-file-id",
-                telegram_file_unique_id="telegram-unique-id",
+            assert_that(
+                await materialize_category_media(
+                    media_id=media.id,
+                    source_revision=source.source_revision,
+                    telegram_file_id="telegram-file-id",
+                    telegram_file_unique_id="telegram-unique-id",
+                ),
+                not_none(),
             )
 
         removed = await reconcile_category_media_snapshot(subscription_type_id=1, sources=[])
-        assert removed.deactivated == 1
-        assert await get_category_media_by_subscription_types([1]) == []
+        assert_that(removed.deactivated, equal_to(1))
+        assert_that(await get_category_media_by_subscription_types([1]), empty())
         inactive = await get_category_media(media.id)
-        assert inactive is not None
-        assert inactive.status is CategoryMediaStatus.inactive
-        assert inactive.telegram_file_id == "telegram-file-id"
+        assert_that(
+            [(item.status, item.telegram_file_id) for item in [inactive] if item is not None],
+            equal_to([(CategoryMediaStatus.inactive, "telegram-file-id")]),
+        )
 
         restored = await reconcile_category_media_snapshot(subscription_type_id=1, sources=[source])
-        assert restored.reactivated == 1
+        assert_that(restored.reactivated, equal_to(1))
         ready, *_ = await get_category_media_by_subscription_types([1], ready_only=True)
-        assert ready.id == media.id
-        assert ready.status is CategoryMediaStatus.ready
-        assert ready.telegram_file_id == "telegram-file-id"
+        assert_that(ready.id, equal_to(media.id))
+        assert_that(ready.status, same_instance(CategoryMediaStatus.ready))
+        assert_that(ready.telegram_file_id, equal_to("telegram-file-id"))
 
 
 async def test_materialize_and_invalidate_are_conditional(docker_compose: DependencyPorts) -> None:
@@ -124,29 +137,32 @@ async def test_materialize_and_invalidate_are_conditional(docker_compose: Depend
         media, *_ = await get_category_media_by_subscription_types([1])
 
         async with transaction():
-            assert (
+            assert_that(
                 await materialize_category_media(
                     media_id=media.id,
                     source_revision="sha256:stale",
                     telegram_file_id="telegram-file-id",
                     telegram_file_unique_id="telegram-unique-id",
-                )
-                is None
+                ),
+                none(),
             )
         async with transaction():
-            assert await materialize_category_media(
-                media_id=media.id,
-                source_revision=source.source_revision,
-                telegram_file_id="telegram-file-id",
-                telegram_file_unique_id="telegram-unique-id",
+            assert_that(
+                await materialize_category_media(
+                    media_id=media.id,
+                    source_revision=source.source_revision,
+                    telegram_file_id="telegram-file-id",
+                    telegram_file_unique_id="telegram-unique-id",
+                ),
+                not_none(),
             )
         async with transaction():
-            assert (
+            assert_that(
                 await invalidate_category_media_file_id(
                     media_id=media.id,
                     telegram_file_id="stale-file-id",
-                )
-                is None
+                ),
+                none(),
             )
 
         async with transaction():
@@ -154,8 +170,10 @@ async def test_materialize_and_invalidate_are_conditional(docker_compose: Depend
                 media_id=media.id,
                 telegram_file_id="telegram-file-id",
             )
-        assert invalidated is not None
-        assert invalidated.status is CategoryMediaStatus.pending
+        assert_that(
+            [item.status for item in [invalidated] if item is not None],
+            equal_to([CategoryMediaStatus.pending]),
+        )
 
 
 async def test_reconcile_deduplicates_source_paths(docker_compose: DependencyPorts) -> None:
@@ -166,9 +184,9 @@ async def test_reconcile_deduplicates_source_paths(docker_compose: DependencyPor
             subscription_type_id=1,
             sources=[first, second],
         )
-        assert result.discovered == result.created == 1
+        assert_that((result.discovered, result.created), equal_to((1, 1)))
         media, *_ = await get_category_media_by_subscription_types([1])
-        assert media.source_revision == second.source_revision
+        assert_that(media.source_revision, equal_to(second.source_revision))
 
 
 def _source(path: str, *, revision: str) -> CategoryMediaSource:

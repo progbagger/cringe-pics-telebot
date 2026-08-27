@@ -15,6 +15,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 from aiogram import Bot
+from hamcrest import assert_that, empty, equal_to, greater_than_or_equal_to, is_, none
 from redis import asyncio as redis
 
 from cringe_pics_telebot.bot.bot import create_bot
@@ -1083,7 +1084,7 @@ async def _prepare_legacy_schema(dependency_ports: DependencyPorts) -> None:
 async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
-        assert (
+        assert_that(
             await connection.fetchval(
                 """
                 SELECT data_type
@@ -1092,31 +1093,41 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
                   AND table_name = 'subscription_types'
                   AND column_name = 'time'
                 """
-            )
-            == "time without time zone"
+            ),
+            equal_to("time without time zone"),
         )
-        assert await connection.fetchval("SELECT time FROM subscription_types WHERE name = '/migration-probe'") == time(
-            10, 0
+        assert_that(
+            await connection.fetchval("SELECT time FROM subscription_types WHERE name = '/migration-probe'"),
+            equal_to(time(10, 0)),
         )
-        assert await connection.fetchval("SELECT timezone_offset_minutes FROM users WHERE id = 1") == 420
-        assert await connection.fetchval("SELECT is_active FROM users WHERE id = 1") is True
-        assert (
-            await connection.fetchval("SELECT search_aliases FROM subscription_types WHERE name = '/migration-probe'")
-            == []
+        assert_that(
+            await connection.fetchval("SELECT timezone_offset_minutes FROM users WHERE id = 1"),
+            equal_to(420),
         )
-        assert await connection.fetchval("SELECT to_regclass('administrators')") == "administrators"
-        assert await connection.fetchval("SELECT to_regclass('admin_broadcasts')") == "admin_broadcasts"
-        assert (
-            await connection.fetchval("SELECT to_regclass('admin_broadcast_recipients')")
-            == "admin_broadcast_recipients"
+        assert_that(await connection.fetchval("SELECT is_active FROM users WHERE id = 1"), is_(True))
+        assert_that(
+            await connection.fetchval("SELECT search_aliases FROM subscription_types WHERE name = '/migration-probe'"),
+            empty(),
         )
-        assert (
-            await connection.fetchval("SELECT to_regclass('admin_broadcast_deliveries')")
-            == "admin_broadcast_deliveries"
+        assert_that(await connection.fetchval("SELECT to_regclass('administrators')"), equal_to("administrators"))
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('admin_broadcasts')"),
+            equal_to("admin_broadcasts"),
         )
-        assert int(await connection.fetchval("SHOW server_version_num")) >= 180000
-        assert await connection.fetchval("SELECT to_regclass('category_media')") == "category_media"
-        assert (
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('admin_broadcast_recipients')"),
+            equal_to("admin_broadcast_recipients"),
+        )
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('admin_broadcast_deliveries')"),
+            equal_to("admin_broadcast_deliveries"),
+        )
+        assert_that(int(await connection.fetchval("SHOW server_version_num")), greater_than_or_equal_to(180000))
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('category_media')"),
+            equal_to("category_media"),
+        )
+        assert_that(
             await connection.fetchval(
                 """
                 SELECT attgenerated
@@ -1124,8 +1135,8 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
                 WHERE attrelid = 'category_media'::regclass
                   AND attname = 'status'
                 """
-            )
-            == b"v"
+            ),
+            equal_to(b"v"),
         )
     finally:
         await connection.close()
@@ -1134,8 +1145,11 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
 async def _assert_category_media_table_absent(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
-        assert await connection.fetchval("SELECT to_regclass('category_media')") is None
-        assert await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'") == 1
+        assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), none())
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'"),
+            equal_to(1),
+        )
     finally:
         await connection.close()
 
@@ -1143,18 +1157,24 @@ async def _assert_category_media_table_absent(dependency_ports: DependencyPorts)
 async def _assert_category_aliases_column_absent(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
-        assert not await connection.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT 1
-                FROM information_schema.columns
-                WHERE table_schema = current_schema()
-                  AND table_name = 'subscription_types'
-                  AND column_name = 'search_aliases'
-            )
-            """
+        assert_that(
+            await connection.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'subscription_types'
+                      AND column_name = 'search_aliases'
+                )
+                """
+            ),
+            is_(False),
         )
-        assert await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'") == 1
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'"),
+            equal_to(1),
+        )
     finally:
         await connection.close()
 

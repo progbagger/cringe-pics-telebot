@@ -9,6 +9,7 @@ from functools import partial
 from typing import Any
 
 import pytest
+from hamcrest import assert_that, equal_to, has_length
 
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
@@ -205,7 +206,7 @@ async def _measure_scenario(
             "answerInlineQuery",
             predicate=partial(_has_inline_query_id, query_id=query_id),
         )
-        assert len(answer["payload"]["results"]) == expected_results
+        assert_that(answer["payload"]["results"], has_length(expected_results))
 
         measurement = {"total": float((await fake_statsd_server.wait_for_metric("functional.inline.total"))["value"])}
         for stage in stages:
@@ -214,7 +215,7 @@ async def _measure_scenario(
         for name, expected_value in expected_counts.items():
             metric = await fake_statsd_server.wait_for_metric(f"functional.inline.{name}")
             value = int(metric["value"])
-            assert value == expected_value
+            assert_that(value, equal_to(expected_value))
             if run == 0:
                 observed_counts[name] = value
         measurements.append(measurement)

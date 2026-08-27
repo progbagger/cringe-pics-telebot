@@ -3,6 +3,7 @@ from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from hamcrest import assert_that, equal_to, has_length, has_properties, is_, same_instance
 
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMediaReconcileResult,
@@ -18,7 +19,7 @@ async def test_runner_synchronizes_immediately_then_waits(monkeypatch: pytest.Mo
     monkeypatch.setattr(media_sync, "synchronize_media_catalog", synchronize)
 
     async def cancel_during_sleep(seconds: float) -> None:
-        assert seconds == 43_200
+        assert_that(seconds, equal_to(43_200))
         raise asyncio.CancelledError
 
     with pytest.raises(asyncio.CancelledError):
@@ -55,14 +56,13 @@ async def test_synchronization_isolates_category_failures(monkeypatch: pytest.Mo
 
     result = await media_sync.synchronize_media_catalog()
 
-    assert result.acquired is True
-    assert result.categories == 1
-    assert result.failed == 1
-    assert result.discovered == result.created == 1
-    await_args = reconcile.await_args
-    assert await_args is not None
-    source = await_args.kwargs["sources"][0]
-    assert source.telegram_media_type is TelegramMediaType.animation
+    assert_that(result.acquired, is_(True))
+    assert_that(result.categories, equal_to(1))
+    assert_that(result.failed, equal_to(1))
+    assert_that(result, has_properties(discovered=1, created=1))
+    assert_that(reconcile.await_args_list, has_length(1))
+    source = reconcile.await_args_list[0].kwargs["sources"][0]
+    assert_that(source.telegram_media_type, same_instance(TelegramMediaType.animation))
     delete_lease.assert_awaited_once()
 
 
@@ -85,9 +85,9 @@ async def test_lost_lease_does_not_publish_snapshot(monkeypatch: pytest.MonkeyPa
 
     result = await media_sync.synchronize_media_catalog()
 
-    assert result.acquired is True
-    assert result.categories == 0
-    assert result.failed == 1
+    assert_that(result.acquired, is_(True))
+    assert_that(result.categories, equal_to(0))
+    assert_that(result.failed, equal_to(1))
     reconcile.assert_not_awaited()
 
 

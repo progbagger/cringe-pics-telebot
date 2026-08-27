@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from hamcrest import assert_that, empty, equal_to
 
 from tests.functional.conftest import FakeTelegramServer, FunctionalSubscriptionType
 
@@ -27,22 +28,25 @@ async def test_local_broadcast_sends_to_all_active_users_in_their_timezones_once
         scheduled_local_at=datetime(2026, 8, 17, 10, 0),
     )
 
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)) == 1
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, 30, tzinfo=UTC)) == 0
-    assert _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")) == [700]
-    assert await read_admin_broadcast_state(broadcast_id) == ("sending", [(700, "sent")])
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)), equal_to(1))
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, 30, tzinfo=UTC)), equal_to(0))
+    assert_that(_copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")), equal_to([700]))
+    assert_that(await read_admin_broadcast_state(broadcast_id), equal_to(("sending", [(700, "sent")])))
 
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 6, 0, tzinfo=UTC)) == 1
-    assert _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")) == [400, 700]
-    assert await read_admin_broadcast_state(broadcast_id) == (
-        "sending",
-        [(400, "sent"), (700, "sent")],
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 6, 0, tzinfo=UTC)), equal_to(1))
+    assert_that(
+        _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")),
+        equal_to([400, 700]),
+    )
+    assert_that(
+        await read_admin_broadcast_state(broadcast_id),
+        equal_to(("sending", [(400, "sent"), (700, "sent")])),
     )
 
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 22, 0, tzinfo=UTC)) == 0
-    assert await read_admin_broadcast_state(broadcast_id) == (
-        "completed",
-        [(400, "sent"), (700, "sent")],
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 22, 0, tzinfo=UTC)), equal_to(0))
+    assert_that(
+        await read_admin_broadcast_state(broadcast_id),
+        equal_to(("completed", [(400, "sent"), (700, "sent")])),
     )
 
 
@@ -60,14 +64,17 @@ async def test_timezone_override_sends_to_every_user_at_one_instant(
         timezone_offset_minutes=420,
     )
 
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 2, 59, tzinfo=UTC)) == 0
-    assert not await fake_telegram_server.requests(method="copyMessage")
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 2, 59, tzinfo=UTC)), equal_to(0))
+    assert_that(await fake_telegram_server.requests(method="copyMessage"), empty())
 
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)) == 2
-    assert _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")) == [400, 700]
-    assert await read_admin_broadcast_state(broadcast_id) == (
-        "completed",
-        [(400, "sent"), (700, "sent")],
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)), equal_to(2))
+    assert_that(
+        _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")),
+        equal_to([400, 700]),
+    )
+    assert_that(
+        await read_admin_broadcast_state(broadcast_id),
+        equal_to(("completed", [(400, "sent"), (700, "sent")])),
     )
 
 
@@ -87,13 +94,13 @@ async def test_forbidden_user_is_deactivated_without_losing_profile(
     )
     await fake_telegram_server.set_forbidden_chat_ids(700)
 
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)) == 1
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)), equal_to(1))
 
-    assert await read_user_state(700) == (-300, False)
-    assert await read_user_state(400) == (240, True)
-    assert await read_admin_broadcast_state(broadcast_id) == (
-        "completed",
-        [(400, "sent"), (700, "failed")],
+    assert_that(await read_user_state(700), equal_to((-300, False)))
+    assert_that(await read_user_state(400), equal_to((240, True)))
+    assert_that(
+        await read_admin_broadcast_state(broadcast_id),
+        equal_to(("completed", [(400, "sent"), (700, "failed")])),
     )
 
 
@@ -115,10 +122,13 @@ async def test_explicit_inactive_recipient_is_added_to_one_broadcast(
         user_ids=(900,),
     )
 
-    assert await read_user_state(900) == (420, False)
-    assert await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)) == 2
-    assert _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")) == [400, 900]
-    assert await read_user_state(900) == (420, False)
+    assert_that(await read_user_state(900), equal_to((420, False)))
+    assert_that(await run_admin_broadcasts_at(datetime(2026, 8, 17, 3, 0, tzinfo=UTC)), equal_to(2))
+    assert_that(
+        _copied_chat_ids(await fake_telegram_server.requests(method="copyMessage")),
+        equal_to([400, 900]),
+    )
+    assert_that(await read_user_state(900), equal_to((420, False)))
 
 
 def _copied_chat_ids(requests: list[dict[str, Any]]) -> list[int]:
