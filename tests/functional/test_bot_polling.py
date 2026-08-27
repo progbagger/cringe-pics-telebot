@@ -4,7 +4,19 @@ from datetime import time
 from typing import Any
 
 import pytest
-from hamcrest import assert_that, equal_to, has_entries
+from hamcrest import (
+    assert_that,
+    contains_string,
+    empty,
+    equal_to,
+    has_entries,
+    has_item,
+    has_length,
+    is_,
+    is_in,
+    only_contains,
+    starts_with,
+)
 
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
@@ -38,25 +50,24 @@ async def test_bot_shows_start_screen_for_entry_points(
     )
 
     payload = request["payload"]
-    assert payload["chat_id"] == 42
-    assert "Что умеет бот" in payload["text"]
-    assert "Danil" in payload["text"]
-    assert (
-        "<code>/random</code>, <code>/morning</code>, <code>/day</code>, <code>/evening</code>, <code>/night</code>"
-    ) in payload["text"]
-    assert "<code>/list</code> или <code>/subscriptions</code>" in payload["text"]
-    assert "<code>/timezone [+HH:MM]</code>" in payload["text"]
-    assert "UTC+07:00" in payload["text"]
-    assert "<code>@имя_бота</code>" in payload["text"]
-    assert "Первый результат 🎲" in payload["text"]
-    assert _reply_keyboard_button_texts(payload) == [
-        "Подписки",
-        "/random",
-        "/morning",
-        "/day",
-        "/evening",
-        "/night",
-    ]
+    assert_that(payload["chat_id"], equal_to(42))
+    assert_that(payload["text"], contains_string("Что умеет бот"))
+    assert_that(payload["text"], contains_string("Danil"))
+    assert_that(
+        payload["text"],
+        contains_string(
+            "<code>/random</code>, <code>/morning</code>, <code>/day</code>, <code>/evening</code>, <code>/night</code>"
+        ),
+    )
+    assert_that(payload["text"], contains_string("<code>/list</code> или <code>/subscriptions</code>"))
+    assert_that(payload["text"], contains_string("<code>/timezone [+HH:MM]</code>"))
+    assert_that(payload["text"], contains_string("UTC+07:00"))
+    assert_that(payload["text"], contains_string("<code>@имя_бота</code>"))
+    assert_that(payload["text"], contains_string("Первый результат 🎲"))
+    assert_that(
+        _reply_keyboard_button_texts(payload),
+        equal_to(["Подписки", "/random", "/morning", "/day", "/evening", "/night"]),
+    )
 
 
 @pytest.mark.parametrize("text", ["/list", "/subscriptions", "Подписки"])
@@ -74,16 +85,21 @@ async def test_bot_shows_subscription_list(
     )
 
     payload = request["payload"]
-    assert payload["chat_id"] == 42
-    assert "список" in payload["text"]
-    assert "UTC+07:00" in payload["text"]
-    assert _inline_keyboard_button_texts(payload) == [
-        "❌ /random – 00:00",
-        "❌ /morning – 08:00",
-        "❌ /day – 13:00",
-        "❌ /evening – 19:00",
-        "❌ /night – 23:00",
-    ]
+    assert_that(payload["chat_id"], equal_to(42))
+    assert_that(payload["text"], contains_string("список"))
+    assert_that(payload["text"], contains_string("UTC+07:00"))
+    assert_that(
+        _inline_keyboard_button_texts(payload),
+        equal_to(
+            [
+                "❌ /random – 00:00",
+                "❌ /morning – 08:00",
+                "❌ /day – 13:00",
+                "❌ /evening – 19:00",
+                "❌ /night – 23:00",
+            ]
+        ),
+    )
 
 
 async def test_bot_shows_default_timezone(
@@ -97,8 +113,8 @@ async def test_bot_shows_default_timezone(
         predicate=lambda request: "текущий часовой пояс" in request["payload"].get("text", ""),
     )
 
-    assert request["payload"]["chat_id"] == 42
-    assert "UTC+07:00" in request["payload"]["text"]
+    assert_that(request["payload"]["chat_id"], equal_to(42))
+    assert_that(request["payload"]["text"], contains_string("UTC+07:00"))
 
 
 async def test_bot_saves_timezone(
@@ -113,8 +129,8 @@ async def test_bot_saves_timezone(
         predicate=lambda request: "Часовой пояс сохранён" in request["payload"].get("text", ""),
     )
 
-    assert "UTC+04:00" in request["payload"]["text"]
-    assert await read_user_timezone_offset(42) == 240
+    assert_that(request["payload"]["text"], contains_string("UTC+04:00"))
+    assert_that(await read_user_timezone_offset(42), equal_to(240))
 
 
 async def test_bot_rejects_invalid_timezone_without_changing_saved_value(
@@ -134,9 +150,9 @@ async def test_bot_rejects_invalid_timezone_without_changing_saved_value(
         predicate=lambda request: "Не удалось распознать" in request["payload"].get("text", ""),
     )
 
-    assert "-12:00" in request["payload"]["text"]
-    assert "+14:00" in request["payload"]["text"]
-    assert await read_user_timezone_offset(42) == -330
+    assert_that(request["payload"]["text"], contains_string("-12:00"))
+    assert_that(request["payload"]["text"], contains_string("+14:00"))
+    assert_that(await read_user_timezone_offset(42), equal_to(-330))
 
 
 async def test_bot_subscribes_from_callback(
@@ -150,7 +166,7 @@ async def test_bot_subscribes_from_callback(
         "answerCallbackQuery",
         predicate=lambda request: request["payload"].get("text") == "Подписка оформлена!",
     )
-    assert subscribe_answer["payload"]["callback_query_id"] == "callback-100"
+    assert_that(subscribe_answer["payload"]["callback_query_id"], equal_to("callback-100"))
 
     subscribe_markup = await fake_telegram_server.wait_for_request(
         "editMessageReplyMarkup",
@@ -162,7 +178,7 @@ async def test_bot_subscribes_from_callback(
             )
         ),
     )
-    assert "✅ /morning – 08:00" in _inline_keyboard_button_texts(subscribe_markup["payload"])
+    assert_that(_inline_keyboard_button_texts(subscribe_markup["payload"]), has_item("✅ /morning – 08:00"))
 
 
 async def test_bot_unsubscribes_from_callback(
@@ -178,7 +194,7 @@ async def test_bot_unsubscribes_from_callback(
         "answerCallbackQuery",
         predicate=lambda request: request["payload"].get("text") == "Подписка удалена!",
     )
-    assert unsubscribe_answer["payload"]["callback_query_id"] == "callback-100"
+    assert_that(unsubscribe_answer["payload"]["callback_query_id"], equal_to("callback-100"))
 
     unsubscribe_markup = await fake_telegram_server.wait_for_request(
         "editMessageReplyMarkup",
@@ -190,7 +206,7 @@ async def test_bot_unsubscribes_from_callback(
             )
         ),
     )
-    assert "❌ /morning – 08:00" in _inline_keyboard_button_texts(unsubscribe_markup["payload"])
+    assert_that(_inline_keyboard_button_texts(unsubscribe_markup["payload"]), has_item("❌ /morning – 08:00"))
 
 
 @pytest.mark.parametrize("category_name", ["/morning", "/day", "/evening", "/night", "/random"])
@@ -210,17 +226,17 @@ async def test_bot_sends_image_for_subscription_category(
         "sendMessage",
         predicate=lambda request: request["payload"].get("text") == "<i>Выбираю картинку</i>",
     )
-    assert _reply_to_message_id(choosing_message["payload"]) == 1
+    assert_that(_reply_to_message_id(choosing_message["payload"]), equal_to(1))
 
     edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
-    assert edit_media["payload"]["chat_id"] == 42
-    assert edit_media["payload"]["media"]["type"] == "photo"
-    assert edit_media["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
+    assert_that(edit_media["payload"]["chat_id"], equal_to(42))
+    assert_that(edit_media["payload"]["media"]["type"], equal_to("photo"))
+    assert_that(edit_media["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
-    yandex_requests = await fake_yandex_server.requests()
-    assert not any(request["method"] == "resources" for request in yandex_requests)
-    assert any(request["method"] == "resources/download" for request in yandex_requests)
-    assert not any(request["method"] == "download" for request in yandex_requests)
+    yandex_methods = [request["method"] for request in await fake_yandex_server.requests()]
+    assert_that([method for method in yandex_methods if method == "resources"], empty())
+    assert_that(yandex_methods, has_item("resources/download"))
+    assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
 async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
@@ -244,13 +260,24 @@ async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
     await fake_telegram_server.push_message(text="/day")
     edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
 
-    assert edit_media["payload"]["media"]["media"] == (f"{fake_yandex_server.base_url}/download/pending.png")
-    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
+    assert_that(
+        edit_media["payload"]["media"]["media"],
+        equal_to(f"{fake_yandex_server.base_url}/download/pending.png"),
+    )
+    assert_that(
+        sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()),
+        equal_to(1),
+    )
     states = await read_functional_category_media_states()
-    assert {path: state for path, state in states.items() if path.startswith("day/")} == {
-        "day/pending.png": ("ready", "functional-photo-file-id"),
-        "day/ready.png": ("ready", "functional-ready-file-id"),
-    }
+    assert_that(
+        {path: state for path, state in states.items() if path.startswith("day/")},
+        equal_to(
+            {
+                "day/pending.png": ("ready", "functional-photo-file-id"),
+                "day/ready.png": ("ready", "functional-ready-file-id"),
+            }
+        ),
+    )
 
 
 async def test_bot_recovers_invalid_catalog_file_id_once(
@@ -266,7 +293,7 @@ async def test_bot_recovers_invalid_catalog_file_id_once(
 
     await fake_telegram_server.push_message(text="/day")
     first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
-    assert first_edit["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
+    assert_that(first_edit["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
     await fake_telegram_server.reset()
     await fake_telegram_server.set_invalid_file_ids("functional-photo-file-id")
@@ -276,14 +303,22 @@ async def test_bot_recovers_invalid_catalog_file_id_once(
         "editMessageMedia",
         predicate=lambda request: str(request["payload"]["media"]["media"]).startswith(fake_yandex_server.base_url),
     )
-    assert recovered_edit["payload"]["media"]["media"].startswith(fake_yandex_server.base_url)
+    assert_that(recovered_edit["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
     edits = await fake_telegram_server.requests(method="editMessageMedia")
-    assert [request["payload"]["media"]["media"] for request in edits] == [
-        "functional-photo-file-id",
-        f"{fake_yandex_server.base_url}/download/image.png",
-    ]
-    assert sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()) == 1
+    assert_that(
+        [request["payload"]["media"]["media"] for request in edits],
+        equal_to(
+            [
+                "functional-photo-file-id",
+                f"{fake_yandex_server.base_url}/download/image.png",
+            ]
+        ),
+    )
+    assert_that(
+        sum(request["method"] == "resources/download" for request in await fake_yandex_server.requests()),
+        equal_to(1),
+    )
 
 
 @pytest.mark.parametrize("query", ["  dA ", "  ДНЕ "])
@@ -303,35 +338,56 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     request = await fake_telegram_server.wait_for_request("answerInlineQuery")
 
     payload = request["payload"]
-    assert payload["inline_query_id"] == "inline-100"
-    assert payload["cache_time"] == 0
-    assert payload["is_personal"] is True
-    assert len(payload["results"]) == 2
+    assert_that(payload["inline_query_id"], equal_to("inline-100"))
+    assert_that(payload["cache_time"], equal_to(0))
+    assert_that(payload["is_personal"], is_(True))
+    assert_that(payload["results"], has_length(2))
     random_result, ordinary_result = payload["results"]
-    assert random_result["type"] == ordinary_result["type"] == "photo"
-    assert random_result["title"] == "🎲 Выбрать случайную картинку"
-    assert ordinary_result["title"] in {"image.png", "second.png"}
-    assert random_result["description"] == ordinary_result["description"] == "Категория /day"
-    assert random_result["thumbnail_url"] == random_result["photo_url"]
-    assert ordinary_result["thumbnail_url"] == ordinary_result["photo_url"]
-    assert {random_result["photo_url"], ordinary_result["photo_url"]} == {
-        f"{fake_yandex_server.base_url}/download/image.png",
-        f"{fake_yandex_server.base_url}/download/second.png",
-    }
-    assert len({random_result["id"], ordinary_result["id"]}) == 2
-    assert all(len(result["id"]) == 64 for result in payload["results"])
+    assert_that((random_result["type"], ordinary_result["type"]), equal_to(("photo", "photo")))
+    assert_that(random_result["title"], equal_to("🎲 Выбрать случайную картинку"))
+    assert_that(ordinary_result["title"], is_in(("image.png", "second.png")))
+    assert_that(
+        (random_result["description"], ordinary_result["description"]),
+        equal_to(("Категория /day", "Категория /day")),
+    )
+    assert_that(
+        (random_result["thumbnail_url"], ordinary_result["thumbnail_url"]),
+        equal_to((random_result["photo_url"], ordinary_result["photo_url"])),
+    )
+    assert_that(
+        {random_result["photo_url"], ordinary_result["photo_url"]},
+        equal_to(
+            {
+                f"{fake_yandex_server.base_url}/download/image.png",
+                f"{fake_yandex_server.base_url}/download/second.png",
+            }
+        ),
+    )
+    assert_that({random_result["id"], ordinary_result["id"]}, has_length(2))
+    assert_that([len(result["id"]) for result in payload["results"]], only_contains(64))
 
     yandex_requests = await fake_yandex_server.requests()
-    assert not any(request["method"] == "resources" for request in yandex_requests)
-    assert {
-        "method": "resources/download",
-        "params": {"path": "app:/day/image.png", "fields": "href"},
-    } in yandex_requests
-    assert {
-        "method": "resources/download",
-        "params": {"path": "app:/day/second.png", "fields": "href"},
-    } in yandex_requests
-    assert not any(request["method"] == "download" for request in yandex_requests)
+    yandex_methods = [request["method"] for request in yandex_requests]
+    assert_that([method for method in yandex_methods if method == "resources"], empty())
+    assert_that(
+        yandex_requests,
+        has_item(
+            {
+                "method": "resources/download",
+                "params": {"path": "app:/day/image.png", "fields": "href"},
+            }
+        ),
+    )
+    assert_that(
+        yandex_requests,
+        has_item(
+            {
+                "method": "resources/download",
+                "params": {"path": "app:/day/second.png", "fields": "href"},
+            }
+        ),
+    )
+    assert_that([method for method in yandex_methods if method == "download"], empty())
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
@@ -348,13 +404,16 @@ async def test_bot_returns_day_images_for_partial_inline_query(
         "functional.inline.media.catalog_items",
         "functional.inline.results.sent",
     )
-    assert all(metrics[name]["type"] == "ms" for name in metrics if ".total" in name or ".stages." in name)
-    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 2
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 2
-    assert metrics["functional.inline.dependencies.redis.calls"]["value"] == 0
-    assert metrics["functional.inline.dependencies.telegram.calls"]["value"] == 1
-    assert metrics["functional.inline.media.catalog_items"]["value"] == 2
-    assert metrics["functional.inline.results.sent"]["value"] == 2
+    assert_that(
+        all(metrics[name]["type"] == "ms" for name in metrics if ".total" in name or ".stages." in name),
+        is_(True),
+    )
+    assert_that(metrics["functional.inline.dependencies.postgres.calls"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.dependencies.redis.calls"]["value"], equal_to(0))
+    assert_that(metrics["functional.inline.dependencies.telegram.calls"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(2))
 
 
 async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_polling(
@@ -369,7 +428,7 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
         "answerInlineQuery",
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-unknown",
     )
-    assert request["payload"]["results"] == []
+    assert_that(request["payload"]["results"], empty())
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
@@ -379,11 +438,11 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
         "functional.inline.dependencies.redis.calls",
         "functional.inline.dependencies.telegram.calls",
     )
-    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 1
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
-    assert metrics["functional.inline.dependencies.redis.calls"]["value"] == 0
-    assert metrics["functional.inline.dependencies.telegram.calls"]["value"] == 1
-    assert not await fake_statsd_server.metrics(name="functional.inline.stages.media.catalog")
+    assert_that(metrics["functional.inline.dependencies.postgres.calls"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(0))
+    assert_that(metrics["functional.inline.dependencies.redis.calls"]["value"], equal_to(0))
+    assert_that(metrics["functional.inline.dependencies.telegram.calls"]["value"], equal_to(1))
+    assert_that(await fake_statsd_server.metrics(name="functional.inline.stages.media.catalog"), empty())
 
     await fake_telegram_server.push_message(text="still running")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
@@ -523,7 +582,7 @@ async def test_bot_returns_empty_inline_results_for_known_empty_category_and_kee
         "answerInlineQuery",
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-empty",
     )
-    assert request["payload"]["results"] == []
+    assert_that(request["payload"]["results"], empty())
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
@@ -532,9 +591,9 @@ async def test_bot_returns_empty_inline_results_for_known_empty_category_and_kee
         "functional.inline.dependencies.postgres.calls",
         "functional.inline.dependencies.yandex.calls",
     )
-    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 2
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
-    assert not await fake_statsd_server.metrics(name="functional.inline.stages.media.urls")
+    assert_that(metrics["functional.inline.dependencies.postgres.calls"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(0))
+    assert_that(await fake_statsd_server.metrics(name="functional.inline.stages.media.urls"), empty())
 
     await fake_telegram_server.push_message(text="still running after empty inline category")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
@@ -557,7 +616,7 @@ async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_p
         "answerInlineQuery",
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-broken",
     )
-    assert request["payload"]["results"] == []
+    assert_that(request["payload"]["results"], empty())
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
@@ -566,8 +625,8 @@ async def test_bot_returns_empty_inline_results_when_image_url_fails_and_keeps_p
         "functional.inline.media.url_failures",
         "functional.inline.results.sent",
     )
-    assert metrics["functional.inline.media.url_failures"]["value"] == 1
-    assert metrics["functional.inline.results.sent"]["value"] == 0
+    assert_that(metrics["functional.inline.media.url_failures"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(0))
 
     await fake_telegram_server.push_message(text="still running after Yandex failure")
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
@@ -596,12 +655,11 @@ async def test_inline_uses_persisted_file_id_after_ordinary_delivery(
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-ready",
     )
 
-    assert len(answer["payload"]["results"]) == 1
+    assert_that(answer["payload"]["results"], has_length(1))
     result = answer["payload"]["results"][0]
-    assert result["type"] == "photo"
-    assert result["photo_file_id"] == "functional-photo-file-id"
-    assert "photo_url" not in result
-    assert not await fake_yandex_server.requests()
+    assert_that(result, has_entries(type="photo", photo_file_id="functional-photo-file-id"))
+    assert_that([key for key in result if key == "photo_url"], empty())
+    assert_that(await fake_yandex_server.requests(), empty())
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
@@ -610,9 +668,9 @@ async def test_inline_uses_persisted_file_id_after_ordinary_delivery(
         "functional.inline.media.pending_items",
         "functional.inline.dependencies.yandex.calls",
     )
-    assert metrics["functional.inline.media.ready_items"]["value"] == 1
-    assert metrics["functional.inline.media.pending_items"]["value"] == 0
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
+    assert_that(metrics["functional.inline.media.ready_items"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.media.pending_items"]["value"], equal_to(0))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(0))
 
 
 async def test_inline_metrics_cover_mixed_ready_and_pending_media(
@@ -642,7 +700,7 @@ async def test_inline_metrics_cover_mixed_ready_and_pending_media(
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-mixed",
     )
 
-    assert len(answer["payload"]["results"]) == 2
+    assert_that(answer["payload"]["results"], has_length(2))
     metrics = await _wait_for_metrics(
         fake_statsd_server,
         "functional.inline.scenarios.mixed.total",
@@ -650,9 +708,9 @@ async def test_inline_metrics_cover_mixed_ready_and_pending_media(
         "functional.inline.media.pending_items",
         "functional.inline.dependencies.yandex.calls",
     )
-    assert metrics["functional.inline.media.ready_items"]["value"] == 1
-    assert metrics["functional.inline.media.pending_items"]["value"] == 1
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 1
+    assert_that(metrics["functional.inline.media.ready_items"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.media.pending_items"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(1))
 
 
 async def test_inline_metrics_cover_multiple_categories(
@@ -680,7 +738,7 @@ async def test_inline_metrics_cover_multiple_categories(
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-multiple",
     )
 
-    assert len(answer["payload"]["results"]) == 2
+    assert_that(answer["payload"]["results"], has_length(2))
     metrics = await _wait_for_metrics(
         fake_statsd_server,
         "functional.inline.category_sets.multiple.total",
@@ -688,9 +746,9 @@ async def test_inline_metrics_cover_multiple_categories(
         "functional.inline.dependencies.yandex.calls",
         "functional.inline.media.catalog_items",
     )
-    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 2
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 2
-    assert metrics["functional.inline.media.catalog_items"]["value"] == 2
+    assert_that(metrics["functional.inline.dependencies.postgres.calls"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(2))
 
 
 async def test_inline_metrics_cover_large_catalog_and_telegram_limit(
@@ -716,7 +774,7 @@ async def test_inline_metrics_cover_large_catalog_and_telegram_limit(
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-large",
     )
 
-    assert len(answer["payload"]["results"]) == 50
+    assert_that(answer["payload"]["results"], has_length(50))
     metrics = await _wait_for_metrics(
         fake_statsd_server,
         "functional.inline.catalog_sizes.large.total",
@@ -725,10 +783,10 @@ async def test_inline_metrics_cover_large_catalog_and_telegram_limit(
         "functional.inline.results.prepared",
         "functional.inline.results.sent",
     )
-    assert metrics["functional.inline.media.catalog_items"]["value"] == 60
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 50
-    assert metrics["functional.inline.results.prepared"]["value"] == 50
-    assert metrics["functional.inline.results.sent"]["value"] == 50
+    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(60))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(50))
+    assert_that(metrics["functional.inline.results.prepared"]["value"], equal_to(50))
+    assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(50))
 
 
 async def test_inline_uses_ready_media_to_fill_limit_without_pending_urls(
@@ -760,10 +818,13 @@ async def test_inline_uses_ready_media_to_fill_limit_without_pending_urls(
     )
 
     results = answer["payload"]["results"]
-    assert len(results) == 50
-    assert results[0]["title"] == "🎲 Выбрать случайную картинку"
-    assert all("photo_file_id" in result and "photo_url" not in result for result in results)
-    assert not await fake_yandex_server.requests()
+    assert_that(results, has_length(50))
+    assert_that(results[0]["title"], equal_to("🎲 Выбрать случайную картинку"))
+    assert_that(
+        ["photo_file_id" in result and "photo_url" not in result for result in results],
+        only_contains(True),
+    )
+    assert_that(await fake_yandex_server.requests(), empty())
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
@@ -772,10 +833,10 @@ async def test_inline_uses_ready_media_to_fill_limit_without_pending_urls(
         "functional.inline.media.pending_items",
         "functional.inline.dependencies.yandex.calls",
     )
-    assert metrics["functional.inline.media.catalog_items"]["value"] == 51
-    assert metrics["functional.inline.media.ready_items"]["value"] == 50
-    assert metrics["functional.inline.media.pending_items"]["value"] == 0
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
+    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(51))
+    assert_that(metrics["functional.inline.media.ready_items"]["value"], equal_to(50))
+    assert_that(metrics["functional.inline.media.pending_items"]["value"], equal_to(0))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(0))
 
 
 async def test_inline_excludes_media_deactivated_by_later_sync(
@@ -800,11 +861,14 @@ async def test_inline_excludes_media_deactivated_by_later_sync(
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-active-only",
     )
 
-    assert len(answer["payload"]["results"]) == 1
-    assert answer["payload"]["results"][0]["photo_url"] == f"{fake_yandex_server.base_url}/download/image.png"
+    assert_that(answer["payload"]["results"], has_length(1))
+    assert_that(
+        answer["payload"]["results"][0]["photo_url"],
+        equal_to(f"{fake_yandex_server.base_url}/download/image.png"),
+    )
     requests = await fake_yandex_server.requests()
-    assert sum(request["method"] == "resources/download" for request in requests) == 1
-    assert not any("removed.png" in str(request) for request in requests)
+    assert_that(sum(request["method"] == "resources/download" for request in requests), equal_to(1))
+    assert_that([request for request in requests if "removed.png" in str(request)], empty())
 
 
 def _is_start_answer(request: dict[str, Any]) -> bool:

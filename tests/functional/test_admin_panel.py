@@ -4,6 +4,17 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from hamcrest import (
+    assert_that,
+    contains_string,
+    empty,
+    equal_to,
+    greater_than,
+    has_entries,
+    has_item,
+    has_length,
+    none,
+)
 
 from cringe_pics_telebot.bot.admin_broadcast_callback_data import (
     AdminBroadcastAction,
@@ -39,14 +50,17 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
         "sendMessage",
         predicate=lambda request: "Что умеет бот" in request["payload"].get("text", ""),
     )
-    assert _reply_keyboard_button_texts(start_request["payload"])[0] == "Админ-панель"
+    assert_that(_reply_keyboard_button_texts(start_request["payload"])[0], equal_to("Админ-панель"))
 
     await fake_telegram_server.push_message(text="/admin")
     admin_panel = await fake_telegram_server.wait_for_request(
         "sendMessage",
         predicate=lambda request: "Админ-панель" in request["payload"].get("text", ""),
     )
-    assert _inline_keyboard_button_texts(admin_panel["payload"]) == ["Рассылки", "Управление категориями"]
+    assert_that(
+        _inline_keyboard_button_texts(admin_panel["payload"]),
+        equal_to(["Рассылки", "Управление категориями"]),
+    )
 
     await set_functional_administrator(user_id=42, enabled=False)
     await fake_telegram_server.reset()
@@ -55,7 +69,8 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
         "sendMessage",
         predicate=lambda request: "Что умеет бот" in request["payload"].get("text", ""),
     )
-    assert "Админ-панель" not in _reply_keyboard_button_texts(non_admin_request["payload"])
+    button_texts = _reply_keyboard_button_texts(non_admin_request["payload"])
+    assert_that([text for text in button_texts if text == "Админ-панель"], empty())
 
     await fake_telegram_server.reset()
     await fake_telegram_server.push_message(text="Админ-панель")
@@ -84,8 +99,8 @@ async def test_non_admin_cannot_forge_admin_callback(
         predicate=lambda request: request["payload"].get("chat_id") == 999,
     )
 
-    assert not await fake_telegram_server.requests(method="editMessageText")
-    assert not await fake_telegram_server.requests(method="answerCallbackQuery")
+    assert_that(await fake_telegram_server.requests(method="editMessageText"), empty())
+    assert_that(await fake_telegram_server.requests(method="answerCallbackQuery"), empty())
 
 
 async def test_admin_manages_category_aliases_used_by_inline_search(
@@ -107,14 +122,10 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
         "editMessageText",
         predicate=lambda request: "Управление категориями" in request["payload"].get("text", ""),
     )
-    assert _inline_keyboard_button_texts(category_list["payload"]) == [
-        "/day",
-        "/evening",
-        "/morning",
-        "/night",
-        "/random",
-        "Назад",
-    ]
+    assert_that(
+        _inline_keyboard_button_texts(category_list["payload"]),
+        equal_to(["/day", "/evening", "/morning", "/night", "/random", "Назад"]),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_admin_category_callback(AdminCategoryAction.category, category_id=2),
@@ -124,12 +135,11 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
         "editMessageText",
         predicate=lambda request: "Категория /day" in request["payload"].get("text", ""),
     )
-    assert "<code>день</code>" in category_details["payload"]["text"]
-    assert _inline_keyboard_button_texts(category_details["payload"]) == [
-        "Изменить алиасы",
-        "Очистить алиасы",
-        "Назад",
-    ]
+    assert_that(category_details["payload"]["text"], contains_string("<code>день</code>"))
+    assert_that(
+        _inline_keyboard_button_texts(category_details["payload"]),
+        equal_to(["Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_admin_category_callback(AdminCategoryAction.edit_aliases, category_id=2),
@@ -150,16 +160,19 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
         "sendMessage",
         predicate=lambda request: "Алиасы категории обновлены" in request["payload"].get("text", ""),
     )
-    assert "<code>полдень</code>" in updated_details["payload"]["text"]
-    assert await read_category_aliases(2) == ("полдень", "/ДЕНЬ", "с обеда")
+    assert_that(updated_details["payload"]["text"], contains_string("<code>полдень</code>"))
+    assert_that(await read_category_aliases(2), equal_to(("полдень", "/ДЕНЬ", "с обеда")))
 
     await fake_telegram_server.push_inline_query(query="  ПОЛД  ", query_id="inline-admin-alias")
     inline_answer = await fake_telegram_server.wait_for_request(
         "answerInlineQuery",
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-admin-alias",
     )
-    assert inline_answer["payload"]["results"]
-    assert {result["description"] for result in inline_answer["payload"]["results"]} == {"Категория /day"}
+    assert_that(len(inline_answer["payload"]["results"]), greater_than(0))
+    assert_that(
+        {result["description"] for result in inline_answer["payload"]["results"]},
+        equal_to({"Категория /day"}),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_admin_category_callback(AdminCategoryAction.clear_aliases, category_id=2),
@@ -169,8 +182,11 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
         "editMessageText",
         predicate=lambda request: "<i>не заданы</i>" in request["payload"].get("text", ""),
     )
-    assert _inline_keyboard_button_texts(cleared_details["payload"]) == ["Изменить алиасы", "Назад"]
-    assert await read_category_aliases(2) == ()
+    assert_that(
+        _inline_keyboard_button_texts(cleared_details["payload"]),
+        equal_to(["Изменить алиасы", "Назад"]),
+    )
+    assert_that(await read_category_aliases(2), equal_to(()))
 
 
 async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
@@ -205,7 +221,7 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
         "sendMessage",
         predicate=lambda request: "Не удалось распознать" in request["payload"].get("text", ""),
     )
-    assert not await read_admin_broadcasts()
+    assert_that(await read_admin_broadcasts(), empty())
 
     await fake_telegram_server.push_message(text="20.08.2099 10:00")
     await fake_telegram_server.wait_for_request(
@@ -219,17 +235,22 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     )
 
     broadcasts = await read_admin_broadcasts()
-    assert len(broadcasts) == 1
-    assert broadcasts[0]["created_by_user_id"] == 42
-    assert broadcasts[0]["source_chat_id"] == 42
-    assert broadcasts[0]["source_message_id"] == 1
-    assert broadcasts[0]["scheduled_local_at"] == datetime(2099, 8, 20, 10, 0)
-    assert broadcasts[0]["timezone_offset_minutes"] is None
-    assert broadcasts[0]["status"] == "scheduled"
-    assert await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]) == [700, 800]
-    assert await read_user_state(700) == (420, False)
-    assert await read_user_state(800) == (420, False)
-    assert "Новая рассылка" in _inline_keyboard_button_texts(confirmation["payload"])
+    assert_that(broadcasts, has_length(1))
+    assert_that(
+        broadcasts[0],
+        has_entries(
+            created_by_user_id=42,
+            source_chat_id=42,
+            source_message_id=1,
+            scheduled_local_at=datetime(2099, 8, 20, 10, 0),
+            timezone_offset_minutes=none(),
+            status="scheduled",
+        ),
+    )
+    assert_that(await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]), equal_to([700, 800]))
+    assert_that(await read_user_state(700), equal_to((420, False)))
+    assert_that(await read_user_state(800), equal_to((420, False)))
+    assert_that(_inline_keyboard_button_texts(confirmation["payload"]), has_item("Новая рассылка"))
 
 
 async def test_admin_edits_and_soft_deletes_existing_broadcast(
@@ -252,13 +273,10 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
         "editMessageText",
         predicate=lambda request: "Запланированные рассылки" in request["payload"].get("text", ""),
     )
-    assert _inline_keyboard_button_texts(broadcast_list["payload"]) == [
-        "20.08 10:00 · локально",
-        "✏️",
-        "🗑",
-        "Новая рассылка",
-        "Назад",
-    ]
+    assert_that(
+        _inline_keyboard_button_texts(broadcast_list["payload"]),
+        equal_to(["20.08 10:00 · локально", "✏️", "🗑", "Новая рассылка", "Назад"]),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast_id),
@@ -267,7 +285,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
         "editMessageText",
         predicate=lambda request: "Рассылка #" in request["payload"].get("text", ""),
     )
-    assert "До отправки для вас: <b>" in broadcast_details["payload"]["text"]
+    assert_that(broadcast_details["payload"]["text"], contains_string("До отправки для вас: <b>"))
 
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.edit_schedule, broadcast_id),
@@ -283,9 +301,10 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
         predicate=lambda request: "Дата и время рассылки обновлены" in request["payload"].get("text", ""),
     )
     broadcast = await read_admin_broadcast(broadcast_id)
-    assert broadcast is not None
-    assert broadcast["scheduled_local_at"] == datetime(2099, 8, 21, 11, 30)
-    assert broadcast["timezone_offset_minutes"] == 240
+    assert_that(
+        [(item["scheduled_local_at"], item["timezone_offset_minutes"]) for item in [broadcast] if item is not None],
+        equal_to([(datetime(2099, 8, 21, 11, 30), 240)]),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.edit_message, broadcast_id),
@@ -301,9 +320,10 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
         predicate=lambda request: "Сообщение рассылки обновлено" in request["payload"].get("text", ""),
     )
     broadcast = await read_admin_broadcast(broadcast_id)
-    assert broadcast is not None
-    assert broadcast["source_chat_id"] == 42
-    assert broadcast["source_message_id"] == 1
+    assert_that(
+        [(item["source_chat_id"], item["source_message_id"]) for item in [broadcast] if item is not None],
+        equal_to([(42, 1)]),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.edit_recipients, broadcast_id),
@@ -318,7 +338,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
         "sendMessage",
         predicate=lambda request: "Дополнительные получатели обновлены" in request["payload"].get("text", ""),
     )
-    assert await read_admin_broadcast_recipient_ids(broadcast_id) == [900, 901]
+    assert_that(await read_admin_broadcast_recipient_ids(broadcast_id), equal_to([900, 901]))
 
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.delete_broadcast, broadcast_id),
@@ -337,9 +357,10 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
         predicate=lambda request: request["payload"].get("text") == "Рассылка удалена.",
     )
     broadcast = await read_admin_broadcast(broadcast_id)
-    assert broadcast is not None
-    assert broadcast["status"] == "deleted"
-    assert broadcast["deleted_at"] is not None
+    assert_that(
+        [(item["status"], item["deleted_at"] is not None) for item in [broadcast] if item is not None],
+        equal_to([("deleted", True)]),
+    )
 
 
 async def test_admin_can_skip_explicit_recipients(
@@ -378,9 +399,9 @@ async def test_admin_can_skip_explicit_recipients(
     )
 
     broadcasts = await read_admin_broadcasts()
-    assert len(broadcasts) == 1
-    assert broadcasts[0]["created_by_user_id"] == 42
-    assert await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]) == []
+    assert_that(broadcasts, has_length(1))
+    assert_that(broadcasts[0], has_entries(created_by_user_id=42))
+    assert_that(await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]), empty())
 
 
 async def test_private_message_reactivates_user_without_resetting_timezone(
@@ -401,7 +422,7 @@ async def test_private_message_reactivates_user_without_resetting_timezone(
         predicate=lambda request: request["payload"].get("chat_id") == 700,
     )
 
-    assert await read_user_state(700) == (-300, True)
+    assert_that(await read_user_state(700), equal_to((-300, True)))
 
 
 def _admin_broadcast_callback(action: AdminBroadcastAction, broadcast_id: int = 0) -> str:
