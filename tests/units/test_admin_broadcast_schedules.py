@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
+from hamcrest import assert_that, equal_to, none
 
 from cringe_pics_telebot.services.admin_broadcast_schedules import (
     InvalidAdminBroadcastScheduleError,
@@ -17,10 +18,11 @@ def test_parse_local_recipient_schedule() -> None:
         now=datetime(2026, 8, 19, 21, 0, tzinfo=UTC),
     )
 
-    assert schedule.local_at == datetime(2026, 8, 20, 10, 30)
-    assert schedule.timezone_offset_minutes is None
-    assert format_admin_broadcast_schedule(schedule.local_at, schedule.timezone_offset_minutes) == (
-        "20.08.2026 10:30 — локальное время каждого получателя"
+    assert_that(schedule.local_at, equal_to(datetime(2026, 8, 20, 10, 30)))
+    assert_that(schedule.timezone_offset_minutes, none())
+    assert_that(
+        format_admin_broadcast_schedule(schedule.local_at, schedule.timezone_offset_minutes),
+        equal_to("20.08.2026 10:30 — локальное время каждого получателя"),
     )
 
 
@@ -30,10 +32,11 @@ def test_parse_fixed_timezone_override() -> None:
         now=datetime(2026, 8, 20, 15, 0, tzinfo=UTC),
     )
 
-    assert schedule.local_at == datetime(2026, 8, 20, 10, 30)
-    assert schedule.timezone_offset_minutes == -330
-    assert format_admin_broadcast_schedule(schedule.local_at, schedule.timezone_offset_minutes) == (
-        "20.08.2026 10:30 · UTC-05:30"
+    assert_that(schedule.local_at, equal_to(datetime(2026, 8, 20, 10, 30)))
+    assert_that(schedule.timezone_offset_minutes, equal_to(-330))
+    assert_that(
+        format_admin_broadcast_schedule(schedule.local_at, schedule.timezone_offset_minutes),
+        equal_to("20.08.2026 10:30 · UTC-05:30"),
     )
 
 
@@ -123,12 +126,12 @@ def test_format_admin_broadcast_countdown(
     now: datetime,
     expected: str,
 ) -> None:
-    assert (
+    assert_that(
         format_admin_broadcast_countdown(
             local_at,
             timezone_offset_minutes,
             viewer_timezone_offset_minutes=viewer_timezone_offset_minutes,
             now=now,
-        )
-        == expected
+        ),
+        equal_to(expected),
     )

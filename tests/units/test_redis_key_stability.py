@@ -1,5 +1,7 @@
 import types
 
+from hamcrest import assert_that, equal_to, not_
+
 from cringe_pics_telebot.repositories.redis import repo
 
 
@@ -27,11 +29,11 @@ def test_make_key_is_stable_for_functions_with_same_module_and_qualname() -> Non
     # Same args -> same key
     key1 = repo._make_key(f1, 1, y=3)
     key2 = repo._make_key(f2, 1, y=3)
-    assert key1 == key2
+    assert_that(key1, equal_to(key2))
 
     # Different args -> different key
     key3 = repo._make_key(f1, 2, y=3)
-    assert key1 != key3
+    assert_that(key1, not_(equal_to(key3)))
 
     # Repeated call is stable
-    assert key1 == repo._make_key(f1, 1, y=3)
+    assert_that(key1, equal_to(repo._make_key(f1, 1, y=3)))

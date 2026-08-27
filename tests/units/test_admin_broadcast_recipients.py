@@ -1,4 +1,5 @@
 import pytest
+from hamcrest import assert_that, empty, equal_to
 
 from cringe_pics_telebot.services.admin_broadcast_recipients import (
     MAX_EXTRA_RECIPIENTS,
@@ -8,11 +9,11 @@ from cringe_pics_telebot.services.admin_broadcast_recipients import (
 
 
 def test_parse_recipient_ids_with_supported_separators_and_duplicates() -> None:
-    assert parse_admin_broadcast_recipient_ids("700, 400\n700;900") == {400, 700, 900}
+    assert_that(parse_admin_broadcast_recipient_ids("700, 400\n700;900"), equal_to({400, 700, 900}))
 
 
 def test_dash_clears_recipient_ids() -> None:
-    assert parse_admin_broadcast_recipient_ids(" - ") == set()
+    assert_that(parse_admin_broadcast_recipient_ids(" - "), empty())
 
 
 @pytest.mark.parametrize("value", ["", "abc", "-1", "0", str(2**63)])

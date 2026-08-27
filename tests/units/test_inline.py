@@ -14,7 +14,7 @@ from aiogram.types import (
     InlineQueryResultPhoto,
     InlineQueryResultUnion,
 )
-from hamcrest import assert_that, equal_to
+from hamcrest import assert_that, empty, equal_to, has_length, is_, not_, same_instance
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.bot import inline, keyboards
@@ -43,7 +43,7 @@ def test_category_matches_query(
     search_aliases: tuple[str, ...],
     matches: bool,
 ) -> None:
-    assert inline.category_matches_query(query, category, search_aliases) is matches
+    assert_that(inline.category_matches_query(query, category, search_aliases), is_(matches))
 
 
 @pytest.mark.parametrize("query", ["", "   ", " / "])
@@ -73,7 +73,10 @@ async def test_find_subscription_types_returns_every_matching_category(monkeypat
 
     monkeypatch.setattr(inline, "get_subscription_types", get_subscription_types)
 
-    assert await inline._find_subscription_types(" /ОБЩ ") == [subscription_types[0], subscription_types[2]]
+    assert_that(
+        await inline._find_subscription_types(" /ОБЩ "),
+        equal_to([subscription_types[0], subscription_types[2]]),
+    )
 
 
 async def test_get_inline_results_combines_categories_without_duplicate_paths(monkeypatch: MonkeyPatch) -> None:
@@ -83,7 +86,7 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     async def get_inline_images(
         subscription_types: list[SubscriptionType],
     ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
-        assert subscription_types == [morning, evening]
+        assert_that(subscription_types, equal_to([morning, evening]))
         return [
             (
                 morning,
@@ -132,10 +135,10 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     results = await inline._get_inline_results([morning, evening])
     payloads = [result.model_dump(exclude_none=True) for result in results]
 
-    assert [payload["title"] for payload in payloads] == ["shared.png", "morning.png", "evening.png"]
-    assert payloads[0]["description"] == "Категория /morning"
-    assert payloads[2]["description"] == "Категория /evening"
-    assert len({payload["id"] for payload in payloads}) == 3
+    assert_that([payload["title"] for payload in payloads], equal_to(["shared.png", "morning.png", "evening.png"]))
+    assert_that(payloads[0]["description"], equal_to("Категория /morning"))
+    assert_that(payloads[2]["description"], equal_to("Категория /evening"))
+    assert_that({payload["id"] for payload in payloads}, has_length(3))
 
 
 def test_build_inline_category_results_preserves_media_types_and_namespaces_category_ids() -> None:
@@ -244,9 +247,9 @@ def test_shuffle_inline_results_uses_injected_shuffler_on_a_copy() -> None:
 
     shuffled_results = inline._shuffle_inline_results(results, shuffler=reverse)
 
-    assert shuffled_inputs == [["result-0", "result-1", "result-2"]]
-    assert [result.id for result in shuffled_results] == ["result-2", "result-1", "result-0"]
-    assert [result.id for result in results] == ["result-0", "result-1", "result-2"]
+    assert_that(shuffled_inputs, equal_to([["result-0", "result-1", "result-2"]]))
+    assert_that([result.id for result in shuffled_results], equal_to(["result-2", "result-1", "result-0"]))
+    assert_that([result.id for result in results], equal_to(["result-0", "result-1", "result-2"]))
 
 
 def test_prepare_inline_results_chooses_before_limit_and_deduplicates_selected_media() -> None:
@@ -269,19 +272,27 @@ def test_prepare_inline_results_chooses_before_limit_and_deduplicates_selected_m
     )
     random_result = cast(InlineQueryResultPhoto, prepared_results[0])
 
-    assert chooser_inputs == [[f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 2)]]
-    assert shuffler_inputs == [[f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 1)]]
-    assert len(prepared_results) == inline.MAX_INLINE_QUERY_RESULTS
-    assert random_result.title == inline.RANDOM_INLINE_RESULT_TITLE
-    assert len(random_result.id) == 64
-    assert random_result.id not in {result.id for result in results}
-    assert random_result.photo_url == "https://storage.example/51.png"
-    assert [result.id for result in prepared_results[1:]] == [
-        f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS, 1, -1)
-    ]
-    assert [result.id for result in results] == [
-        f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 2)
-    ]
+    assert_that(
+        chooser_inputs,
+        equal_to([[f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 2)]]),
+    )
+    assert_that(
+        shuffler_inputs,
+        equal_to([[f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 1)]]),
+    )
+    assert_that(prepared_results, has_length(inline.MAX_INLINE_QUERY_RESULTS))
+    assert_that(random_result.title, equal_to(inline.RANDOM_INLINE_RESULT_TITLE))
+    assert_that(random_result.id, has_length(64))
+    assert_that(random_result.id in tuple(result.id for result in results), is_(False))
+    assert_that(random_result.photo_url, equal_to("https://storage.example/51.png"))
+    assert_that(
+        [result.id for result in prepared_results[1:]],
+        equal_to([f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS, 1, -1)]),
+    )
+    assert_that(
+        [result.id for result in results],
+        equal_to([f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 2)]),
+    )
 
 
 def test_prepare_inline_results_prefers_cached_for_random_and_keeps_status_groups() -> None:
@@ -317,15 +328,15 @@ def test_prepare_inline_results_prefers_cached_for_random_and_keeps_status_group
     )
     random_result = cast(InlineQueryResultCachedPhoto, prepared[0])
 
-    assert chooser_inputs == [["cached-1", "cached-2"]]
-    assert shuffler_inputs == [["cached-1"], ["linked-1", "linked-2"]]
-    assert random_result.photo_file_id == "telegram-2"
-    assert random_result.title == inline.RANDOM_INLINE_RESULT_TITLE
-    assert [result.id for result in prepared[1:]] == ["cached-1", "linked-2", "linked-1"]
+    assert_that(chooser_inputs, equal_to([["cached-1", "cached-2"]]))
+    assert_that(shuffler_inputs, equal_to([["cached-1"], ["linked-1", "linked-2"]]))
+    assert_that(random_result.photo_file_id, equal_to("telegram-2"))
+    assert_that(random_result.title, equal_to(inline.RANDOM_INLINE_RESULT_TITLE))
+    assert_that([result.id for result in prepared[1:]], equal_to(["cached-1", "linked-2", "linked-1"]))
 
 
 def test_prepare_inline_results_returns_empty_results() -> None:
-    assert inline._prepare_inline_results([]) == []
+    assert_that(inline._prepare_inline_results([]), empty())
 
 
 @pytest.mark.parametrize(
@@ -348,13 +359,13 @@ def test_prepare_inline_results_returns_empty_results() -> None:
 def test_prepare_inline_results_preserves_selected_media_type_and_source(result: inline.InlineMediaResult) -> None:
     prepared_result = inline._prepare_inline_results([result])[0]
 
-    assert type(prepared_result) is type(result)
-    assert prepared_result.model_dump(exclude={"id", "title"}, exclude_none=True) == result.model_dump(
-        exclude={"id", "title"},
-        exclude_none=True,
+    assert_that(type(prepared_result), same_instance(type(result)))
+    assert_that(
+        prepared_result.model_dump(exclude={"id", "title"}, exclude_none=True),
+        equal_to(result.model_dump(exclude={"id", "title"}, exclude_none=True)),
     )
-    assert prepared_result.title == inline.RANDOM_INLINE_RESULT_TITLE
-    assert prepared_result.id != result.id
+    assert_that(prepared_result.title, equal_to(inline.RANDOM_INLINE_RESULT_TITLE))
+    assert_that(prepared_result.id, not_(equal_to(result.id)))
 
 
 @pytest.mark.parametrize("query_text", ["", "   ", " / "])
@@ -400,11 +411,11 @@ async def test_answer_inline_query_prepares_results_and_disables_telegram_cache(
     query = _FakeInlineQuery(query="day")
 
     async def find_subscription_types(query: str) -> list[SubscriptionType]:
-        assert query == "day"
+        assert_that(query, equal_to("day"))
         return [subscription_type]
 
     async def get_inline_results(subscription_types: list[SubscriptionType]) -> list[inline.InlineMediaResult]:
-        assert subscription_types == [subscription_type]
+        assert_that(subscription_types, equal_to([subscription_type]))
         return results
 
     def reverse(items: list[inline.InlineMediaResult]) -> None:
@@ -420,18 +431,23 @@ async def test_answer_inline_query_prepares_results_and_disables_telegram_cache(
 
     await inline.answer_inline_query(cast(InlineQuery, query))
 
-    assert len(query.results) == inline.MAX_INLINE_QUERY_RESULTS
-    assert len(query.results[0].id) == 64
-    assert query.results[0].id not in {result.id for result in results}
-    assert cast(inline.InlineMediaResult, query.results[0]).title == inline.RANDOM_INLINE_RESULT_TITLE
-    assert [result.id for result in query.results[1:]] == [
-        f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS - 1, 0, -1)
-    ]
-    assert query.cache_time == 0
-    assert query.is_personal is True
-    assert [result.id for result in results] == [
-        f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 1)
-    ]
+    assert_that(query.results, has_length(inline.MAX_INLINE_QUERY_RESULTS))
+    assert_that(query.results[0].id, has_length(64))
+    assert_that(query.results[0].id in tuple(result.id for result in results), is_(False))
+    assert_that(
+        cast(inline.InlineMediaResult, query.results[0]).title,
+        equal_to(inline.RANDOM_INLINE_RESULT_TITLE),
+    )
+    assert_that(
+        [result.id for result in query.results[1:]],
+        equal_to([f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS - 1, 0, -1)]),
+    )
+    assert_that(query.cache_time, equal_to(0))
+    assert_that(query.is_personal is True, is_(True))
+    assert_that(
+        [result.id for result in results],
+        equal_to([f"result-{index}" for index in range(inline.MAX_INLINE_QUERY_RESULTS + 1)]),
+    )
 
 
 async def test_answer_inline_query_records_handled_result_error(
@@ -453,10 +469,10 @@ async def test_answer_inline_query_records_handled_result_error(
     with caplog.at_level(logging.INFO):
         await inline.answer_inline_query(cast(InlineQuery, query))
 
-    assert query.results == []
+    assert_that(query.results, empty())
     event = _last_inline_metrics_event(caplog)
-    assert event["outcome"] == "handled_error"
-    assert event["counts"]["telegram_calls"] == 1
+    assert_that(event["outcome"], equal_to("handled_error"))
+    assert_that(event["counts"]["telegram_calls"], equal_to(1))
 
 
 async def test_answer_inline_query_records_and_propagates_unhandled_error(
@@ -474,8 +490,8 @@ async def test_answer_inline_query_records_and_propagates_unhandled_error(
         await inline.answer_inline_query(cast(InlineQuery, query))
 
     event = _last_inline_metrics_event(caplog)
-    assert event["outcome"] == "unhandled_error"
-    assert event["counts"]["telegram_calls"] == 0
+    assert_that(event["outcome"], equal_to("unhandled_error"))
+    assert_that(event["counts"]["telegram_calls"], equal_to(0))
 
 
 async def test_answer_inline_query_records_and_propagates_cancellation(
@@ -493,8 +509,8 @@ async def test_answer_inline_query_records_and_propagates_cancellation(
         await inline.answer_inline_query(cast(InlineQuery, query))
 
     event = _last_inline_metrics_event(caplog)
-    assert event["outcome"] == "cancelled"
-    assert event["counts"]["telegram_calls"] == 0
+    assert_that(event["outcome"], equal_to("cancelled"))
+    assert_that(event["counts"]["telegram_calls"], equal_to(0))
 
 
 async def _async_result[T](value: T) -> T:

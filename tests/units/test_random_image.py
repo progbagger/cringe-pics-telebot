@@ -2,6 +2,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
+from hamcrest import assert_that, equal_to, same_instance
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.postgres import (
@@ -27,8 +28,8 @@ def test_choose_random_image_prefers_pending_and_injects_chooser() -> None:
         chooser=choose_last,
     )
 
-    assert selected is second_pending
-    assert chooser_inputs == [[2, 3]]
+    assert_that(selected, same_instance(second_pending))
+    assert_that(chooser_inputs, equal_to([[2, 3]]))
 
 
 @pytest.mark.parametrize(
@@ -38,7 +39,7 @@ def test_choose_random_image_prefers_pending_and_injects_chooser() -> None:
 def test_choose_random_image_chooses_from_single_status(status: CategoryMediaStatus) -> None:
     media = _media(1, status=status)
 
-    assert random_image.choose_random_image([media], chooser=_choose_only) is media
+    assert_that(random_image.choose_random_image([media], chooser=_choose_only), same_instance(media))
 
 
 @pytest.mark.parametrize("statuses", [(), (CategoryMediaStatus.inactive,)])
@@ -64,8 +65,8 @@ async def test_get_random_image_fetches_category_once_and_applies_policy(
 
     monkeypatch.setattr(random_image, "get_category_media_by_subscription_types", get_media)
 
-    assert await random_image.get_random_image(7, chooser=_choose_only) is pending
-    assert requested_category_ids == [[7]]
+    assert_that(await random_image.get_random_image(7, chooser=_choose_only), same_instance(pending))
+    assert_that(requested_category_ids, equal_to([[7]]))
 
 
 def _choose_only(items: Sequence[CategoryMedia]) -> CategoryMedia:
