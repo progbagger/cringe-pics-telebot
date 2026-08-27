@@ -19,6 +19,7 @@ from .inline_metrics import (
 
 MAX_INLINE_QUERY_RESULTS = 50
 
+type MediaChooser = Callable[[Sequence[CategoryMedia]], CategoryMedia]
 type MediaShuffler = Callable[[MutableSequence[CategoryMedia]], None]
 
 
@@ -29,36 +30,59 @@ async def get_inline_images(
     shuffler: MediaShuffler | None = None,
 ) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
     media = await _get_catalog_media([item.id for item in subscription_types])
-    metrics = get_inline_query_metrics()
-    if metrics is not None:
-        metrics.counts.catalog_media = len(media)
-
+    _record_catalog_media_count(media)
     selected_media = _select_inline_media(
         media,
         subscription_types=subscription_types,
         limit=limit,
         shuffler=shuffler,
     )
+    return await _resolve_inline_images(selected_media, subscription_types=subscription_types)
 
-    pending_paths = [item.source_path for item in selected_media if item.telegram_file_id is None]
-    if metrics is not None:
-        metrics.counts.selected_media = len(selected_media)
-        metrics.counts.ready_media = len(selected_media) - len(pending_paths)
-        metrics.counts.pending_media = len(pending_paths)
 
-    if pending_paths:
-        download_urls = await _get_media_urls(pending_paths)
-        if metrics is not None:
-            metrics.counts.url_successes += sum(url is not None for url in download_urls)
-            metrics.counts.url_failures += sum(url is None for url in download_urls)
-    else:
-        download_urls = []
-    download_urls_by_path = dict(zip(pending_paths, download_urls, strict=True))
-    return _prepare_inline_image_results(
-        selected_media,
+async def get_inline_category_images(
+    subscription_types: Sequence[SubscriptionType],
+    *,
+    limit: int = MAX_INLINE_QUERY_RESULTS,
+    chooser: MediaChooser | None = None,
+) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
+    media = await _get_catalog_media([item.id for item in subscription_types])
+    _record_catalog_media_count(media)
+    selected_media = _select_inline_category_media(
+        media,
         subscription_types=subscription_types,
-        download_urls_by_path=download_urls_by_path,
+        limit=limit,
+        chooser=chooser,
     )
+    return await _resolve_inline_images(selected_media, subscription_types=subscription_types)
+
+
+def _record_catalog_media_count(media: Sequence[CategoryMedia]) -> None:
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.catalog_media = len(media)
+
+
+def _select_inline_category_media(
+    media: Sequence[CategoryMedia],
+    *,
+    subscription_types: Sequence[SubscriptionType],
+    limit: int,
+    chooser: MediaChooser | None = None,
+) -> list[CategoryMedia]:
+    media_by_category: dict[int, list[CategoryMedia]] = {}
+    for item in media:
+        media_by_category.setdefault(item.subscription_type_id, []).append(item)
+
+    choose = chooser or random.choice
+    selected: list[CategoryMedia] = []
+    for subscription_type in subscription_types:
+        candidates = media_by_category.get(subscription_type.id, [])
+        ready = [item for item in candidates if item.telegram_file_id is not None]
+        if preferred := ready or candidates:
+            selected.append(choose(preferred))
+
+    return selected[:limit]
 
 
 def _select_inline_media(
@@ -87,6 +111,34 @@ def _select_inline_media(
 
     selected = [*ready, *pending]
     return selected if limit is None else selected[:limit]
+
+
+async def _resolve_inline_images(
+    selected_media: list[CategoryMedia],
+    *,
+    subscription_types: Sequence[SubscriptionType],
+) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
+    pending_media = [item for item in selected_media if item.telegram_file_id is None]
+    pending_paths = list(dict.fromkeys(item.source_path for item in pending_media))
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.selected_media = len(selected_media)
+        metrics.counts.ready_media = len(selected_media) - len(pending_media)
+        metrics.counts.pending_media = len(pending_media)
+
+    if pending_paths:
+        download_urls = await _get_media_urls(pending_paths)
+        if metrics is not None:
+            metrics.counts.url_successes += sum(url is not None for url in download_urls)
+            metrics.counts.url_failures += sum(url is None for url in download_urls)
+    else:
+        download_urls = []
+    download_urls_by_path = dict(zip(pending_paths, download_urls, strict=True))
+    return _prepare_inline_image_results(
+        selected_media,
+        subscription_types=subscription_types,
+        download_urls_by_path=download_urls_by_path,
+    )
 
 
 @inline_query_stage(MEDIA_CATALOG_STAGE)
