@@ -4,6 +4,7 @@ from datetime import time
 from typing import Any
 
 import pytest
+from hamcrest import assert_that, equal_to, has_entries
 
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
@@ -388,29 +389,121 @@ async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_p
     await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
 
 
-async def test_bot_records_empty_inline_query_without_database_lookup(
+async def test_bot_returns_random_media_per_category_for_empty_inline_query(
     bot_process: subprocess.Process,
     fake_statsd_server: FakeStatsDServer,
     fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
 ) -> None:
-    await fake_telegram_server.push_inline_query(query=" / ", query_id="inline-blank")
+    subscription_types = (
+        FunctionalSubscriptionType(1, "/ready-photo", time(0), "ready-photo"),
+        FunctionalSubscriptionType(2, "/pending-gif", time(1), "pending-gif"),
+        FunctionalSubscriptionType(3, "/pending-photo", time(2), "pending-photo"),
+        FunctionalSubscriptionType(4, "/empty", time(3), "empty"),
+        FunctionalSubscriptionType(5, "/broken", time(4), "broken"),
+    )
+    await seed_functional_subscription_types(subscription_types)
+    await fake_yandex_server.configure_directory("ready-photo", images=[{"name": "ready.png"}])
+    await fake_yandex_server.configure_directory(
+        "pending-gif",
+        images=[{"name": "pending.gif", "mime_type": "image/gif"}],
+    )
+    await fake_yandex_server.configure_directory("pending-photo", images=[{"name": "pending.png"}])
+    await fake_yandex_server.configure_directory("empty", images=[])
+    await fake_yandex_server.configure_directory(
+        "broken",
+        images=[{"name": "broken.gif", "mime_type": "image/gif"}],
+    )
+    await synchronize_functional_media_catalog()
 
+    await fake_telegram_server.push_message(text="/ready-photo")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_statsd_server.reset()
+
+    await fake_telegram_server.push_inline_query(query=" / ", query_id="inline-blank")
     request = await fake_telegram_server.wait_for_request(
         "answerInlineQuery",
         predicate=lambda request: request["payload"].get("inline_query_id") == "inline-blank",
     )
-    assert request["payload"]["results"] == []
+
+    payload = request["payload"]
+    assert_that(payload["cache_time"], equal_to(0))
+    assert_that(payload["is_personal"], equal_to(True))
+    results = payload["results"]
+    assert_that(
+        [result["title"] for result in results],
+        equal_to(["🎲 /ready-photo", "🎲 /pending-gif", "🎲 /pending-photo"]),
+    )
+    results_by_title = {result["title"]: result for result in results}
+    assert_that(
+        results_by_title["🎲 /ready-photo"],
+        has_entries(type="photo", photo_file_id="functional-photo-file-id"),
+    )
+    assert_that(
+        results_by_title["🎲 /pending-gif"],
+        has_entries(
+            type="gif",
+            gif_url=f"{fake_yandex_server.base_url}/download/pending.gif",
+            thumbnail_url=f"{fake_yandex_server.base_url}/download/pending.gif",
+        ),
+    )
+    assert_that(
+        results_by_title["🎲 /pending-photo"],
+        has_entries(
+            type="photo",
+            photo_url=f"{fake_yandex_server.base_url}/download/pending.png",
+            thumbnail_url=f"{fake_yandex_server.base_url}/download/pending.png",
+        ),
+    )
+    result_ids = [result["id"] for result in results]
+    assert_that([len(result_id.encode()) for result_id in result_ids], equal_to([64, 64, 64]))
+    assert_that(len(set(result_ids)), equal_to(3))
+
+    yandex_requests = await fake_yandex_server.requests()
+    url_lookups = [request for request in yandex_requests if request["method"] == "resources/download"]
+    assert_that(
+        [request["params"]["path"] for request in url_lookups],
+        equal_to(
+            [
+                "app:/pending-gif/pending.gif",
+                "app:/pending-photo/pending.png",
+                "app:/broken/broken.gif",
+            ]
+        ),
+    )
+    assert_that([request for request in yandex_requests if request["method"] == "download"], equal_to([]))
 
     metrics = await _wait_for_metrics(
         fake_statsd_server,
+        "functional.inline.outcomes.partial_error.total",
         "functional.inline.scenarios.empty_query.total",
         "functional.inline.dependencies.postgres.calls",
         "functional.inline.dependencies.yandex.calls",
         "functional.inline.dependencies.telegram.calls",
+        "functional.inline.media.catalog_items",
+        "functional.inline.media.selected_items",
+        "functional.inline.media.ready_items",
+        "functional.inline.media.pending_items",
+        "functional.inline.media.url_successes",
+        "functional.inline.media.url_failures",
+        "functional.inline.results.prepared",
+        "functional.inline.results.sent",
     )
-    assert metrics["functional.inline.dependencies.postgres.calls"]["value"] == 0
-    assert metrics["functional.inline.dependencies.yandex.calls"]["value"] == 0
-    assert metrics["functional.inline.dependencies.telegram.calls"]["value"] == 1
+    assert_that(metrics["functional.inline.dependencies.postgres.calls"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(3))
+    assert_that(metrics["functional.inline.dependencies.telegram.calls"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(4))
+    assert_that(metrics["functional.inline.media.selected_items"]["value"], equal_to(4))
+    assert_that(metrics["functional.inline.media.ready_items"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.media.pending_items"]["value"], equal_to(3))
+    assert_that(metrics["functional.inline.media.url_successes"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.media.url_failures"]["value"], equal_to(1))
+    assert_that(metrics["functional.inline.results.prepared"]["value"], equal_to(3))
+    assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(3))
 
 
 async def test_bot_returns_empty_inline_results_for_known_empty_category_and_keeps_polling(

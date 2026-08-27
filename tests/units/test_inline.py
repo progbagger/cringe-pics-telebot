@@ -14,9 +14,10 @@ from aiogram.types import (
     InlineQueryResultPhoto,
     InlineQueryResultUnion,
 )
+from hamcrest import assert_that, equal_to
 from pytest import MonkeyPatch
 
-from cringe_pics_telebot.bot import inline
+from cringe_pics_telebot.bot import inline, keyboards
 from cringe_pics_telebot.repositories.postgres import SubscriptionType
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
@@ -43,6 +44,20 @@ def test_category_matches_query(
     matches: bool,
 ) -> None:
     assert inline.category_matches_query(query, category, search_aliases) is matches
+
+
+@pytest.mark.parametrize("query", ["", "   ", " / "])
+async def test_find_subscription_types_returns_all_categories_for_normalized_empty_query(
+    monkeypatch: MonkeyPatch,
+    query: str,
+) -> None:
+    subscription_types = [
+        _subscription_type(1, "/morning", "morning"),
+        _subscription_type(2, "/day", "day"),
+    ]
+    monkeypatch.setattr(inline, "get_subscription_types", lambda: _async_result(subscription_types))
+
+    assert_that(await inline._find_subscription_types(query), equal_to(subscription_types))
 
 
 async def test_find_subscription_types_returns_every_matching_category(monkeypatch: MonkeyPatch) -> None:
@@ -121,6 +136,102 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     assert payloads[0]["description"] == "Категория /morning"
     assert payloads[2]["description"] == "Категория /evening"
     assert len({payload["id"] for payload in payloads}) == 3
+
+
+def test_build_inline_category_results_preserves_media_types_and_namespaces_category_ids() -> None:
+    categories = [
+        _subscription_type(1, "/morning", "morning"),
+        _subscription_type(2, "/day", "day"),
+        _subscription_type(3, "/evening", "evening"),
+        _subscription_type(4, "/night", "night"),
+    ]
+    images: list[tuple[SubscriptionType, CachedMedia | LinkedMedia]] = [
+        (
+            categories[0],
+            CachedMedia(
+                name="cached-photo.png",
+                mime_type="image/png",
+                path="shared/image.png",
+                source_revision="sha256:shared",
+                id="telegram-photo",
+            ),
+        ),
+        (
+            categories[1],
+            LinkedMedia(
+                name="linked-photo.png",
+                mime_type="image/png",
+                path="shared/image.png",
+                source_revision="sha256:shared",
+                url="https://storage.example/photo.png",
+            ),
+        ),
+        (
+            categories[2],
+            CachedMedia(
+                name="cached-animation.gif",
+                mime_type="image/gif",
+                path="evening/animation.gif",
+                source_revision="sha256:cached-animation",
+                id="telegram-animation",
+            ),
+        ),
+        (
+            categories[3],
+            LinkedMedia(
+                name="linked-animation.gif",
+                mime_type="image/gif",
+                path="night/animation.gif",
+                source_revision="sha256:linked-animation",
+                url="https://storage.example/animation.gif",
+            ),
+        ),
+    ]
+
+    results = inline._build_inline_category_results(images)
+    payloads = [result.model_dump(exclude_none=True) for result in results]
+
+    assert_that(
+        [type(result) for result in results],
+        equal_to(
+            [
+                InlineQueryResultCachedPhoto,
+                InlineQueryResultPhoto,
+                InlineQueryResultCachedGif,
+                InlineQueryResultGif,
+            ]
+        ),
+    )
+    assert_that(
+        [payload["title"] for payload in payloads],
+        equal_to([f"🎲 {keyboards.format_category_button_text(category)}" for category in categories]),
+    )
+    assert_that(
+        [
+            payloads[0]["photo_file_id"],
+            payloads[1]["photo_url"],
+            payloads[2]["gif_file_id"],
+            payloads[3]["gif_url"],
+        ],
+        equal_to(
+            [
+                "telegram-photo",
+                "https://storage.example/photo.png",
+                "telegram-animation",
+                "https://storage.example/animation.gif",
+            ]
+        ),
+    )
+    result_ids = [result.id for result in results]
+    assert_that([len(result_id) for result_id in result_ids], equal_to([64, 64, 64, 64]))
+    assert_that(len(set(result_ids)), equal_to(4))
+    assert_that(result_ids[0] == result_ids[1], equal_to(False))
+    assert_that(
+        set(result_ids).isdisjoint(
+            inline._inline_result(image, subscription_type=category).id for category, image in images
+        ),
+        equal_to(True),
+    )
 
 
 def test_shuffle_inline_results_uses_injected_shuffler_on_a_copy() -> None:
@@ -246,6 +357,43 @@ def test_prepare_inline_results_preserves_selected_media_type_and_source(result:
     assert prepared_result.id != result.id
 
 
+@pytest.mark.parametrize("query_text", ["", "   ", " / "])
+async def test_answer_inline_query_uses_category_results_for_normalized_empty_query(
+    monkeypatch: MonkeyPatch,
+    query_text: str,
+) -> None:
+    subscription_type = _subscription_type(2, "/day", "day")
+    category_results = _inline_results(2)
+    query = _FakeInlineQuery(query=query_text)
+
+    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+        assert_that(query, equal_to(query_text))
+        return [subscription_type]
+
+    async def get_inline_category_results(
+        subscription_types: list[SubscriptionType],
+    ) -> list[inline.InlineMediaResult]:
+        assert_that(subscription_types, equal_to([subscription_type]))
+        return category_results
+
+    async def fail_get_inline_results(subscription_types: list[SubscriptionType]) -> list[inline.InlineMediaResult]:
+        raise AssertionError("ordinary inline results must not be loaded for an empty query")
+
+    def fail_prepare_inline_results(results: list[inline.InlineMediaResult]) -> list[inline.InlineMediaResult]:
+        raise AssertionError("category results must not receive the ordinary random result")
+
+    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_get_inline_category_results", get_inline_category_results)
+    monkeypatch.setattr(inline, "_get_inline_results", fail_get_inline_results)
+    monkeypatch.setattr(inline, "_prepare_inline_results", fail_prepare_inline_results)
+
+    await inline.answer_inline_query(cast(InlineQuery, query))
+
+    assert_that(query.results, equal_to(category_results))
+    assert_that(query.cache_time, equal_to(0))
+    assert_that(query.is_personal, equal_to(True))
+
+
 async def test_answer_inline_query_prepares_results_and_disables_telegram_cache(monkeypatch: MonkeyPatch) -> None:
     subscription_type = _subscription_type(2, "/day", "day")
     results = _inline_results(inline.MAX_INLINE_QUERY_RESULTS + 1)
@@ -347,6 +495,10 @@ async def test_answer_inline_query_records_and_propagates_cancellation(
     event = _last_inline_metrics_event(caplog)
     assert event["outcome"] == "cancelled"
     assert event["counts"]["telegram_calls"] == 0
+
+
+async def _async_result[T](value: T) -> T:
+    return value
 
 
 def _inline_results(count: int) -> list[inline.InlineMediaResult]:
