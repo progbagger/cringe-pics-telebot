@@ -1,7 +1,7 @@
-from collections.abc import Iterable, MutableSequence, Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, time
 
-from hamcrest import assert_that, empty, equal_to, has_length, has_properties, instance_of, is_, only_contains
+from hamcrest import assert_that, empty, equal_to, has_length, has_properties, instance_of, is_
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.postgres import (
@@ -12,14 +12,16 @@ from cringe_pics_telebot.repositories.postgres import (
 )
 from cringe_pics_telebot.services import inline_images
 from cringe_pics_telebot.services.inline_metrics import InlineQueryMetrics
+from cringe_pics_telebot.services.inline_pagination import paginate_inline_media
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 
-async def test_get_inline_images_uses_catalog_ids_and_resolves_only_pending_urls(
+async def test_get_inline_images_resolves_only_special_and_current_page(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    media = [_media(1, file_id="telegram-file-id"), _media(2)]
+    media = [_media(index) for index in range(101)]
     requested_paths: list[str] = []
+    seed = b"seed-001"
 
     async def get_media(category_ids: list[int]) -> list[CategoryMedia]:
         assert_that(category_ids, equal_to([2]))
@@ -27,142 +29,51 @@ async def test_get_inline_images_uses_catalog_ids_and_resolves_only_pending_urls
 
     async def get_urls(paths: Iterable[str]) -> list[str | None]:
         requested_paths.extend(paths)
-        return [f"https://storage.example/{path}" for path in requested_paths]
+        return [f"https://storage.example/{path}" for path in paths]
 
     monkeypatch.setattr(inline_images, "get_category_media_by_subscription_types", get_media)
     monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
 
-    subscription_type = _subscription_type()
+    catalog_page = paginate_inline_media(media, None, seed_factory=lambda: seed)
     with InlineQueryMetrics.start(query_is_empty=False, clock=lambda: 1) as metrics:
-        assert_that(
-            await inline_images.get_inline_images([subscription_type], shuffler=_keep_order),
-            equal_to(
-                [
-                    (
-                        subscription_type,
-                        CachedMedia(
-                            name="1.png",
-                            mime_type="image/png",
-                            path="day/1.png",
-                            source_revision="sha256:1",
-                            id="telegram-file-id",
-                        ),
-                    ),
-                    (
-                        subscription_type,
-                        LinkedMedia(
-                            name="2.png",
-                            mime_type="image/png",
-                            path="day/2.png",
-                            source_revision="sha256:2",
-                            url="https://storage.example/day/2.png",
-                        ),
-                    ),
-                ]
-            ),
+        page = await inline_images.get_inline_images(
+            [_subscription_type()],
+            cursor=None,
+            seed_factory=lambda: seed,
         )
-    assert_that(requested_paths, equal_to(["day/2.png"]))
+
+    assert page.special_image is not None
+    assert catalog_page.special_media is not None
+    assert_that(page.ordinary_images, has_length(49))
+    assert_that(page.next_cursor, equal_to(catalog_page.next_cursor))
+    selected_paths = [
+        catalog_page.special_media.source_path,
+        *(item.source_path for item in catalog_page.ordinary_media),
+    ]
+    assert_that(requested_paths, equal_to(selected_paths))
     assert_that(
         metrics.counts,
         has_properties(
-            catalog_media=2,
-            selected_media=2,
-            ready_media=1,
-            pending_media=1,
-            url_successes=1,
+            catalog_media=101,
+            selected_media=50,
+            ready_media=0,
+            pending_media=50,
+            url_successes=50,
             url_failures=0,
             postgres_calls=1,
-            yandex_calls=1,
+            yandex_calls=50,
         ),
     )
 
 
-async def test_get_inline_images_applies_global_limit_before_resolving_urls(monkeypatch: MonkeyPatch) -> None:
-    media = [_media(index) for index in range(52)]
-    requested_paths: list[str] = []
-
-    async def get_urls(paths: Iterable[str]) -> list[str | None]:
-        requested_paths.extend(paths)
-        return [f"https://storage.example/{path}" for path in requested_paths]
-
-    monkeypatch.setattr(
-        inline_images,
-        "get_category_media_by_subscription_types",
-        lambda category_ids: _async_result(media),
-    )
-    monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
-
-    results = await inline_images.get_inline_images([_subscription_type()], shuffler=_keep_order)
-
-    assert_that(results, has_length(inline_images.MAX_INLINE_QUERY_RESULTS))
-    assert_that(requested_paths, equal_to([f"day/{index}.png" for index in range(50)]))
-
-
-async def test_get_inline_images_skips_only_missing_download_url(monkeypatch: MonkeyPatch) -> None:
-    media = [_media(1), _media(2)]
-    monkeypatch.setattr(
-        inline_images,
-        "get_category_media_by_subscription_types",
-        lambda category_ids: _async_result(media),
-    )
-    monkeypatch.setattr(
-        inline_images,
-        "get_download_urls",
-        lambda paths: _async_result(["https://storage.example/day/1.png", None]),
-    )
-
-    subscription_type = _subscription_type()
-    assert_that(
-        await inline_images.get_inline_images([subscription_type], shuffler=_keep_order),
-        equal_to(
-            [
-                (
-                    subscription_type,
-                    LinkedMedia(
-                        name="1.png",
-                        mime_type="image/png",
-                        path="day/1.png",
-                        source_revision="sha256:1",
-                        url="https://storage.example/day/1.png",
-                    ),
-                )
-            ]
-        ),
-    )
-
-
-async def test_get_inline_images_uses_only_ready_when_ready_fills_limit(
+async def test_get_inline_images_continuation_does_not_resolve_previous_page(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    media = [*[_media(index, file_id=f"telegram-{index}") for index in range(50)], _media(50)]
-    url_resolution_attempted = False
-
-    async def get_urls(paths: Iterable[str]) -> list[str | None]:
-        nonlocal url_resolution_attempted
-        url_resolution_attempted = True
-        return []
-
-    monkeypatch.setattr(
-        inline_images,
-        "get_category_media_by_subscription_types",
-        lambda category_ids: _async_result(media),
-    )
-    monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
-
-    results = await inline_images.get_inline_images([_subscription_type()], shuffler=_keep_order)
-
-    assert_that(results, has_length(inline_images.MAX_INLINE_QUERY_RESULTS))
-    assert_that([isinstance(image, CachedMedia) for _, image in results], only_contains(True))
-    assert_that(url_resolution_attempted, is_(False))
-
-
-async def test_get_inline_images_fills_only_remaining_places_with_pending(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    media = [
-        *[_media(index, file_id=f"telegram-{index}") for index in range(48)],
-        *[_media(index) for index in range(48, 51)],
-    ]
+    media = [_media(index) for index in range(101)]
+    seed = b"seed-001"
+    first_catalog_page = paginate_inline_media(media, None, seed_factory=lambda: seed)
+    assert first_catalog_page.next_cursor is not None
+    second_catalog_page = paginate_inline_media(media, first_catalog_page.next_cursor)
     requested_paths: list[str] = []
 
     async def get_urls(paths: Iterable[str]) -> list[str | None]:
@@ -176,12 +87,97 @@ async def test_get_inline_images_fills_only_remaining_places_with_pending(
     )
     monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
 
-    results = await inline_images.get_inline_images([_subscription_type()], shuffler=_keep_order)
+    page = await inline_images.get_inline_images(
+        [_subscription_type()],
+        cursor=first_catalog_page.next_cursor,
+    )
 
-    assert_that(results, has_length(inline_images.MAX_INLINE_QUERY_RESULTS))
-    assert_that(sum(isinstance(image, CachedMedia) for _, image in results), equal_to(48))
-    assert_that(sum(isinstance(image, LinkedMedia) for _, image in results), equal_to(2))
-    assert_that(requested_paths, equal_to(["day/48.png", "day/49.png"]))
+    assert_that(page.special_image, equal_to(None))
+    assert_that(page.ordinary_images, has_length(50))
+    assert_that(requested_paths, equal_to([item.source_path for item in second_catalog_page.ordinary_media]))
+    first_paths = {item.source_path for item in first_catalog_page.ordinary_media}
+    assert_that(first_paths.isdisjoint(requested_paths), is_(True))
+
+
+async def test_get_inline_images_prefers_ready_special_and_resolves_only_pending_ordinary(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    media = [_media(1, file_id="telegram-file-id"), _media(2)]
+    requested_paths: list[str] = []
+
+    async def get_urls(paths: Iterable[str]) -> list[str | None]:
+        requested_paths.extend(paths)
+        return [f"https://storage.example/{path}" for path in paths]
+
+    monkeypatch.setattr(
+        inline_images,
+        "get_category_media_by_subscription_types",
+        lambda category_ids: _async_result(media),
+    )
+    monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
+
+    subscription_type = _subscription_type()
+    page = await inline_images.get_inline_images(
+        [subscription_type],
+        cursor=None,
+        seed_factory=lambda: b"seed-001",
+    )
+
+    assert_that(
+        page.special_image,
+        equal_to(
+            (
+                subscription_type,
+                CachedMedia(
+                    name="1.png",
+                    mime_type="image/png",
+                    path="day/1.png",
+                    source_revision="sha256:1",
+                    id="telegram-file-id",
+                ),
+            )
+        ),
+    )
+    assert_that(
+        page.ordinary_images,
+        equal_to(
+            (
+                (
+                    subscription_type,
+                    LinkedMedia(
+                        name="2.png",
+                        mime_type="image/png",
+                        path="day/2.png",
+                        source_revision="sha256:2",
+                        url="https://storage.example/day/2.png",
+                    ),
+                ),
+            )
+        ),
+    )
+    assert_that(requested_paths, equal_to(["day/2.png"]))
+
+
+async def test_get_inline_images_skips_only_missing_download_url(monkeypatch: MonkeyPatch) -> None:
+    media = [_media(1), _media(2)]
+    monkeypatch.setattr(
+        inline_images,
+        "get_category_media_by_subscription_types",
+        lambda category_ids: _async_result(media),
+    )
+    monkeypatch.setattr(
+        inline_images,
+        "get_download_urls",
+        lambda paths: _async_result(["https://storage.example/available.png", None]),
+    )
+
+    page = await inline_images.get_inline_images(
+        [_subscription_type()],
+        cursor=None,
+        seed_factory=lambda: b"seed-001",
+    )
+
+    assert_that(len([image for image in (page.special_image, *page.ordinary_images) if image is not None]), equal_to(1))
 
 
 async def test_get_inline_images_prefers_ready_duplicate_across_categories(
@@ -191,12 +187,7 @@ async def test_get_inline_images_prefers_ready_duplicate_across_categories(
     day = _subscription_type(2, name="/day", directory="day")
     media = [
         _media(1, category_id=1, source_path="shared/image.png"),
-        _media(
-            2,
-            category_id=2,
-            source_path="shared/image.png",
-            file_id="telegram-shared",
-        ),
+        _media(2, category_id=2, source_path="shared/image.png", file_id="telegram-shared"),
     ]
     monkeypatch.setattr(
         inline_images,
@@ -204,49 +195,40 @@ async def test_get_inline_images_prefers_ready_duplicate_across_categories(
         lambda category_ids: _async_result(media),
     )
 
-    results = await inline_images.get_inline_images([morning, day], shuffler=_keep_order)
+    page = await inline_images.get_inline_images(
+        [morning, day],
+        cursor=None,
+        seed_factory=lambda: b"seed-001",
+    )
 
     assert_that(
-        results,
+        page.special_image,
         equal_to(
-            [
-                (
-                    day,
-                    CachedMedia(
-                        name="2.png",
-                        mime_type="image/png",
-                        path="shared/image.png",
-                        source_revision="sha256:2",
-                        id="telegram-shared",
-                    ),
-                )
-            ]
+            (
+                day,
+                CachedMedia(
+                    name="2.png",
+                    mime_type="image/png",
+                    path="shared/image.png",
+                    source_revision="sha256:2",
+                    id="telegram-shared",
+                ),
+            )
         ),
     )
+    assert_that(page.ordinary_images, empty())
 
 
-def test_select_inline_media_shuffles_ready_and_pending_independently() -> None:
+def test_deduplicate_inline_media_keeps_catalog_order_and_prefers_ready_duplicate() -> None:
     media = [
-        _media(1, file_id="telegram-1"),
-        _media(2, file_id="telegram-2"),
-        _media(3),
-        _media(4),
+        _media(1, source_path="shared/image.png"),
+        _media(2),
+        _media(3, source_path="shared/image.png", file_id="telegram-shared"),
     ]
-    shuffled_inputs: list[list[int]] = []
 
-    def reverse(items: MutableSequence[CategoryMedia]) -> None:
-        shuffled_inputs.append([item.id for item in items])
-        items.reverse()
+    selected = inline_images._deduplicate_inline_media(media, subscription_types=[_subscription_type()])
 
-    selected = inline_images._select_inline_media(
-        media,
-        subscription_types=[_subscription_type()],
-        limit=None,
-        shuffler=reverse,
-    )
-
-    assert_that(shuffled_inputs, equal_to([[1, 2], [3, 4]]))
-    assert_that([item.id for item in selected], equal_to([2, 1, 4, 3]))
+    assert_that([item.id for item in selected], equal_to([3, 2]))
 
 
 async def test_get_inline_images_returns_empty_without_url_resolution(
@@ -258,7 +240,15 @@ async def test_get_inline_images_returns_empty_without_url_resolution(
         lambda category_ids: _async_result([]),
     )
 
-    assert_that(await inline_images.get_inline_images([_subscription_type()], shuffler=_keep_order), empty())
+    page = await inline_images.get_inline_images(
+        [_subscription_type()],
+        cursor=None,
+        seed_factory=lambda: b"seed-001",
+    )
+
+    assert_that(page.special_image, equal_to(None))
+    assert_that(page.ordinary_images, empty())
+    assert_that(page.next_cursor, equal_to(None))
 
 
 async def test_get_inline_category_images_selects_one_per_nonempty_category_and_prefers_ready(
@@ -388,10 +378,6 @@ def test_select_inline_category_media_chooses_before_stable_category_limit() -> 
 
 async def _async_result[T](value: T) -> T:
     return value
-
-
-def _keep_order(items: MutableSequence[CategoryMedia]) -> None:
-    return None
 
 
 def _media(

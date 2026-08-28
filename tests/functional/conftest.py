@@ -188,6 +188,7 @@ class FakeTelegramServer:
         user_id: int = 42,
         first_name: str = "Functional",
         query_id: str = "inline-100",
+        offset: str = "",
     ) -> dict[str, Any]:
         update = {
             "inline_query": {
@@ -199,7 +200,7 @@ class FakeTelegramServer:
                     "language_code": "ru",
                 },
                 "query": query,
-                "offset": "",
+                "offset": offset,
                 "chat_type": "group",
             }
         }

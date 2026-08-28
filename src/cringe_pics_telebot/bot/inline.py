@@ -1,7 +1,7 @@
 import hashlib
 import logging
-import random
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 from aiogram import Router
 from aiogram.types import (
@@ -28,6 +28,12 @@ from cringe_pics_telebot.services.inline_metrics import (
     get_inline_query_metrics,
     inline_query_stage,
 )
+from cringe_pics_telebot.services.inline_pagination import (
+    InlinePaginationCursor,
+    InvalidInlinePaginationCursor,
+    decode_inline_pagination_cursor,
+    encode_inline_pagination_cursor,
+)
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
@@ -41,28 +47,55 @@ type InlineMediaResult = (
     InlineQueryResultCachedGif | InlineQueryResultCachedPhoto | InlineQueryResultGif | InlineQueryResultPhoto
 )
 
+
+@dataclass(frozen=True, slots=True)
+class InlineResultsPage:
+    results: tuple[InlineMediaResult, ...]
+    next_cursor: InlinePaginationCursor | None
+
+
 router = Router(name="inline")
 
 
 @router.inline_query()
 async def answer_inline_query(inline_query: InlineQuery) -> None:
-    query_is_empty = not bool(normalize_category_search_term(inline_query.query))
+    normalized_query = normalize_category_search_term(inline_query.query)
+    query_is_empty = not bool(normalized_query)
     with InlineQueryMetrics.start(query_is_empty=query_is_empty) as metrics:
         subscription_types = await _find_subscription_types(inline_query.query)
         metrics.counts.matched_categories = len(subscription_types)
 
         if not subscription_types:
-            await _answer_inline_query(inline_query, [])
+            await _answer_inline_query(
+                inline_query,
+                [],
+                next_cursor=None,
+                normalized_query=normalized_query,
+            )
             return
 
+        next_cursor: InlinePaginationCursor | None = None
         try:
-            raw_results = (
-                await _get_inline_category_results(subscription_types)
-                if query_is_empty
-                else await _get_inline_results(subscription_types)
+            if query_is_empty:
+                results = await _get_inline_category_results(subscription_types)
+            else:
+                cursor = (
+                    decode_inline_pagination_cursor(inline_query.offset, normalized_query)
+                    if inline_query.offset
+                    else None
+                )
+                page = await _get_inline_results(subscription_types, cursor=cursor)
+                results = list(page.results)
+                next_cursor = page.next_cursor
+            metrics.counts.results_prepared = len(results)
+        except InvalidInlinePaginationCursor as error:
+            metrics.set_outcome("handled_error")
+            logger.warning(
+                "Rejected inline pagination cursor; correlation_id=%s; reason=%s",
+                metrics.correlation_id,
+                error,
             )
-            metrics.counts.results_prepared = len(raw_results)
-            results = raw_results if query_is_empty else _prepare_inline_results(raw_results)
+            results = []
         except Exception:
             metrics.set_outcome("handled_error")
             logger.exception("Failed to prepare inline results; correlation_id=%s", metrics.correlation_id)
@@ -72,7 +105,12 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
             metrics.set_outcome("partial_error")
         answer_results: list[InlineQueryResultUnion] = [*results[:MAX_INLINE_QUERY_RESULTS]]
         metrics.counts.results_sent = len(answer_results)
-        await _answer_inline_query(inline_query, answer_results)
+        await _answer_inline_query(
+            inline_query,
+            answer_results,
+            next_cursor=next_cursor,
+            normalized_query=normalized_query,
+        )
 
 
 @inline_query_stage(CATEGORIES_LOOKUP_STAGE)
@@ -108,9 +146,20 @@ def category_matches_query(query: str, category: str, search_aliases: Sequence[s
     return any(normalized_query in term for term in normalized_terms)
 
 
-async def _get_inline_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
-    images = await get_inline_images(subscription_types)
-    return _build_inline_results(images)
+async def _get_inline_results(
+    subscription_types: list[SubscriptionType],
+    *,
+    cursor: InlinePaginationCursor | None,
+) -> InlineResultsPage:
+    images_page = await get_inline_images(subscription_types, cursor=cursor)
+    ordinary_results = _build_inline_results(list(images_page.ordinary_images))
+    special_result = (
+        _build_random_inline_result(*images_page.special_image) if images_page.special_image is not None else None
+    )
+    return InlineResultsPage(
+        results=tuple([*([special_result] if special_result is not None else []), *ordinary_results]),
+        next_cursor=images_page.next_cursor,
+    )
 
 
 async def _get_inline_category_results(subscription_types: list[SubscriptionType]) -> list[InlineMediaResult]:
@@ -154,38 +203,28 @@ def _build_inline_results(
 async def _answer_inline_query(
     inline_query: InlineQuery,
     results: list[InlineQueryResultUnion],
+    *,
+    next_cursor: InlinePaginationCursor | None,
+    normalized_query: str,
 ) -> None:
     metrics = get_inline_query_metrics()
     if metrics is not None:
         metrics.counts.telegram_calls += 1
-    await inline_query.answer(results, cache_time=0, is_personal=True)
+    next_offset = encode_inline_pagination_cursor(next_cursor, normalized_query) if next_cursor is not None else ""
+    await inline_query.answer(results, cache_time=0, is_personal=True, next_offset=next_offset)
 
 
-@inline_query_stage(RESULTS_PREPARE_STAGE)
-def _prepare_inline_results(
-    results: list[InlineMediaResult],
-    *,
-    chooser: Callable[[Sequence[InlineMediaResult]], InlineMediaResult] | None = None,
-    shuffler: Callable[[list[InlineMediaResult]], None] | None = None,
-) -> list[InlineMediaResult]:
-    if not results:
-        return []
-
-    cached_results = [result for result in results if _is_cached_inline_result(result)]
-    linked_results = [result for result in results if not _is_cached_inline_result(result)]
-    selected_result = (chooser or random.choice)(cached_results or linked_results)
-    random_result = selected_result.model_copy(
+def _build_random_inline_result(
+    subscription_type: SubscriptionType,
+    image: CachedMedia | LinkedMedia,
+) -> InlineMediaResult:
+    result = _inline_result(image, subscription_type=subscription_type)
+    return result.model_copy(
         update={
-            "id": _random_result_id(selected_result.id),
+            "id": _random_result_id(result.id),
             "title": RANDOM_INLINE_RESULT_TITLE,
         }
     )
-    ordinary_cached = [result for result in cached_results if result.id != selected_result.id]
-    ordinary_linked = [result for result in linked_results if result.id != selected_result.id]
-    shuffled_cached = _shuffle_inline_results(ordinary_cached, shuffler=shuffler) if ordinary_cached else []
-    shuffled_linked = _shuffle_inline_results(ordinary_linked, shuffler=shuffler) if ordinary_linked else []
-
-    return [random_result, *shuffled_cached, *shuffled_linked][:MAX_INLINE_QUERY_RESULTS]
 
 
 def _random_result_id(result_id: str) -> str:
@@ -195,20 +234,6 @@ def _random_result_id(result_id: str) -> str:
 def _category_result_id(subscription_type: SubscriptionType, image: CachedMedia | LinkedMedia) -> str:
     identity = f"category-random:{subscription_type.id}:{image.path}:{image.source_revision}"
     return hashlib.sha256(identity.encode()).hexdigest()
-
-
-def _shuffle_inline_results(
-    results: list[InlineMediaResult],
-    *,
-    shuffler: Callable[[list[InlineMediaResult]], None] | None = None,
-) -> list[InlineMediaResult]:
-    shuffled_results = results.copy()
-    (shuffler or random.shuffle)(shuffled_results)
-    return shuffled_results
-
-
-def _is_cached_inline_result(result: InlineMediaResult) -> bool:
-    return isinstance(result, InlineQueryResultCachedGif | InlineQueryResultCachedPhoto)
 
 
 def _inline_result(
