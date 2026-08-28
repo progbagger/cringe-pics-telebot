@@ -1,5 +1,6 @@
 import random
-from collections.abc import Callable, MutableSequence, Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -16,28 +17,54 @@ from .inline_metrics import (
     get_inline_query_metrics,
     inline_query_stage,
 )
+from .inline_pagination import InlinePaginationCursor, SeedFactory, paginate_inline_media
 
 MAX_INLINE_QUERY_RESULTS = 50
 
 type MediaChooser = Callable[[Sequence[CategoryMedia]], CategoryMedia]
-type MediaShuffler = Callable[[MutableSequence[CategoryMedia]], None]
+type ResolvedInlineImage = tuple[SubscriptionType, CachedMedia | LinkedMedia]
+
+
+@dataclass(frozen=True, slots=True)
+class InlineImagesPage:
+    special_image: ResolvedInlineImage | None
+    ordinary_images: tuple[ResolvedInlineImage, ...]
+    next_cursor: InlinePaginationCursor | None
 
 
 async def get_inline_images(
     subscription_types: Sequence[SubscriptionType],
     *,
-    limit: int | None = MAX_INLINE_QUERY_RESULTS,
-    shuffler: MediaShuffler | None = None,
-) -> list[tuple[SubscriptionType, CachedMedia | LinkedMedia]]:
+    cursor: InlinePaginationCursor | None,
+    seed_factory: SeedFactory | None = None,
+) -> InlineImagesPage:
     media = await _get_catalog_media([item.id for item in subscription_types])
     _record_catalog_media_count(media)
-    selected_media = _select_inline_media(
-        media,
-        subscription_types=subscription_types,
-        limit=limit,
-        shuffler=shuffler,
+    deduplicated_media = _deduplicate_inline_media(media, subscription_types=subscription_types)
+    catalog_page = paginate_inline_media(
+        deduplicated_media,
+        cursor,
+        seed_factory=seed_factory,
     )
-    return await _resolve_inline_images(selected_media, subscription_types=subscription_types)
+    selected_media = [
+        *([catalog_page.special_media] if catalog_page.special_media is not None else []),
+        *catalog_page.ordinary_media,
+    ]
+    resolved_images = await _resolve_inline_images(selected_media, subscription_types=subscription_types)
+    images_by_path = {image.path: (subscription_type, image) for subscription_type, image in resolved_images}
+    special_image = (
+        images_by_path.get(catalog_page.special_media.source_path) if catalog_page.special_media is not None else None
+    )
+    ordinary_images = tuple(
+        image
+        for media_item in catalog_page.ordinary_media
+        if (image := images_by_path.get(media_item.source_path)) is not None
+    )
+    return InlineImagesPage(
+        special_image=special_image,
+        ordinary_images=ordinary_images,
+        next_cursor=catalog_page.next_cursor,
+    )
 
 
 async def get_inline_category_images(
@@ -85,12 +112,10 @@ def _select_inline_category_media(
     return selected[:limit]
 
 
-def _select_inline_media(
+def _deduplicate_inline_media(
     media: Sequence[CategoryMedia],
     *,
     subscription_types: Sequence[SubscriptionType],
-    limit: int | None,
-    shuffler: MediaShuffler | None = None,
 ) -> list[CategoryMedia]:
     media_by_category: dict[int, list[CategoryMedia]] = {}
     for item in media:
@@ -103,14 +128,7 @@ def _select_inline_media(
             if existing is None or (existing.telegram_file_id is None and item.telegram_file_id is not None):
                 media_by_path[item.source_path] = item
 
-    ready = [item for item in media_by_path.values() if item.telegram_file_id is not None]
-    pending = [item for item in media_by_path.values() if item.telegram_file_id is None]
-    shuffle = shuffler or random.shuffle
-    shuffle(ready)
-    shuffle(pending)
-
-    selected = [*ready, *pending]
-    return selected if limit is None else selected[:limit]
+    return list(media_by_path.values())
 
 
 async def _resolve_inline_images(

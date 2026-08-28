@@ -1,6 +1,7 @@
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import time
+from functools import partial
 from typing import Any
 
 import pytest
@@ -414,6 +415,58 @@ async def test_bot_returns_day_images_for_partial_inline_query(
     assert_that(metrics["functional.inline.dependencies.telegram.calls"]["value"], equal_to(1))
     assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(2))
     assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(2))
+
+
+async def test_bot_paginates_all_inline_images_without_repeats_or_extra_url_lookups(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    set_functional_category_media_file_ids: Callable[[dict[str, str | None]], Awaitable[None]],
+) -> None:
+    image_names = [f"{index:03}.png" for index in range(101)]
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/page", time(0), "page"),))
+    await fake_yandex_server.configure_directory("page", images=[{"name": name} for name in image_names])
+    await synchronize_functional_media_catalog()
+    await set_functional_category_media_file_ids({f"page/{name}": f"telegram-{name}" for name in image_names})
+    await fake_yandex_server.reset()
+
+    payloads: list[dict[str, Any]] = []
+    offset = ""
+    for page_number in range(3):
+        query_id = f"inline-page-{page_number}"
+        await fake_telegram_server.push_inline_query(query="page", query_id=query_id, offset=offset)
+        request = await fake_telegram_server.wait_for_request(
+            "answerInlineQuery",
+            predicate=partial(_matches_inline_query_id, query_id=query_id),
+        )
+        payload = request["payload"]
+        payloads.append(payload)
+        offset = payload.get("next_offset", "")
+
+    assert_that([len(payload["results"]) for payload in payloads], equal_to([50, 50, 1]))
+    assert_that(payloads[0]["results"][0]["title"], equal_to("🎲 Выбрать случайную картинку"))
+    assert_that(
+        [
+            result["title"]
+            for payload in payloads[1:]
+            for result in payload["results"]
+            if result.get("title") == "🎲 Выбрать случайную картинку"
+        ],
+        empty(),
+    )
+    next_offsets = [payload.get("next_offset", "") for payload in payloads]
+    assert_that([bool(next_offset) for next_offset in next_offsets], equal_to([True, True, False]))
+    assert_that([len(next_offset.encode()) <= 64 for next_offset in next_offsets], only_contains(True))
+
+    file_ids = [result["photo_file_id"] for payload in payloads for result in payload["results"]]
+    assert_that(file_ids, has_length(101))
+    assert_that(set(file_ids), equal_to({f"telegram-{name}" for name in image_names}))
+    assert_that(
+        [request for request in await fake_yandex_server.requests() if request["method"] == "resources/download"],
+        empty(),
+    )
 
 
 async def test_bot_returns_empty_inline_results_for_unknown_category_and_keeps_polling(
@@ -890,6 +943,10 @@ def _is_subscription_list_answer(request: dict[str, Any]) -> bool:
 
 def _subscription_callback(*, category_id: int, subscribe: bool) -> str:
     return SubscriptionCallbackData(category_id=category_id, subscribe=subscribe).pack()
+
+
+def _matches_inline_query_id(request: dict[str, Any], *, query_id: str) -> bool:
+    return request["payload"].get("inline_query_id") == query_id
 
 
 def _reply_keyboard_button_texts(payload: dict[str, Any]) -> list[str]:
