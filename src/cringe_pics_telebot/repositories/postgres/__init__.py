@@ -32,6 +32,7 @@ from .entities import CategoryMedia as CategoryMedia
 from .entities import CategoryMediaReconcileResult as CategoryMediaReconcileResult
 from .entities import CategoryMediaSource as CategoryMediaSource
 from .entities import CategoryMediaStatus as CategoryMediaStatus
+from .entities import CreateSubscriptionType as CreateSubscriptionType
 from .entities import Subscription as Subscription
 from .entities import SubscriptionType as SubscriptionType
 from .entities import TelegramMediaType as TelegramMediaType
@@ -40,11 +41,14 @@ from .subscription import create_subscription as create_subscription
 from .subscription import delete_subscription as delete_subscription
 from .subscription import get_subscription_users as get_subscription_users
 from .subscription import get_user_subscriptions as get_user_subscriptions
+from .subscription_types import create_subscription_type as create_subscription_type
 from .subscription_types import get_active_subscription_type as get_active_subscription_type
 from .subscription_types import get_active_subscription_types as get_active_subscription_types
 from .subscription_types import get_all_subscription_types as get_all_subscription_types
 from .subscription_types import get_subscription_type as get_subscription_type
+from .subscription_types import get_subscription_type_by_name as get_subscription_type_by_name
 from .subscription_types import get_subscription_types as get_subscription_types
+from .subscription_types import set_subscription_type_activity as set_subscription_type_activity
 from .subscription_types import update_subscription_type_search_aliases as update_subscription_type_search_aliases
 from .users import create_user as create_user
 from .users import deactivate_user as deactivate_user

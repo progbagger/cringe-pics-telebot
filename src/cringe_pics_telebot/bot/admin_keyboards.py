@@ -28,17 +28,32 @@ def create_admin_panel_keyboard() -> InlineKeyboardMarkup:
 def create_admin_categories_keyboard(subscription_types: Iterable[SubscriptionType]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for subscription_type in sorted(subscription_types, key=lambda item: item.name.casefold()):
+        status = "активна" if subscription_type.is_active else "неактивна"
+        icon = "✅" if subscription_type.is_active else "⏸"
         builder.button(
-            text=subscription_type.name,
+            text=f"{icon} {subscription_type.name} — {status}",
             callback_data=_category_callback(AdminCategoryAction.category, subscription_type.id),
         )
+    builder.button(text="Создать категорию", callback_data=_category_callback(AdminCategoryAction.create))
     builder.button(text="Назад", callback_data=_panel_callback())
     builder.adjust(1)
     return builder.as_markup()
 
 
-def create_admin_category_keyboard(category_id: int, *, has_aliases: bool) -> InlineKeyboardMarkup:
+def create_admin_category_keyboard(
+    category_id: int,
+    *,
+    has_aliases: bool,
+    is_active: bool,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Деактивировать" if is_active else "Активировать",
+        callback_data=_category_callback(
+            AdminCategoryAction.deactivate if is_active else AdminCategoryAction.activate,
+            category_id,
+        ),
+    )
     builder.button(
         text="Изменить алиасы",
         callback_data=_category_callback(AdminCategoryAction.edit_aliases, category_id),

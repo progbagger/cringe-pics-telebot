@@ -657,6 +657,42 @@ async def set_functional_subscription_type_activity(
 
 
 @pytest.fixture
+async def read_functional_subscription_type(
+    docker_compose: DependencyPorts,
+) -> Callable[[str], Awaitable[dict[str, Any] | None]]:
+    async def read(name: str) -> dict[str, Any] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            row = await connection.fetchrow(
+                "SELECT * FROM subscription_types WHERE name = $1",
+                name,
+            )
+            if row is None:
+                return None
+            result = dict(row)
+            result["search_aliases"] = tuple(result["search_aliases"])
+            return result
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def count_functional_subscription_types(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[int]]:
+    async def count() -> int:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            return await connection.fetchval("SELECT count(*) FROM subscription_types")
+        finally:
+            await connection.close()
+
+    return count
+
+
+@pytest.fixture
 async def count_user_subscriptions(
     docker_compose: DependencyPorts,
 ) -> Callable[[int], Awaitable[int]]:
@@ -1286,6 +1322,16 @@ async def _insert_subscription_types(
                 )
                 for subscription in subscription_types
             ],
+        )
+        await connection.execute(
+            """
+            SELECT setval(
+                pg_get_serial_sequence('subscription_types', 'id'),
+                COALESCE(max(id), 1),
+                max(id) IS NOT NULL
+            )
+            FROM subscription_types
+            """
         )
     finally:
         await connection.close()

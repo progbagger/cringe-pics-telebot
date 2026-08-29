@@ -2,6 +2,14 @@ from dataclasses import dataclass
 from datetime import datetime, time
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CreateSubscriptionType:
+    name: str
+    time: time
+    s3_directory_path: str
+    search_aliases: tuple[str, ...]
+
+
 @dataclass(slots=True, eq=False)
 class SubscriptionType:
     id: int

@@ -1,0 +1,361 @@
+from asyncio import subprocess
+from collections.abc import Awaitable, Callable
+from datetime import time
+from typing import Any
+
+import pytest
+from hamcrest import assert_that, contains_string, equal_to, has_entries, has_item
+
+from cringe_pics_telebot.bot.admin_category_callback_data import (
+    AdminCategoryAction,
+    AdminCategoryCallbackData,
+)
+from tests.functional.conftest import (
+    SEEDED_SUBSCRIPTION_TYPES,
+    FakeTelegramServer,
+    FunctionalSubscriptionType,
+)
+
+
+@pytest.fixture(autouse=True)
+async def reset_state_before_test(
+    reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    await reset_functional_state(SEEDED_SUBSCRIPTION_TYPES)
+
+
+async def test_admin_creates_inactive_category_with_all_fields(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await fake_telegram_server.push_callback_query(data=_category_callback(AdminCategoryAction.categories))
+    category_list = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Управление категориями" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(category_list["payload"]),
+        equal_to(
+            [
+                "✅ /day — активна",
+                "✅ /evening — активна",
+                "✅ /morning — активна",
+                "✅ /night — активна",
+                "✅ /random — активна",
+                "Создать категорию",
+                "Назад",
+            ]
+        ),
+    )
+
+    await _open_category_creation(fake_telegram_server)
+    await _send_message_and_wait(fake_telegram_server, "  /afternoon  ", "путь к каталогу")
+    await _send_message_and_wait(fake_telegram_server, "  afternoon/images  ", "время отправки")
+    await _send_message_and_wait(fake_telegram_server, " 15:30 ", "Новая категория — алиасы")
+    created = await _send_message_and_wait(
+        fake_telegram_server,
+        "  после обеда  \n/ДЕНЬ\nдень\n\nвечерком",
+        "Категория создана неактивной",
+    )
+
+    assert_that(
+        created["payload"]["text"],
+        contains_string("Статус: <b>неактивна</b>"),
+    )
+    assert_that(created["payload"]["text"], contains_string("<code>afternoon/images</code>"))
+    assert_that(created["payload"]["text"], contains_string("<code>15:30</code>"))
+    assert_that(
+        _inline_keyboard_button_texts(created["payload"]),
+        equal_to(["Активировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+
+    category = await read_functional_subscription_type("/afternoon")
+    assert category is not None
+    assert_that(
+        category,
+        has_entries(
+            name="/afternoon",
+            time=time(15, 30),
+            s3_directory_path="afternoon/images",
+            search_aliases=("после обеда", "/ДЕНЬ", "вечерком"),
+            is_active=False,
+        ),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(data=_category_callback(AdminCategoryAction.categories))
+    updated_list = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "⏸ /afternoon — неактивна" in _inline_keyboard_button_texts(request["payload"]),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(updated_list["payload"]),
+        has_item("⏸ /afternoon — неактивна"),
+    )
+
+
+async def test_category_creation_validates_each_step_without_partial_write(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+    count_functional_subscription_types: Callable[[], Awaitable[int]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await _open_category_creation(fake_telegram_server)
+
+    await _send_message_and_wait(fake_telegram_server, "  \n ", "Название категории не должно быть пустым")
+    await _send_message_and_wait(fake_telegram_server, "/day", "уже существует")
+    assert await count_functional_subscription_types() == len(SEEDED_SUBSCRIPTION_TYPES)
+
+    await _send_message_and_wait(fake_telegram_server, "/validated", "путь к каталогу")
+    await _send_message_and_wait(fake_telegram_server, "  ", "Путь к каталогу не должен быть пустым")
+    assert await read_functional_subscription_type("/validated") is None
+
+    await _send_message_and_wait(fake_telegram_server, "validated", "время отправки")
+    await _send_message_and_wait(fake_telegram_server, "9:00", "Не удалось распознать локальное время")
+    await _send_message_and_wait(fake_telegram_server, "24:00", "Не удалось распознать локальное время")
+    assert await read_functional_subscription_type("/validated") is None
+
+    await _send_message_and_wait(fake_telegram_server, "09:00", "Новая категория — алиасы")
+    await _send_message_and_wait(fake_telegram_server, " \n / \n", "Не найдено ни одного непустого алиаса")
+    assert await read_functional_subscription_type("/validated") is None
+
+    await _send_message_and_wait(fake_telegram_server, "проверка", "Категория создана неактивной")
+    category = await read_functional_subscription_type("/validated")
+    assert category is not None
+    assert_that(category, has_entries(is_active=False, search_aliases=("проверка",)))
+
+
+@pytest.mark.parametrize(
+    "entered_values",
+    [
+        (),
+        ("/cancelled",),
+        ("/cancelled", "cancelled"),
+        ("/cancelled", "cancelled", "10:00"),
+    ],
+)
+async def test_category_creation_cancel_clears_every_form_state(
+    entered_values: tuple[str, ...],
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await _open_category_creation(fake_telegram_server)
+
+    next_prompts = ("путь к каталогу", "время отправки", "Новая категория — алиасы")
+    for value, prompt in zip(entered_values, next_prompts, strict=False):
+        await _send_message_and_wait(fake_telegram_server, value, prompt)
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.cancel_form),
+        message_id=200,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            "Создание или редактирование категории отменено" in request["payload"].get("text", "")
+        ),
+    )
+    assert await read_functional_subscription_type("/cancelled") is None
+
+    await fake_telegram_server.push_message(text="остаток черновика")
+    await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Что умеет бот" in request["payload"].get("text", ""),
+    )
+
+
+async def test_concurrent_category_creation_handles_final_name_conflict(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+    count_functional_subscription_types: Callable[[], Awaitable[int]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await set_functional_administrator(user_id=43)
+    await _open_category_creation(fake_telegram_server, user_id=42, message_id=100)
+    await _open_category_creation(fake_telegram_server, user_id=43, message_id=101)
+
+    for user_id in (42, 43):
+        await _send_message_and_wait(fake_telegram_server, "/race", "путь к каталогу", user_id=user_id)
+        await _send_message_and_wait(fake_telegram_server, "race", "время отправки", user_id=user_id)
+        await _send_message_and_wait(fake_telegram_server, "12:00", "Новая категория — алиасы", user_id=user_id)
+
+    await _send_message_and_wait(fake_telegram_server, "гонка", "Категория создана неактивной", user_id=42)
+    conflict = await _send_message_and_wait(
+        fake_telegram_server,
+        "гонка",
+        "Категория с таким названием уже была создана",
+        user_id=43,
+    )
+
+    assert_that(conflict["payload"]["text"], contains_string("Введите другое название"))
+    category = await read_functional_subscription_type("/race")
+    assert category is not None
+    assert_that(
+        category,
+        has_entries(s3_directory_path="race", time=time(12, 0), is_active=False),
+    )
+    assert await count_functional_subscription_types() == len(SEEDED_SUBSCRIPTION_TYPES) + 1
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.cancel_form),
+        user_id=43,
+        message_id=202,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == 43 and "отменено" in request["payload"].get("text", "")
+        ),
+    )
+
+
+async def test_admin_sets_category_activity_without_changing_category_data(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    before = await read_functional_subscription_type("/day")
+    assert before is not None
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.category, category_id=2),
+    )
+    active_card = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Статус: <b>активна</b>" in request["payload"].get("text", ""),
+    )
+    assert_that(active_card["payload"]["text"], contains_string("Путь к каталогу: <code>day</code>"))
+    assert_that(active_card["payload"]["text"], contains_string("Локальное время отправки: <code>13:00</code>"))
+    assert_that(
+        _inline_keyboard_button_texts(active_card["payload"]),
+        equal_to(["Деактивировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.deactivate, category_id=2),
+        message_id=102,
+    )
+    inactive_card = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Статус: <b>неактивна</b>" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Категория деактивирована.",
+    )
+    assert_that(
+        _inline_keyboard_button_texts(inactive_card["payload"]),
+        equal_to(["Активировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+    inactive = await read_functional_subscription_type("/day")
+    assert inactive is not None
+    assert_that(_category_business_data(inactive), equal_to(_category_business_data(before) | {"is_active": False}))
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.deactivate, category_id=2),
+        message_id=103,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Статус: <b>неактивна</b>" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _category_business_data(await _required_category(read_functional_subscription_type, "/day")),
+        equal_to(_category_business_data(before) | {"is_active": False}),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.activate, category_id=2),
+        message_id=104,
+    )
+    reactivated_card = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Статус: <b>активна</b>" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Категория активирована.",
+    )
+    assert_that(
+        _inline_keyboard_button_texts(reactivated_card["payload"]),
+        equal_to(["Деактивировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+    reactivated = await _required_category(read_functional_subscription_type, "/day")
+    assert_that(_category_business_data(reactivated), equal_to(_category_business_data(before)))
+
+
+async def _open_category_creation(
+    fake_telegram_server: FakeTelegramServer,
+    *,
+    user_id: int = 42,
+    message_id: int = 100,
+) -> None:
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.create),
+        user_id=user_id,
+        message_id=message_id,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == user_id
+            and "Новая категория — название" in request["payload"].get("text", "")
+        ),
+    )
+
+
+async def _send_message_and_wait(
+    fake_telegram_server: FakeTelegramServer,
+    text: str,
+    response_text: str,
+    *,
+    user_id: int = 42,
+) -> dict[str, Any]:
+    await fake_telegram_server.push_message(text=text, user_id=user_id)
+    return await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == user_id and response_text in request["payload"].get("text", "")
+        ),
+    )
+
+
+def _category_callback(action: AdminCategoryAction, category_id: int = 0) -> str:
+    return AdminCategoryCallbackData(action=action, category_id=category_id).pack()
+
+
+def _inline_keyboard_button_texts(payload: dict[str, Any]) -> list[str]:
+    return [button["text"] for row in payload["reply_markup"]["inline_keyboard"] for button in row]
+
+
+def _category_business_data(category: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": category["name"],
+        "time": category["time"],
+        "s3_directory_path": category["s3_directory_path"],
+        "search_aliases": category["search_aliases"],
+        "is_active": category["is_active"],
+    }
+
+
+async def _required_category(
+    reader: Callable[[str], Awaitable[dict[str, Any] | None]],
+    name: str,
+) -> dict[str, Any]:
+    category = await reader(name)
+    assert category is not None
+    return category
