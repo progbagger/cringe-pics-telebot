@@ -21,6 +21,21 @@ def create_admin_panel_keyboard() -> InlineKeyboardMarkup:
         text="Управление категориями",
         callback_data=_category_callback(AdminCategoryAction.categories),
     )
+    builder.button(
+        text="Синхронизировать медиа",
+        callback_data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def create_admin_media_sync_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Синхронизировать повторно",
+        callback_data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+    )
+    builder.button(text="Назад", callback_data=_panel_callback())
     builder.adjust(1)
     return builder.as_markup()
 
@@ -187,5 +202,9 @@ def _category_callback(action: AdminCategoryAction, category_id: int = 0) -> str
     return AdminCategoryCallbackData(action=action, category_id=category_id).pack()
 
 
+def _admin_panel_callback(action: AdminPanelAction) -> str:
+    return AdminPanelCallbackData(action=action).pack()
+
+
 def _panel_callback() -> str:
-    return AdminPanelCallbackData(action=AdminPanelAction.panel).pack()
+    return _admin_panel_callback(AdminPanelAction.panel)

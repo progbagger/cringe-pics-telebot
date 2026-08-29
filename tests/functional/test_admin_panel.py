@@ -1,6 +1,6 @@
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from typing import Any
 
 import pytest
@@ -24,10 +24,16 @@ from cringe_pics_telebot.bot.admin_category_callback_data import (
     AdminCategoryAction,
     AdminCategoryCallbackData,
 )
-from cringe_pics_telebot.services.media_sync import MediaSyncSummary
+from cringe_pics_telebot.bot.admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
+from cringe_pics_telebot.repositories import redis as cache
+from cringe_pics_telebot.repositories.redis import connect as connect_redis
+from cringe_pics_telebot.services.media_sync import MEDIA_SYNC_LEASE_KEY, MediaSyncSummary
 from tests.functional.conftest import (
+    REDIS_ENV,
     SEEDED_SUBSCRIPTION_TYPES,
+    DependencyPorts,
     FakeTelegramServer,
+    FakeYandexServer,
     FunctionalSubscriptionType,
 )
 
@@ -59,7 +65,7 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
     )
     assert_that(
         _inline_keyboard_button_texts(admin_panel["payload"]),
-        equal_to(["Рассылки", "Управление категориями"]),
+        equal_to(["Рассылки", "Управление категориями", "Синхронизировать медиа"]),
     )
 
     await set_functional_administrator(user_id=42, enabled=False)
@@ -83,6 +89,7 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
 async def test_non_admin_cannot_forge_admin_callback(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
 ) -> None:
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.new_broadcast),
@@ -93,6 +100,11 @@ async def test_non_admin_cannot_forge_admin_callback(
         user_id=999,
         message_id=101,
     )
+    await fake_telegram_server.push_callback_query(
+        data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+        user_id=999,
+        message_id=102,
+    )
     await fake_telegram_server.push_message(text="synchronization", user_id=999)
     await fake_telegram_server.wait_for_request(
         "sendMessage",
@@ -101,6 +113,187 @@ async def test_non_admin_cannot_forge_admin_callback(
 
     assert_that(await fake_telegram_server.requests(method="editMessageText"), empty())
     assert_that(await fake_telegram_server.requests(method="answerCallbackQuery"), empty())
+    assert_that(await fake_yandex_server.requests(), empty())
+
+
+async def test_admin_manually_synchronizes_active_and_inactive_media(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    set_functional_administrator: Callable[..., Awaitable[None]],
+) -> None:
+    await reset_functional_state(
+        (
+            FunctionalSubscriptionType(1, "/day", time(13), "day"),
+            FunctionalSubscriptionType(2, "/inactive", time(14), "inactive", is_active=False),
+        )
+    )
+    await fake_yandex_server.configure_directory(
+        "day",
+        images=[{"name": "first.png"}, {"name": "second.gif", "mime_type": "image/gif"}],
+    )
+    await fake_yandex_server.configure_directory("inactive", images=[{"name": "inactive.png"}])
+    await set_functional_administrator(user_id=42)
+    await fake_telegram_server.push_message(text="/admin")
+    await fake_telegram_server.wait_for_request("sendMessage")
+    await fake_telegram_server.block_method("answerCallbackQuery")
+
+    try:
+        await fake_telegram_server.push_callback_query(
+            data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+            message_id=110,
+        )
+        await fake_telegram_server.wait_for_request(
+            "answerCallbackQuery",
+            predicate=lambda request: request["payload"].get("callback_query_id") == "callback-110",
+        )
+        assert_that(await fake_yandex_server.requests(), empty())
+    finally:
+        await fake_telegram_server.release_method("answerCallbackQuery")
+
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Синхронизация медиа началась" in request["payload"].get("text", ""),
+    )
+    result = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "<b>Синхронизация медиа завершена</b>" in request["payload"].get("text", ""),
+    )
+
+    for expected_line in (
+        "Обработано категорий: <b>2</b>",
+        "Категорий с ошибками: <b>0</b>",
+        "Найдено медиа: <b>3</b>",
+        "Создано записей: <b>3</b>",
+        "Изменено записей: <b>0</b>",
+        "Повторно активировано медиа: <b>0</b>",
+        "Деактивировано отсутствующее медиа: <b>0</b>",
+    ):
+        assert_that(result["payload"]["text"], contains_string(expected_line))
+    assert_that(
+        _inline_keyboard_button_texts(result["payload"]),
+        equal_to(["Синхронизировать повторно", "Назад"]),
+    )
+    assert_that(
+        [
+            request["params"]["path"]
+            for request in await fake_yandex_server.requests()
+            if request["method"] == "resources"
+        ],
+        equal_to(["app:/day", "app:/inactive"]),
+    )
+    assert_that(
+        {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
+        empty(),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_admin_panel_callback(AdminPanelAction.panel),
+        message_id=110,
+    )
+    returned_panel = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: request["payload"].get("text") == "<b>Админ-панель</b>\n\nВыберите действие.",
+    )
+    assert_that(
+        _inline_keyboard_button_texts(returned_panel["payload"]),
+        equal_to(["Рассылки", "Управление категориями", "Синхронизировать медиа"]),
+    )
+
+
+async def test_admin_media_sync_reports_occupied_lease_without_starting_yandex_requests(
+    bot_process: subprocess.Process,
+    docker_compose: DependencyPorts,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    async with connect_redis(
+        username=REDIS_ENV["REDIS_USERNAME"],
+        password=REDIS_ENV["REDIS_PASSWORD"],
+        port=docker_compose.redis,
+        host=REDIS_ENV["REDIS_HOST"],
+    ):
+        await cache.set(
+            key=MEDIA_SYNC_LEASE_KEY,
+            value="another-instance",
+            cls=str,
+            ttl=timedelta(minutes=1),
+        )
+
+        await fake_telegram_server.push_callback_query(
+            data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+            message_id=120,
+        )
+        await fake_telegram_server.wait_for_request(
+            "answerCallbackQuery",
+            predicate=lambda request: request["payload"].get("callback_query_id") == "callback-120",
+        )
+        result = await fake_telegram_server.wait_for_request(
+            "editMessageText",
+            predicate=lambda request: "уже выполняется" in request["payload"].get("text", ""),
+        )
+
+        assert_that(await cache.get(key=MEDIA_SYNC_LEASE_KEY, cls=str), equal_to("another-instance"))
+
+    assert_that(result["payload"]["text"], contains_string("Новый запуск не начат"))
+    assert_that(
+        _inline_keyboard_button_texts(result["payload"]),
+        equal_to(["Синхронизировать повторно", "Назад"]),
+    )
+    assert_that(await fake_yandex_server.requests(), empty())
+
+
+async def test_admin_media_sync_shows_partial_result_and_allows_retry(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    set_functional_administrator: Callable[..., Awaitable[None]],
+) -> None:
+    await reset_functional_state(
+        (
+            FunctionalSubscriptionType(1, "/day", time(13), "day"),
+            FunctionalSubscriptionType(2, "/broken", time(14), "broken", is_active=False),
+        )
+    )
+    await fake_yandex_server.configure_directory("day", images=[{"name": "day.png"}])
+    await fake_yandex_server.configure_directory("broken", fail=True)
+    await set_functional_administrator(user_id=42)
+
+    await fake_telegram_server.push_callback_query(
+        data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+        message_id=130,
+    )
+    partial_result = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "завершена частично" in request["payload"].get("text", ""),
+    )
+    for expected_line in (
+        "Обработано категорий: <b>1</b>",
+        "Категорий с ошибками: <b>1</b>",
+        "Найдено медиа: <b>1</b>",
+        "Создано записей: <b>1</b>",
+        "Изменено записей: <b>0</b>",
+        "Повторно активировано медиа: <b>0</b>",
+        "Деактивировано отсутствующее медиа: <b>0</b>",
+    ):
+        assert_that(partial_result["payload"]["text"], contains_string(expected_line))
+
+    await fake_yandex_server.configure_directory("broken", images=[{"name": "recovered.png"}])
+    await fake_telegram_server.push_callback_query(
+        data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+        message_id=131,
+    )
+    retried_result = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "<b>Синхронизация медиа завершена</b>" in request["payload"].get("text", ""),
+    )
+    assert_that(retried_result["payload"]["text"], contains_string("Обработано категорий: <b>2</b>"))
+    assert_that(retried_result["payload"]["text"], contains_string("Категорий с ошибками: <b>0</b>"))
+    assert_that(retried_result["payload"]["text"], contains_string("Создано записей: <b>1</b>"))
 
 
 async def test_admin_manages_category_aliases_used_by_inline_search(
@@ -433,6 +626,10 @@ async def test_private_message_reactivates_user_without_resetting_timezone(
     )
 
     assert_that(await read_user_state(700), equal_to((-300, True)))
+
+
+def _admin_panel_callback(action: AdminPanelAction) -> str:
+    return AdminPanelCallbackData(action=action).pack()
 
 
 def _admin_broadcast_callback(action: AdminBroadcastAction, broadcast_id: int = 0) -> str:

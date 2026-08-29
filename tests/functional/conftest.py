@@ -93,6 +93,20 @@ class FakeTelegramServer:
         ):
             response.raise_for_status()
 
+    async def block_method(self, method: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/block-method", json={"method": method}) as response,
+        ):
+            response.raise_for_status()
+
+    async def release_method(self, method: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/release-method", json={"method": method}) as response,
+        ):
+            response.raise_for_status()
+
     async def set_forbidden_chat_ids(self, *chat_ids: int) -> None:
         async with (
             aiohttp.ClientSession() as session,

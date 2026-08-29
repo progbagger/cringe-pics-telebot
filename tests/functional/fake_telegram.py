@@ -12,6 +12,7 @@ class FakeTelegram:
         self._condition = asyncio.Condition()
         self._updates: list[dict[str, Any]] = []
         self._requests: list[dict[str, Any]] = []
+        self._blocked_methods: set[str] = set()
         self._forbidden_chat_ids: set[int] = set()
         self._invalid_file_ids: set[str] = set()
         self._next_update_id = 1
@@ -44,10 +45,24 @@ class FakeTelegram:
         async with self._condition:
             self._updates.clear()
             self._requests.clear()
+            self._blocked_methods.clear()
             self._forbidden_chat_ids.clear()
             self._invalid_file_ids.clear()
             self._condition.notify_all()
 
+        return web.json_response({"ok": True})
+
+    async def block_method(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        async with self._condition:
+            self._blocked_methods.add(str(payload["method"]))
+        return web.json_response({"ok": True})
+
+    async def release_method(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        async with self._condition:
+            self._blocked_methods.discard(str(payload["method"]))
+            self._condition.notify_all()
         return web.json_response({"ok": True})
 
     async def set_forbidden_chats(self, request: web.Request) -> web.Response:
@@ -63,13 +78,16 @@ class FakeTelegram:
     async def handle_bot_api(self, request: web.Request) -> web.Response:
         method = request.match_info["method"]
         payload = await self._read_payload(request)
-        self._requests.append(
-            {
-                "method": method,
-                "token": request.match_info["bot_token"].removeprefix("bot"),
-                "payload": payload,
-            }
-        )
+        async with self._condition:
+            self._requests.append(
+                {
+                    "method": method,
+                    "token": request.match_info["bot_token"].removeprefix("bot"),
+                    "payload": payload,
+                }
+            )
+            while method in self._blocked_methods:
+                await self._condition.wait()
 
         chat_id = int(payload.get("chat_id") or 0)
         if method == "copyMessage" and chat_id in self._forbidden_chat_ids:
@@ -255,6 +273,8 @@ def create_app() -> web.Application:
     app.router.add_post("/test/updates", fake.push_update)
     app.router.add_get("/test/requests", fake.list_requests)
     app.router.add_post("/test/reset", fake.reset)
+    app.router.add_post("/test/block-method", fake.block_method)
+    app.router.add_post("/test/release-method", fake.release_method)
     app.router.add_post("/test/forbidden-chats", fake.set_forbidden_chats)
     app.router.add_post("/test/invalid-file-ids", fake.set_invalid_file_ids)
     app.router.add_route("*", "/{bot_token}/{method}", fake.handle_bot_api)
