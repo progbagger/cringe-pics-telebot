@@ -401,11 +401,12 @@ def _category_details(category: SubscriptionType) -> str:
     else:
         aliases = "<i>не заданы</i>"
     status = "активна" if category.is_active else "неактивна"
+    send_time = f"<code>{category.time.strftime('%H:%M')}</code>" if category.time is not None else "без расписания"
     return (
         f"<b>Категория {escape(category.name)}</b>\n\n"
         f"Статус: <b>{status}</b>\n"
         f"Путь к каталогу: <code>{escape(category.s3_directory_path)}</code>\n"
-        f"Локальное время отправки: <code>{category.time.strftime('%H:%M')}</code>\n\n"
+        f"Локальное время отправки: {send_time}\n\n"
         f"Алиасы для inline-поиска:\n{aliases}"
     )
 

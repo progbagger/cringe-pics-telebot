@@ -5,7 +5,7 @@ from datetime import datetime, time
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CreateSubscriptionType:
     name: str
-    time: time
+    time: time | None
     s3_directory_path: str
     search_aliases: tuple[str, ...]
 
@@ -16,8 +16,8 @@ class SubscriptionType:
     """ID типа подписки"""
     name: str
     """Название типа подписки"""
-    time: time
-    """Время, когда срабатывает подписка"""
+    time: time | None
+    """Локальное время отправки или ``None`` для категории без расписания"""
     s3_directory_path: str
     """Путь до папки с картинками в S3"""
     search_aliases: tuple[str, ...]

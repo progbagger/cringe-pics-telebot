@@ -35,7 +35,7 @@ from cringe_pics_telebot.services.inline_pagination import (
     encode_inline_pagination_cursor,
 )
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
-from cringe_pics_telebot.services.subscriptions import get_subscription_types
+from cringe_pics_telebot.services.subscriptions import get_scheduled_subscription_types
 
 from .keyboards import format_category_button_text
 
@@ -118,7 +118,7 @@ async def _find_subscription_types(query: str) -> list[SubscriptionType]:
     metrics = get_inline_query_metrics()
     if metrics is not None:
         metrics.counts.postgres_calls += 1
-    subscription_types = await get_subscription_types()
+    subscription_types = await get_scheduled_subscription_types()
     if not normalize_category_search_term(query):
         return subscription_types
 

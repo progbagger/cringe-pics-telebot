@@ -2,7 +2,8 @@ from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres import (
     create_subscription,
     delete_subscription,
-    get_active_subscription_type,
+    get_active_scheduled_subscription_type,
+    get_active_scheduled_subscription_types,
     get_active_subscription_types,
     transaction,
 )
@@ -20,6 +21,10 @@ async def get_subscription_types() -> list[SubscriptionType]:
     return await get_active_subscription_types()
 
 
+async def get_scheduled_subscription_types() -> list[SubscriptionType]:
+    return await get_active_scheduled_subscription_types()
+
+
 async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
     return await get_user_subscriptions_from_pg(user_id)
 
@@ -30,7 +35,7 @@ async def get_subscription_users(subscription_type_id: int) -> list[User]:
 
 async def subscribe(*, user_id: int, subscription_type_id: int) -> None:
     async with transaction():
-        if await get_active_subscription_type(subscription_type_id, with_for_update=True) is None:
+        if await get_active_scheduled_subscription_type(subscription_type_id, with_for_update=True) is None:
             raise SubscriptionTypeUnavailableError(subscription_type_id)
 
         await create_user(user_id)

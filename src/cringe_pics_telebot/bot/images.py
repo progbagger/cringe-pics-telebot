@@ -10,6 +10,7 @@ from aiogram.types import (
 )
 
 from cringe_pics_telebot.bot.keyboards import (
+    category_button_sort_key,
     create_inline_subscriptions_keyboard,
     create_reply_keyboard,
 )
@@ -46,7 +47,7 @@ async def handle_start(message: Message) -> None:
 
     subscription_types = sorted(
         await get_subscription_types() or [],
-        key=lambda subscription_type: subscription_type.time,
+        key=category_button_sort_key,
     )
     category_commands = ", ".join(
         f"<code>{escape(subscription_type.name)}</code>" for subscription_type in subscription_types

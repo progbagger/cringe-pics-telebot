@@ -18,6 +18,10 @@ async def get_active_subscription_types() -> list[SubscriptionType]:
     return await _get_subscription_types(active_only=True)
 
 
+async def get_active_scheduled_subscription_types() -> list[SubscriptionType]:
+    return await _get_subscription_types(active_only=True, scheduled_only=True)
+
+
 async def get_subscription_types() -> list[SubscriptionType]:
     return await get_all_subscription_types()
 
@@ -79,16 +83,23 @@ async def get_active_subscription_type(
     *,
     with_for_update: bool = False,
 ) -> SubscriptionType | None:
-    query = select(subscription_types).where(
-        subscription_types.c.id == subscription_type_id,
-        subscription_types.c.is_active.is_(True),
+    return await _get_active_subscription_type(
+        subscription_type_id,
+        with_for_update=with_for_update,
+        scheduled_only=False,
     )
-    if with_for_update:
-        query = query.with_for_update()
 
-    async with get_connection() as conn:
-        row = (await conn.execute(query)).one_or_none()
-    return _subscription_type_from_row(row) if row is not None else None
+
+async def get_active_scheduled_subscription_type(
+    subscription_type_id: int,
+    *,
+    with_for_update: bool = False,
+) -> SubscriptionType | None:
+    return await _get_active_subscription_type(
+        subscription_type_id,
+        with_for_update=with_for_update,
+        scheduled_only=True,
+    )
 
 
 async def update_subscription_type_search_aliases(
@@ -108,14 +119,36 @@ async def update_subscription_type_search_aliases(
         return result.scalar_one_or_none() is not None
 
 
-async def _get_subscription_types(*, active_only: bool) -> list[SubscriptionType]:
+async def _get_subscription_types(*, active_only: bool, scheduled_only: bool = False) -> list[SubscriptionType]:
     query = select(subscription_types)
     if active_only:
         query = query.where(subscription_types.c.is_active.is_(True))
+    if scheduled_only:
+        query = query.where(subscription_types.c.time.is_not(None))
 
     async with get_connection() as conn:
         rows = (await conn.execute(query)).fetchall()
     return [_subscription_type_from_row(row) for row in rows]
+
+
+async def _get_active_subscription_type(
+    subscription_type_id: int,
+    *,
+    with_for_update: bool,
+    scheduled_only: bool,
+) -> SubscriptionType | None:
+    query = select(subscription_types).where(
+        subscription_types.c.id == subscription_type_id,
+        subscription_types.c.is_active.is_(True),
+    )
+    if scheduled_only:
+        query = query.where(subscription_types.c.time.is_not(None))
+    if with_for_update:
+        query = query.with_for_update()
+
+    async with get_connection() as conn:
+        row = (await conn.execute(query)).one_or_none()
+    return _subscription_type_from_row(row) if row is not None else None
 
 
 def _subscription_type_from_row(row: Row[Any]) -> SubscriptionType:

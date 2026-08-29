@@ -98,6 +98,31 @@ async def test_inactive_subscription_broadcast_resumes_after_reactivation_withou
     assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
 
 
+async def test_subscription_broadcasts_skip_category_without_schedule(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(1, "/instant", None, "instant"),
+            FunctionalSubscriptionType(2, "/scheduled", time(10), "scheduled"),
+        )
+    )
+    await create_user_subscription(user_id=701, subscription_type_id=1, timezone_offset_minutes=7 * 60)
+    await create_user_subscription(user_id=700, subscription_type_id=2, timezone_offset_minutes=7 * 60)
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    sent_count = await run_subscription_broadcasts_at(datetime(2026, 8, 16, 3, 0, tzinfo=UTC))
+
+    assert_that(sent_count, equal_to(1))
+    assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
+
+
 async def test_subscription_broadcasts_skip_empty_category(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,

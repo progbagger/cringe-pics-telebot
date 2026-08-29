@@ -170,6 +170,71 @@ async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callba
     assert_that(await fake_telegram_server.requests(method="editMessageReplyMarkup"), empty())
 
 
+async def test_immediate_only_category_is_available_only_for_ordinary_delivery(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    count_user_subscriptions: Callable[[int], Awaitable[int]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(1, "/scheduled", time(8), "scheduled", ("плановая",)),
+            FunctionalSubscriptionType(2, "/instant", None, "instant", ("сейчас",)),
+        )
+    )
+    await fake_yandex_server.configure_directory("instant", images=[{"name": "instant.png"}])
+    await synchronize_functional_media_catalog()
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/start")
+    start_request = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+    assert_that(
+        _reply_keyboard_button_texts(start_request["payload"]),
+        equal_to(["Подписки", "/scheduled", "/instant"]),
+    )
+    assert_that(start_request["payload"]["text"], contains_string("<code>/instant</code>"))
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_message(text="/subscriptions")
+    subscriptions_request = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=_is_subscription_list_answer,
+    )
+    assert_that(
+        _inline_keyboard_button_texts(subscriptions_request["payload"]),
+        equal_to(["❌ /scheduled – 08:00"]),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_message(text="/instant")
+    edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
+    assert_that(
+        edit_media["payload"]["media"]["media"],
+        equal_to(f"{fake_yandex_server.base_url}/download/instant.png"),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_inline_query(query="сейчас", query_id="immediate-only-category")
+    inline_answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "immediate-only-category",
+    )
+    assert_that(inline_answer["payload"]["results"], empty())
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(data=_subscription_callback(category_id=2, subscribe=True))
+    callback_answer = await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Категория больше недоступна.",
+    )
+    assert_that(callback_answer["payload"]["show_alert"], is_(True))
+    assert_that(await count_user_subscriptions(42), equal_to(0))
+    assert_that(await fake_telegram_server.requests(method="editMessageReplyMarkup"), empty())
+
+
 async def test_bot_shows_default_timezone(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,

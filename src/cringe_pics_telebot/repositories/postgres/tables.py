@@ -116,7 +116,7 @@ subscription_types = sa.Table(
     _metadata,
     sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=True),
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
-    sa.Column("time", sa.TIME(False), nullable=False),
+    sa.Column("time", sa.TIME(False), nullable=True),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
     sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column(
