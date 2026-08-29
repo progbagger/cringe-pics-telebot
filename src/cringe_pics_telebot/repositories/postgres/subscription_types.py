@@ -9,11 +9,16 @@ from .entities.subscription_type import SubscriptionType
 from .tables import subscription_types
 
 
-async def get_subscription_types() -> list[SubscriptionType]:
-    async with get_connection() as conn:
-        rows = (await conn.execute(select(subscription_types))).fetchall()
+async def get_all_subscription_types() -> list[SubscriptionType]:
+    return await _get_subscription_types(active_only=False)
 
-        return [_subscription_type_from_row(row) for row in rows]
+
+async def get_active_subscription_types() -> list[SubscriptionType]:
+    return await _get_subscription_types(active_only=True)
+
+
+async def get_subscription_types() -> list[SubscriptionType]:
+    return await get_all_subscription_types()
 
 
 async def get_subscription_type(subscription_type_id: int) -> SubscriptionType | None:
@@ -22,6 +27,23 @@ async def get_subscription_type(subscription_type_id: int) -> SubscriptionType |
             await conn.execute(select(subscription_types).where(subscription_types.c.id == subscription_type_id))
         ).one_or_none()
         return _subscription_type_from_row(row) if row is not None else None
+
+
+async def get_active_subscription_type(
+    subscription_type_id: int,
+    *,
+    with_for_update: bool = False,
+) -> SubscriptionType | None:
+    query = select(subscription_types).where(
+        subscription_types.c.id == subscription_type_id,
+        subscription_types.c.is_active.is_(True),
+    )
+    if with_for_update:
+        query = query.with_for_update()
+
+    async with get_connection() as conn:
+        row = (await conn.execute(query)).one_or_none()
+    return _subscription_type_from_row(row) if row is not None else None
 
 
 async def update_subscription_type_search_aliases(
@@ -41,6 +63,16 @@ async def update_subscription_type_search_aliases(
         return result.scalar_one_or_none() is not None
 
 
+async def _get_subscription_types(*, active_only: bool) -> list[SubscriptionType]:
+    query = select(subscription_types)
+    if active_only:
+        query = query.where(subscription_types.c.is_active.is_(True))
+
+    async with get_connection() as conn:
+        rows = (await conn.execute(query)).fetchall()
+    return [_subscription_type_from_row(row) for row in rows]
+
+
 def _subscription_type_from_row(row: Row[Any]) -> SubscriptionType:
     return SubscriptionType(
         id=row.id,
@@ -48,6 +80,7 @@ def _subscription_type_from_row(row: Row[Any]) -> SubscriptionType:
         time=row.time,
         s3_directory_path=row.s3_directory_path,
         search_aliases=tuple(row.search_aliases),
+        is_active=row.is_active,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )

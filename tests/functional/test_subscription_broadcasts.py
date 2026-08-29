@@ -65,6 +65,39 @@ async def test_subscription_broadcasts_use_each_users_local_time_without_duplica
     assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
+async def test_inactive_subscription_broadcast_resumes_after_reactivation_without_deleting_subscription(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    count_user_subscriptions: Callable[[int], Awaitable[int]],
+    set_functional_subscription_type_activity: Callable[[int, bool], Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await seed_functional_subscription_types(
+        (FunctionalSubscriptionType(1, "/morning", time(10), "morning", is_active=False),)
+    )
+    await create_user_subscription(
+        user_id=700,
+        subscription_type_id=1,
+        timezone_offset_minutes=7 * 60,
+    )
+    sync = await synchronize_functional_media_catalog()
+    assert_that(sync.categories, equal_to(1))
+    await fake_yandex_server.reset()
+
+    due_at = datetime(2026, 8, 16, 3, 0, tzinfo=UTC)
+    assert_that(await run_subscription_broadcasts_at(due_at), equal_to(0))
+    assert_that(await count_user_subscriptions(700), equal_to(1))
+    assert_that(await fake_telegram_server.requests(method="sendPhoto"), empty())
+
+    await set_functional_subscription_type_activity(1, True)
+    assert_that(await run_subscription_broadcasts_at(due_at), equal_to(1))
+    assert_that(await count_user_subscriptions(700), equal_to(1))
+    assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
+
+
 async def test_subscription_broadcasts_skip_empty_category(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,

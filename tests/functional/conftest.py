@@ -63,6 +63,7 @@ class FunctionalSubscriptionType:
     send_time: time
     s3_directory_path: str
     search_aliases: tuple[str, ...] = ()
+    is_active: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -638,6 +639,38 @@ async def create_functional_user(
 
 
 @pytest.fixture
+async def set_functional_subscription_type_activity(
+    docker_compose: DependencyPorts,
+) -> Callable[[int, bool], Awaitable[None]]:
+    async def set_activity(subscription_type_id: int, is_active: bool) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.execute(
+                "UPDATE subscription_types SET is_active = $2, updated_at = now() WHERE id = $1",
+                subscription_type_id,
+                is_active,
+            )
+        finally:
+            await connection.close()
+
+    return set_activity
+
+
+@pytest.fixture
+async def count_user_subscriptions(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[int]]:
+    async def count(user_id: int) -> int:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            return await connection.fetchval("SELECT count(*) FROM subscriptions WHERE user_id = $1", user_id)
+        finally:
+            await connection.close()
+
+    return count
+
+
+@pytest.fixture
 async def create_functional_admin_broadcast(
     docker_compose: DependencyPorts,
 ) -> Callable[..., Awaitable[int]]:
@@ -1110,6 +1143,33 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             await connection.fetchval("SELECT search_aliases FROM subscription_types WHERE name = '/migration-probe'"),
             empty(),
         )
+        assert_that(
+            await connection.fetchval("SELECT is_active FROM subscription_types WHERE name = '/migration-probe'"),
+            is_(True),
+        )
+        assert_that(
+            await connection.fetchval(
+                """
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'subscription_types'
+                  AND column_name = 'is_active'
+                """
+            ),
+            equal_to("NO"),
+        )
+        await connection.execute("DELETE FROM subscription_types WHERE name = '/migration-default-probe'")
+        assert_that(
+            await connection.fetchval(
+                """
+                INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
+                VALUES('/migration-default-probe', '11:00', 'migration-default-probe', now(), now())
+                RETURNING is_active
+                """
+            ),
+            is_(False),
+        )
         assert_that(await connection.fetchval("SELECT to_regclass('administrators')"), equal_to("administrators"))
         assert_that(
             await connection.fetchval("SELECT to_regclass('admin_broadcasts')"),
@@ -1147,6 +1207,20 @@ async def _assert_category_media_table_absent(dependency_ports: DependencyPorts)
     connection = await _create_postgres_connection(dependency_ports)
     try:
         assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), none())
+        assert_that(
+            await connection.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'subscription_types'
+                      AND column_name = 'is_active'
+                )
+                """
+            ),
+            is_(False),
+        )
         assert_that(
             await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'"),
             equal_to(1),
@@ -1194,10 +1268,11 @@ async def _insert_subscription_types(
                 time,
                 s3_directory_path,
                 search_aliases,
+                is_active,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
             """,
             [
                 (
@@ -1206,6 +1281,7 @@ async def _insert_subscription_types(
                     subscription.send_time,
                     subscription.s3_directory_path,
                     list(subscription.search_aliases),
+                    subscription.is_active,
                     _database_time(),
                 )
                 for subscription in subscription_types

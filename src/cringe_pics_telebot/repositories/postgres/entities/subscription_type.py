@@ -14,6 +14,8 @@ class SubscriptionType:
     """Путь до папки с картинками в S3"""
     search_aliases: tuple[str, ...]
     """Дополнительные термины для inline-поиска"""
+    is_active: bool
+    """Доступен ли тип подписки пользователям"""
     created_at: datetime
     """Время создания типа подписки"""
     updated_at: datetime

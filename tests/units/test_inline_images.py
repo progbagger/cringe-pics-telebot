@@ -420,6 +420,7 @@ def _subscription_type(
         time=time(13),
         s3_directory_path=directory,
         search_aliases=(),
+        is_active=True,
         created_at=now,
         updated_at=now,
     )

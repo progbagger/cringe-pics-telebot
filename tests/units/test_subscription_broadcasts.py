@@ -127,6 +127,7 @@ def _subscription_type() -> SubscriptionType:
         time=time(10, 0),
         s3_directory_path="morning",
         search_aliases=(),
+        is_active=True,
         created_at=now,
         updated_at=now,
     )

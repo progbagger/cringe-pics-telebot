@@ -14,7 +14,7 @@ from cringe_pics_telebot.repositories.postgres import (
 )
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
-from cringe_pics_telebot.services.media_sync import MEDIA_SYNC_LEASE_KEY, synchronize_media_catalog
+from cringe_pics_telebot.services.media_sync import MEDIA_SYNC_LEASE_KEY, MediaSyncSummary, synchronize_media_catalog
 from tests.functional.conftest import (
     BOT_ENV,
     POSTGRES_ENV,
@@ -34,6 +34,28 @@ async def reset_state_before_test(
             FunctionalSubscriptionType(1, "/day", time(13), "day"),
             FunctionalSubscriptionType(2, "/broken", time(14), "broken"),
         )
+    )
+
+
+async def test_sync_includes_inactive_categories(
+    reset_dependency_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    fake_yandex_server: FakeYandexServer,
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await reset_dependency_state((FunctionalSubscriptionType(1, "/inactive", time(13), "inactive", is_active=False),))
+    await fake_yandex_server.configure_directory("inactive", images=[{"name": "inactive.png"}])
+
+    summary = await synchronize_functional_media_catalog()
+
+    assert_that(summary.categories, equal_to(1))
+    assert_that((summary.discovered, summary.created), equal_to((1, 1)))
+    assert_that(
+        [
+            request["params"]["path"]
+            for request in await fake_yandex_server.requests()
+            if request["method"] == "resources"
+        ],
+        equal_to(["app:/inactive"]),
     )
 
 

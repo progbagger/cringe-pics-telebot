@@ -12,10 +12,10 @@ from cringe_pics_telebot.repositories.postgres import (
     CategoryMediaSource,
     SubscriptionType,
     TelegramMediaType,
+    get_all_subscription_types,
 )
 from cringe_pics_telebot.repositories.yandex import Image, list_dir
 from cringe_pics_telebot.services.media_catalog import reconcile_category_media_snapshot
-from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL)
 
     started_at = monotonic()
     try:
-        subscription_types = await get_subscription_types()
+        subscription_types = await get_all_subscription_types()
         summaries: list[CategoryMediaReconcileResult] = []
         failed = 0
         for subscription_type in subscription_types:
