@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import time
 from typing import Any
 
 from sqlalchemy import func, select, update
@@ -100,6 +101,22 @@ async def get_active_scheduled_subscription_type(
         with_for_update=with_for_update,
         scheduled_only=True,
     )
+
+
+async def update_subscription_type_time(
+    subscription_type_id: int,
+    send_time: time | None,
+) -> SubscriptionType | None:
+    async with get_connection() as conn:
+        row = (
+            await conn.execute(
+                update(subscription_types)
+                .where(subscription_types.c.id == subscription_type_id)
+                .values(time=send_time, updated_at=func.now())
+                .returning(subscription_types)
+            )
+        ).one_or_none()
+    return _subscription_type_from_row(row) if row is not None else None
 
 
 async def update_subscription_type_search_aliases(

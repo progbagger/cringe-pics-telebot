@@ -26,6 +26,7 @@ from cringe_pics_telebot.services.admin_categories import (
     parse_admin_category_path,
     parse_admin_category_time,
     set_admin_category_activity,
+    set_admin_category_time,
 )
 from cringe_pics_telebot.services.category_aliases import (
     InvalidCategoryAliasesError,
@@ -38,6 +39,7 @@ from .admin_keyboards import (
     create_admin_categories_keyboard,
     create_admin_category_form_cancel_keyboard,
     create_admin_category_keyboard,
+    create_admin_category_schedule_mode_keyboard,
     create_admin_panel_keyboard,
 )
 
@@ -51,8 +53,13 @@ router.callback_query.filter(IsAdministrator())
 class AdminCategoryCreationForm(StatesGroup):
     name = State()
     s3_directory_path = State()
+    schedule_mode = State()
     send_time = State()
     aliases = State()
+
+
+class AdminCategoryTimeForm(StatesGroup):
+    send_time = State()
 
 
 class AdminCategoryAliasesForm(StatesGroup):
@@ -133,10 +140,10 @@ async def receive_new_category_path(message: Message, state: FSMContext) -> None
         return
 
     await state.update_data(s3_directory_path=path)
-    await state.set_state(AdminCategoryCreationForm.send_time)
+    await state.set_state(AdminCategoryCreationForm.schedule_mode)
     await message.answer(
-        _time_prompt(),
-        reply_markup=create_admin_category_form_cancel_keyboard(),
+        _schedule_mode_prompt(),
+        reply_markup=create_admin_category_schedule_mode_keyboard(),
     )
 
 
@@ -163,6 +170,47 @@ async def receive_new_category_time(message: Message, state: FSMContext) -> None
     await message.answer(
         _new_category_aliases_prompt(),
         reply_markup=create_admin_category_form_cancel_keyboard(),
+    )
+
+
+@router.message(AdminCategoryTimeForm.send_time)
+async def receive_category_time(message: Message, state: FSMContext) -> None:
+    if message.text is None:
+        await message.answer(
+            _edit_time_error("Время отправки должно быть текстом."),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return
+
+    try:
+        send_time = parse_admin_category_time(message.text)
+    except InvalidAdminCategoryTimeError:
+        await message.answer(
+            _edit_time_error("Не удалось распознать локальное время отправки."),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return
+
+    category_id = await _state_category_id(state)
+    if category_id is None:
+        await message.answer(
+            "Черновик потерян. Откройте категорию заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return
+
+    category = await set_admin_category_time(category_id, send_time)
+    await state.clear()
+    if category is None:
+        await message.answer(
+            "Категория больше недоступна.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return
+
+    await message.answer(
+        f"Время отправки обновлено.\n\n{_category_details(category)}",
+        reply_markup=_category_keyboard(category),
     )
 
 
@@ -269,12 +317,21 @@ async def _dispatch_admin_category_callback(
             return await _show_category(message, callback_data.category_id)
         case AdminCategoryAction.create:
             await _start_new_category(message, state)
+        case AdminCategoryAction.create_scheduled:
+            return await _select_new_category_schedule(message, state, scheduled=True)
+        case AdminCategoryAction.create_without_schedule:
+            return await _select_new_category_schedule(message, state, scheduled=False)
         case AdminCategoryAction.activate:
             await state.clear()
             return await _set_category_activity(message, callback_data.category_id, is_active=True)
         case AdminCategoryAction.deactivate:
             await state.clear()
             return await _set_category_activity(message, callback_data.category_id, is_active=False)
+        case AdminCategoryAction.edit_time:
+            return await _start_edit_time(message, state, callback_data.category_id)
+        case AdminCategoryAction.disable_schedule:
+            await state.clear()
+            return await _disable_schedule(message, callback_data.category_id)
         case AdminCategoryAction.edit_aliases:
             return await _start_edit_aliases(message, state, callback_data.category_id)
         case AdminCategoryAction.clear_aliases:
@@ -319,6 +376,33 @@ async def _start_new_category(message: Message, state: FSMContext) -> None:
     )
 
 
+async def _select_new_category_schedule(message: Message, state: FSMContext, *, scheduled: bool) -> str | None:
+    data = await state.get_data()
+    if not isinstance(data.get("name"), str) or not isinstance(data.get("s3_directory_path"), str):
+        await state.clear()
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Начните создание категории заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик создания категории потерян."
+
+    if scheduled:
+        await state.set_state(AdminCategoryCreationForm.send_time)
+        await message.edit_text(
+            _time_prompt(),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return None
+
+    await state.update_data(send_time=None)
+    await state.set_state(AdminCategoryCreationForm.aliases)
+    await message.edit_text(
+        _new_category_aliases_prompt(),
+        reply_markup=create_admin_category_form_cancel_keyboard(),
+    )
+    return None
+
+
 async def _set_category_activity(message: Message, category_id: int, *, is_active: bool) -> str:
     category = await set_admin_category_activity(category_id, is_active=is_active)
     if category is None:
@@ -330,6 +414,34 @@ async def _set_category_activity(message: Message, category_id: int, *, is_activ
         reply_markup=_category_keyboard(category),
     )
     return "Категория активирована." if is_active else "Категория деактивирована."
+
+
+async def _start_edit_time(message: Message, state: FSMContext, category_id: int) -> str | None:
+    category = await get_subscription_type(category_id)
+    if category is None:
+        await _show_categories(message)
+        return "Категория больше недоступна."
+
+    await state.set_state(AdminCategoryTimeForm.send_time)
+    await state.set_data({"category_id": category_id})
+    await message.edit_text(
+        _edit_time_prompt(),
+        reply_markup=create_admin_category_form_cancel_keyboard(),
+    )
+    return None
+
+
+async def _disable_schedule(message: Message, category_id: int) -> str:
+    category = await set_admin_category_time(category_id, None)
+    if category is None:
+        await _show_categories(message)
+        return "Категория больше недоступна."
+
+    await message.edit_text(
+        _category_details(category),
+        reply_markup=_category_keyboard(category),
+    )
+    return "Расписание отключено."
 
 
 async def _start_edit_aliases(message: Message, state: FSMContext, category_id: int) -> str | None:
@@ -366,8 +478,15 @@ async def _state_creation_draft(
     data = await state.get_data()
     name = data.get("name")
     s3_directory_path = data.get("s3_directory_path")
-    send_time = data.get("send_time")
-    if not isinstance(name, str) or not isinstance(s3_directory_path, str) or not isinstance(send_time, time):
+    if "send_time" not in data:
+        await state.clear()
+        return None
+    send_time = data["send_time"]
+    if (
+        not isinstance(name, str)
+        or not isinstance(s3_directory_path, str)
+        or (send_time is not None and not isinstance(send_time, time))
+    ):
         await state.clear()
         return None
 
@@ -391,6 +510,7 @@ def _category_keyboard(category: SubscriptionType) -> InlineKeyboardMarkup:
     return create_admin_category_keyboard(
         category.id,
         has_aliases=bool(category.search_aliases),
+        has_schedule=category.time is not None,
         is_active=category.is_active,
     )
 
@@ -427,6 +547,14 @@ def _path_error(reason: str) -> str:
     return f"{reason}\n\n{_path_prompt(prefix='Попробуйте ещё раз.')}"
 
 
+def _schedule_mode_prompt() -> str:
+    return (
+        "<b>Новая категория — режим отправки</b>\n\n"
+        "Выберите «По расписанию», чтобы задать ежедневное локальное время рассылки, "
+        "или «Без расписания» для выдачи только по пользовательской кнопке."
+    )
+
+
 def _time_prompt(*, prefix: str = "Введите локальное время отправки категории.") -> str:
     return (
         f"<b>Новая категория — время отправки</b>\n\n{prefix}\nФормат: <code>ЧЧ:ММ</code>, например <code>15:30</code>."
@@ -435,6 +563,14 @@ def _time_prompt(*, prefix: str = "Введите локальное время 
 
 def _time_error(reason: str) -> str:
     return f"{reason}\n\n{_time_prompt(prefix='Попробуйте ещё раз.')}"
+
+
+def _edit_time_prompt(*, prefix: str = "Введите новое локальное время отправки категории.") -> str:
+    return f"<b>Изменение времени отправки</b>\n\n{prefix}\nФормат: <code>ЧЧ:ММ</code>, например <code>15:30</code>."
+
+
+def _edit_time_error(reason: str) -> str:
+    return f"{reason}\n\n{_edit_time_prompt(prefix='Попробуйте ещё раз.')}"
 
 
 def _new_category_aliases_prompt() -> str:

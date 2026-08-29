@@ -4,7 +4,7 @@ from datetime import time
 from typing import Any
 
 import pytest
-from hamcrest import assert_that, contains_string, equal_to, has_entries, has_item
+from hamcrest import assert_that, contains_string, empty, equal_to, has_entries, has_item
 
 from cringe_pics_telebot.bot.admin_category_callback_data import (
     AdminCategoryAction,
@@ -53,7 +53,16 @@ async def test_admin_creates_inactive_category_with_all_fields(
 
     await _open_category_creation(fake_telegram_server)
     await _send_message_and_wait(fake_telegram_server, "  /afternoon  ", "путь к каталогу")
-    await _send_message_and_wait(fake_telegram_server, "  afternoon/images  ", "время отправки")
+    schedule_mode = await _send_message_and_wait(
+        fake_telegram_server,
+        "  afternoon/images  ",
+        "режим отправки",
+    )
+    assert_that(
+        _inline_keyboard_button_texts(schedule_mode["payload"]),
+        equal_to(["По расписанию", "Без расписания", "Отмена"]),
+    )
+    await _choose_category_schedule_mode(fake_telegram_server, scheduled=True)
     await _send_message_and_wait(fake_telegram_server, " 15:30 ", "Новая категория — алиасы")
     created = await _send_message_and_wait(
         fake_telegram_server,
@@ -69,7 +78,16 @@ async def test_admin_creates_inactive_category_with_all_fields(
     assert_that(created["payload"]["text"], contains_string("<code>15:30</code>"))
     assert_that(
         _inline_keyboard_button_texts(created["payload"]),
-        equal_to(["Активировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Активировать",
+                "Изменить время отправки",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Назад",
+            ]
+        ),
     )
 
     category = await read_functional_subscription_type("/afternoon")
@@ -97,6 +115,60 @@ async def test_admin_creates_inactive_category_with_all_fields(
     )
 
 
+async def test_admin_creates_and_activates_category_without_schedule(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await _open_category_creation(fake_telegram_server)
+    await _send_message_and_wait(fake_telegram_server, "/instant", "путь к каталогу")
+    await _send_message_and_wait(fake_telegram_server, "instant", "режим отправки")
+    await _choose_category_schedule_mode(fake_telegram_server, scheduled=False)
+    created = await _send_message_and_wait(
+        fake_telegram_server,
+        "моментально",
+        "Категория создана неактивной",
+    )
+
+    assert_that(created["payload"]["text"], contains_string("Локальное время отправки: без расписания"))
+    assert_that(
+        _inline_keyboard_button_texts(created["payload"]),
+        equal_to(["Активировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+    category = await read_functional_subscription_type("/instant")
+    assert category is not None
+    assert_that(
+        category,
+        has_entries(
+            time=None,
+            s3_directory_path="instant",
+            search_aliases=("моментально",),
+            is_active=False,
+        ),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.activate, category_id=category["id"]),
+        message_id=102,
+    )
+    activated = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            "Статус: <b>активна</b>" in request["payload"].get("text", "")
+            and "Локальное время отправки: без расписания" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(activated["payload"]),
+        equal_to(["Деактивировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+    active_category = await read_functional_subscription_type("/instant")
+    assert active_category is not None
+    assert_that(active_category, has_entries(time=None, is_active=True))
+
+
 async def test_category_creation_validates_each_step_without_partial_write(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
@@ -115,7 +187,8 @@ async def test_category_creation_validates_each_step_without_partial_write(
     await _send_message_and_wait(fake_telegram_server, "  ", "Путь к каталогу не должен быть пустым")
     assert await read_functional_subscription_type("/validated") is None
 
-    await _send_message_and_wait(fake_telegram_server, "validated", "время отправки")
+    await _send_message_and_wait(fake_telegram_server, "validated", "режим отправки")
+    await _choose_category_schedule_mode(fake_telegram_server, scheduled=True)
     await _send_message_and_wait(fake_telegram_server, "9:00", "Не удалось распознать локальное время")
     await _send_message_and_wait(fake_telegram_server, "24:00", "Не удалось распознать локальное время")
     assert await read_functional_subscription_type("/validated") is None
@@ -149,9 +222,13 @@ async def test_category_creation_cancel_clears_every_form_state(
     await set_functional_administrator(user_id=42)
     await _open_category_creation(fake_telegram_server)
 
-    next_prompts = ("путь к каталогу", "время отправки", "Новая категория — алиасы")
-    for value, prompt in zip(entered_values, next_prompts, strict=False):
-        await _send_message_and_wait(fake_telegram_server, value, prompt)
+    if entered_values:
+        await _send_message_and_wait(fake_telegram_server, entered_values[0], "путь к каталогу")
+    if len(entered_values) >= 2:
+        await _send_message_and_wait(fake_telegram_server, entered_values[1], "режим отправки")
+    if len(entered_values) >= 3:
+        await _choose_category_schedule_mode(fake_telegram_server, scheduled=True)
+        await _send_message_and_wait(fake_telegram_server, entered_values[2], "Новая категория — алиасы")
 
     await fake_telegram_server.push_callback_query(
         data=_category_callback(AdminCategoryAction.cancel_form),
@@ -186,7 +263,8 @@ async def test_concurrent_category_creation_handles_final_name_conflict(
 
     for user_id in (42, 43):
         await _send_message_and_wait(fake_telegram_server, "/race", "путь к каталогу", user_id=user_id)
-        await _send_message_and_wait(fake_telegram_server, "race", "время отправки", user_id=user_id)
+        await _send_message_and_wait(fake_telegram_server, "race", "режим отправки", user_id=user_id)
+        await _choose_category_schedule_mode(fake_telegram_server, scheduled=True, user_id=user_id)
         await _send_message_and_wait(fake_telegram_server, "12:00", "Новая категория — алиасы", user_id=user_id)
 
     await _send_message_and_wait(fake_telegram_server, "гонка", "Категория создана неактивной", user_id=42)
@@ -240,7 +318,16 @@ async def test_admin_sets_category_activity_without_changing_category_data(
     assert_that(active_card["payload"]["text"], contains_string("Локальное время отправки: <code>13:00</code>"))
     assert_that(
         _inline_keyboard_button_texts(active_card["payload"]),
-        equal_to(["Деактивировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Деактивировать",
+                "Изменить время отправки",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Назад",
+            ]
+        ),
     )
 
     await fake_telegram_server.push_callback_query(
@@ -257,7 +344,16 @@ async def test_admin_sets_category_activity_without_changing_category_data(
     )
     assert_that(
         _inline_keyboard_button_texts(inactive_card["payload"]),
-        equal_to(["Активировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Активировать",
+                "Изменить время отправки",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Назад",
+            ]
+        ),
     )
     inactive = await read_functional_subscription_type("/day")
     assert inactive is not None
@@ -292,10 +388,107 @@ async def test_admin_sets_category_activity_without_changing_category_data(
     )
     assert_that(
         _inline_keyboard_button_texts(reactivated_card["payload"]),
-        equal_to(["Деактивировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Деактивировать",
+                "Изменить время отправки",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Назад",
+            ]
+        ),
     )
     reactivated = await _required_category(read_functional_subscription_type, "/day")
     assert_that(_category_business_data(reactivated), equal_to(_category_business_data(before)))
+
+
+async def test_admin_updates_disables_and_restores_category_schedule(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    count_user_subscriptions: Callable[[int], Awaitable[int]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await create_user_subscription(user_id=700, subscription_type_id=2)
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_time, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Изменение времени отправки" in request["payload"].get("text", ""),
+    )
+    await _send_message_and_wait(fake_telegram_server, "9:00", "Не удалось распознать локальное время")
+    unchanged = await read_functional_subscription_type("/day")
+    assert unchanged is not None
+    assert_that(unchanged["time"], equal_to(time(13)))
+
+    updated = await _send_message_and_wait(fake_telegram_server, "14:30", "Время отправки обновлено")
+    assert_that(updated["payload"]["text"], contains_string("<code>14:30</code>"))
+    changed = await read_functional_subscription_type("/day")
+    assert changed is not None
+    assert_that(changed["time"], equal_to(time(14, 30)))
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.disable_schedule, category_id=2),
+        message_id=102,
+    )
+    disabled = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Локальное время отправки: без расписания" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Расписание отключено.",
+    )
+    assert_that(
+        _inline_keyboard_button_texts(disabled["payload"]),
+        equal_to(["Деактивировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+    )
+    without_schedule = await read_functional_subscription_type("/day")
+    assert without_schedule is not None
+    assert without_schedule["time"] is None
+    assert_that(await count_user_subscriptions(700), equal_to(1))
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_message(text="/subscriptions", user_id=700)
+    hidden_subscriptions = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == 700 and "список" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(
+        [text for text in _inline_keyboard_button_texts(hidden_subscriptions["payload"]) if "/day" in text],
+        empty(),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_time, category_id=2),
+        message_id=103,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Изменение времени отправки" in request["payload"].get("text", ""),
+    )
+    restored = await _send_message_and_wait(fake_telegram_server, "16:00", "Время отправки обновлено")
+    assert_that(restored["payload"]["text"], contains_string("<code>16:00</code>"))
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_message(text="/subscriptions", user_id=700)
+    restored_subscriptions = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == 700 and "список" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(_inline_keyboard_button_texts(restored_subscriptions["payload"]), has_item("✅ /day – 16:00"))
+    assert_that(await count_user_subscriptions(700), equal_to(1))
 
 
 async def _open_category_creation(
@@ -314,6 +507,27 @@ async def _open_category_creation(
         predicate=lambda request: (
             request["payload"].get("chat_id") == user_id
             and "Новая категория — название" in request["payload"].get("text", "")
+        ),
+    )
+
+
+async def _choose_category_schedule_mode(
+    fake_telegram_server: FakeTelegramServer,
+    *,
+    scheduled: bool,
+    user_id: int = 42,
+) -> None:
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(
+            AdminCategoryAction.create_scheduled if scheduled else AdminCategoryAction.create_without_schedule
+        ),
+        user_id=user_id,
+    )
+    expected_prompt = "Новая категория — время отправки" if scheduled else "Новая категория — алиасы"
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == user_id and expected_prompt in request["payload"].get("text", "")
         ),
     )
 

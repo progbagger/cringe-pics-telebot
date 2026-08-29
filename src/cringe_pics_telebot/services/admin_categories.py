@@ -8,6 +8,7 @@ from cringe_pics_telebot.repositories.postgres import (
     get_subscription_type_by_name,
     set_subscription_type_activity,
     transaction,
+    update_subscription_type_time,
 )
 
 _LOCAL_TIME_PATTERN = re.compile(r"\d{2}:\d{2}")
@@ -60,6 +61,14 @@ async def create_admin_category(data: CreateSubscriptionType) -> SubscriptionTyp
     if category is None:
         raise AdminCategoryNameConflictError(data.name)
     return category
+
+
+async def set_admin_category_time(
+    category_id: int,
+    send_time: time | None,
+) -> SubscriptionType | None:
+    async with transaction():
+        return await update_subscription_type_time(category_id, send_time)
 
 
 async def set_admin_category_activity(
