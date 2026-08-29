@@ -59,7 +59,7 @@ async def test_find_subscription_types_returns_all_categories_for_normalized_emp
         _subscription_type(1, "/morning", "morning"),
         _subscription_type(2, "/day", "day"),
     ]
-    monkeypatch.setattr(inline, "get_subscription_types", lambda: _async_result(subscription_types))
+    monkeypatch.setattr(inline, "get_scheduled_subscription_types", lambda: _async_result(subscription_types))
 
     assert_that(await inline._find_subscription_types(query), equal_to(subscription_types))
 
@@ -72,10 +72,10 @@ async def test_find_subscription_types_returns_every_matching_category(monkeypat
         _subscription_type(4, "/night", "night"),
     ]
 
-    async def get_subscription_types() -> list[SubscriptionType]:
+    async def get_scheduled_subscription_types() -> list[SubscriptionType]:
         return subscription_types
 
-    monkeypatch.setattr(inline, "get_subscription_types", get_subscription_types)
+    monkeypatch.setattr(inline, "get_scheduled_subscription_types", get_scheduled_subscription_types)
 
     assert_that(
         await inline._find_subscription_types(" /ОБЩ "),

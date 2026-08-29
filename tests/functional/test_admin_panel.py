@@ -341,7 +341,16 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
     assert_that(category_details["payload"]["text"], contains_string("<code>день</code>"))
     assert_that(
         _inline_keyboard_button_texts(category_details["payload"]),
-        equal_to(["Деактивировать", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Деактивировать",
+                "Изменить время отправки",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Назад",
+            ]
+        ),
     )
 
     await fake_telegram_server.push_callback_query(
@@ -387,7 +396,7 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
     )
     assert_that(
         _inline_keyboard_button_texts(cleared_details["payload"]),
-        equal_to(["Деактивировать", "Изменить алиасы", "Назад"]),
+        equal_to(["Деактивировать", "Изменить время отправки", "Отключить расписание", "Изменить алиасы", "Назад"]),
     )
     assert_that(await read_category_aliases(2), equal_to(()))
 

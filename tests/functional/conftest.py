@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 class FunctionalSubscriptionType:
     id: int
     name: str
-    send_time: time
+    send_time: time | None
     s3_directory_path: str
     search_aliases: tuple[str, ...] = ()
     is_active: bool = True
@@ -1185,6 +1185,30 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             equal_to(time(10, 0)),
         )
         assert_that(
+            await connection.fetchval(
+                """
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'subscription_types'
+                  AND column_name = 'time'
+                """
+            ),
+            equal_to("YES"),
+        )
+        await connection.execute("DELETE FROM subscription_types WHERE name = '/migration-null-time-probe'")
+        assert_that(
+            await connection.fetchval(
+                """
+                INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
+                VALUES('/migration-null-time-probe', NULL, 'migration-null-time-probe', now(), now())
+                RETURNING time
+                """
+            ),
+            none(),
+        )
+        await connection.execute("DELETE FROM subscription_types WHERE name = '/migration-null-time-probe'")
+        assert_that(
             await connection.fetchval("SELECT timezone_offset_minutes FROM users WHERE id = 1"),
             equal_to(420),
         )
@@ -1257,6 +1281,18 @@ async def _assert_category_media_table_absent(dependency_ports: DependencyPorts)
     connection = await _create_postgres_connection(dependency_ports)
     try:
         assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), none())
+        assert_that(
+            await connection.fetchval(
+                """
+                SELECT is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'subscription_types'
+                  AND column_name = 'time'
+                """
+            ),
+            equal_to("NO"),
+        )
         assert_that(
             await connection.fetchval(
                 """

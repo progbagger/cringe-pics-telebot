@@ -55,10 +55,29 @@ def create_admin_categories_keyboard(subscription_types: Iterable[SubscriptionTy
     return builder.as_markup()
 
 
+def create_admin_category_schedule_mode_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="По расписанию",
+        callback_data=_category_callback(AdminCategoryAction.create_scheduled),
+    )
+    builder.button(
+        text="Без расписания",
+        callback_data=_category_callback(AdminCategoryAction.create_without_schedule),
+    )
+    builder.button(
+        text="Отмена",
+        callback_data=_category_callback(AdminCategoryAction.cancel_form),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def create_admin_category_keyboard(
     category_id: int,
     *,
     has_aliases: bool,
+    has_schedule: bool,
     is_active: bool,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -69,6 +88,15 @@ def create_admin_category_keyboard(
             category_id,
         ),
     )
+    builder.button(
+        text="Изменить время отправки",
+        callback_data=_category_callback(AdminCategoryAction.edit_time, category_id),
+    )
+    if has_schedule:
+        builder.button(
+            text="Отключить расписание",
+            callback_data=_category_callback(AdminCategoryAction.disable_schedule, category_id),
+        )
     builder.button(
         text="Изменить алиасы",
         callback_data=_category_callback(AdminCategoryAction.edit_aliases, category_id),

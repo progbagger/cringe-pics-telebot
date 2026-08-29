@@ -15,7 +15,7 @@ from cringe_pics_telebot.repositories.postgres import (
 from cringe_pics_telebot.services.media_delivery import deliver_category_media
 from cringe_pics_telebot.services.random_image import choose_random_image
 from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
-from cringe_pics_telebot.services.subscriptions import get_subscription_types, get_subscription_users
+from cringe_pics_telebot.services.subscriptions import get_scheduled_subscription_types, get_subscription_users
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ async def run_subscription_broadcasts(
 
 async def run_due_subscription_broadcasts(bot: Bot, *, now: datetime | None = None) -> int:
     current_time = now or _now()
-    subscription_types = await get_subscription_types()
+    subscription_types = await get_scheduled_subscription_types()
     if not subscription_types:
         return 0
 
@@ -61,11 +61,15 @@ async def run_due_subscription_broadcasts(bot: Bot, *, now: datetime | None = No
 
 
 async def _broadcast_subscription_type(*, bot: Bot, subscription_type: SubscriptionType, current_time: datetime) -> int:
+    scheduled_time = subscription_type.time
+    if scheduled_time is None:
+        return 0
+
     users = [
         user
         for user in await get_subscription_users(subscription_type.id)
         if _same_local_minute(
-            subscription_type.time,
+            scheduled_time,
             current_time,
             timezone_offset_minutes=user.timezone_offset_minutes,
         )
