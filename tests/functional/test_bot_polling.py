@@ -170,7 +170,7 @@ async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callba
     assert_that(await fake_telegram_server.requests(method="editMessageReplyMarkup"), empty())
 
 
-async def test_immediate_only_category_is_available_only_for_ordinary_delivery(
+async def test_immediate_only_category_is_available_for_ordinary_and_inline_delivery(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
@@ -184,7 +184,10 @@ async def test_immediate_only_category_is_available_only_for_ordinary_delivery(
             FunctionalSubscriptionType(2, "/instant", None, "instant", ("сейчас",)),
         )
     )
-    await fake_yandex_server.configure_directory("instant", images=[{"name": "instant.png"}])
+    await fake_yandex_server.configure_directory(
+        "instant",
+        images=[{"name": "instant.png"}, {"name": "second.png"}],
+    )
     await synchronize_functional_media_catalog()
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
@@ -213,16 +216,30 @@ async def test_immediate_only_category_is_available_only_for_ordinary_delivery(
     edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
     assert_that(
         edit_media["payload"]["media"]["media"],
-        equal_to(f"{fake_yandex_server.base_url}/download/instant.png"),
+        is_in(
+            (
+                f"{fake_yandex_server.base_url}/download/instant.png",
+                f"{fake_yandex_server.base_url}/download/second.png",
+            )
+        ),
     )
 
-    await fake_telegram_server.reset()
-    await fake_telegram_server.push_inline_query(query="сейчас", query_id="immediate-only-category")
-    inline_answer = await fake_telegram_server.wait_for_request(
-        "answerInlineQuery",
-        predicate=lambda request: request["payload"].get("inline_query_id") == "immediate-only-category",
-    )
-    assert_that(inline_answer["payload"]["results"], empty())
+    for query, query_id in (("instant", "immediate-category-name"), ("сейчас", "immediate-category-alias")):
+        await fake_telegram_server.reset()
+        await fake_telegram_server.push_inline_query(query=query, query_id=query_id)
+        inline_answer = await fake_telegram_server.wait_for_request(
+            "answerInlineQuery",
+            predicate=partial(_matches_inline_query_id, query_id=query_id),
+        )
+        inline_results = inline_answer["payload"]["results"]
+        inline_titles = [result["title"] for result in inline_results]
+        assert_that(inline_titles, has_item("🎲 Выбрать случайную картинку"))
+        assert any(title in {"instant.png", "second.png"} for title in inline_titles)
+        assert_that([result["description"] for result in inline_results], only_contains("Категория /instant"))
+        assert_that(inline_results, has_length(2))
+        inline_media = [result.get("photo_file_id") or result.get("photo_url") for result in inline_results]
+        assert "functional-photo-file-id" in inline_media
+        assert sum(str(media).startswith(fake_yandex_server.base_url) for media in inline_media) == 1
 
     await fake_telegram_server.reset()
     await fake_telegram_server.push_callback_query(data=_subscription_callback(category_id=2, subscribe=True))
@@ -647,6 +664,7 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
         FunctionalSubscriptionType(3, "/pending-photo", time(2), "pending-photo"),
         FunctionalSubscriptionType(4, "/empty", time(3), "empty"),
         FunctionalSubscriptionType(5, "/broken", time(4), "broken"),
+        FunctionalSubscriptionType(6, "/instant", None, "instant"),
     )
     await seed_functional_subscription_types(subscription_types)
     await fake_yandex_server.configure_directory("ready-photo", images=[{"name": "ready.png"}])
@@ -660,6 +678,7 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
         "broken",
         images=[{"name": "broken.gif", "mime_type": "image/gif"}],
     )
+    await fake_yandex_server.configure_directory("instant", images=[{"name": "instant.png"}])
     await synchronize_functional_media_catalog()
 
     await fake_telegram_server.push_message(text="/ready-photo")
@@ -680,7 +699,7 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
     results = payload["results"]
     assert_that(
         [result["title"] for result in results],
-        equal_to(["🎲 /ready-photo", "🎲 /pending-gif", "🎲 /pending-photo"]),
+        equal_to(["🎲 /ready-photo", "🎲 /pending-gif", "🎲 /pending-photo", "🎲 /instant"]),
     )
     results_by_title = {result["title"]: result for result in results}
     assert_that(
@@ -703,9 +722,17 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
             thumbnail_url=f"{fake_yandex_server.base_url}/download/pending.png",
         ),
     )
+    assert_that(
+        results_by_title["🎲 /instant"],
+        has_entries(
+            type="photo",
+            photo_url=f"{fake_yandex_server.base_url}/download/instant.png",
+            thumbnail_url=f"{fake_yandex_server.base_url}/download/instant.png",
+        ),
+    )
     result_ids = [result["id"] for result in results]
-    assert_that([len(result_id.encode()) for result_id in result_ids], equal_to([64, 64, 64]))
-    assert_that(len(set(result_ids)), equal_to(3))
+    assert_that([len(result_id.encode()) for result_id in result_ids], equal_to([64, 64, 64, 64]))
+    assert_that(len(set(result_ids)), equal_to(4))
 
     yandex_requests = await fake_yandex_server.requests()
     url_lookups = [request for request in yandex_requests if request["method"] == "resources/download"]
@@ -716,6 +743,7 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
                 "app:/pending-gif/pending.gif",
                 "app:/pending-photo/pending.png",
                 "app:/broken/broken.gif",
+                "app:/instant/instant.png",
             ]
         ),
     )
@@ -738,16 +766,16 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
         "functional.inline.results.sent",
     )
     assert_that(metrics["functional.inline.dependencies.postgres.calls"]["value"], equal_to(2))
-    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(3))
+    assert_that(metrics["functional.inline.dependencies.yandex.calls"]["value"], equal_to(4))
     assert_that(metrics["functional.inline.dependencies.telegram.calls"]["value"], equal_to(1))
-    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(4))
-    assert_that(metrics["functional.inline.media.selected_items"]["value"], equal_to(4))
+    assert_that(metrics["functional.inline.media.catalog_items"]["value"], equal_to(5))
+    assert_that(metrics["functional.inline.media.selected_items"]["value"], equal_to(5))
     assert_that(metrics["functional.inline.media.ready_items"]["value"], equal_to(1))
-    assert_that(metrics["functional.inline.media.pending_items"]["value"], equal_to(3))
-    assert_that(metrics["functional.inline.media.url_successes"]["value"], equal_to(2))
+    assert_that(metrics["functional.inline.media.pending_items"]["value"], equal_to(4))
+    assert_that(metrics["functional.inline.media.url_successes"]["value"], equal_to(3))
     assert_that(metrics["functional.inline.media.url_failures"]["value"], equal_to(1))
-    assert_that(metrics["functional.inline.results.prepared"]["value"], equal_to(3))
-    assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(3))
+    assert_that(metrics["functional.inline.results.prepared"]["value"], equal_to(4))
+    assert_that(metrics["functional.inline.results.sent"]["value"], equal_to(4))
 
 
 async def test_bot_returns_empty_inline_results_for_known_empty_category_and_keeps_polling(
