@@ -118,6 +118,7 @@ subscription_types = sa.Table(
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
     sa.Column("time", sa.TIME(False), nullable=False),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
+    sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column(
         "search_aliases",
         sa.ARRAY(sa.Text),

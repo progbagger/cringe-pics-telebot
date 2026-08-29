@@ -45,7 +45,9 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
                     st.c.name,
                     st.c.time,
                     us.c.id.is_not(None).label("subscribed"),
-                ).select_from(st.outerjoin(us, us.c.subscription_type_id == st.c.id))
+                )
+                .select_from(st.outerjoin(us, us.c.subscription_type_id == st.c.id))
+                .where(st.c.is_active.is_(True))
             )
         ).fetchall()
 

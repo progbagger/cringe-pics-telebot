@@ -30,7 +30,7 @@ async def test_runner_synchronizes_immediately_then_waits(monkeypatch: pytest.Mo
 
 async def test_synchronization_isolates_category_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     categories = [_subscription_type(1, "/day", "day"), _subscription_type(2, "/broken", "broken")]
-    monkeypatch.setattr(media_sync, "get_subscription_types", AsyncMock(return_value=categories))
+    monkeypatch.setattr(media_sync, "get_all_subscription_types", AsyncMock(return_value=categories))
     monkeypatch.setattr(media_sync.cache, "set_if_absent", AsyncMock(return_value=True))
     monkeypatch.setattr(media_sync.cache, "refresh_if_value", AsyncMock(return_value=True))
     delete_lease = AsyncMock(return_value=True)
@@ -69,7 +69,7 @@ async def test_synchronization_isolates_category_failures(monkeypatch: pytest.Mo
 async def test_lost_lease_does_not_publish_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         media_sync,
-        "get_subscription_types",
+        "get_all_subscription_types",
         AsyncMock(return_value=[_subscription_type(1, "/day", "day")]),
     )
     monkeypatch.setattr(media_sync.cache, "set_if_absent", AsyncMock(return_value=True))
@@ -105,6 +105,7 @@ def _subscription_type(subscription_type_id: int, name: str, directory: str) -> 
         time=time(13),
         s3_directory_path=directory,
         search_aliases=(),
+        is_active=True,
         created_at=now,
         updated_at=now,
     )
