@@ -14,7 +14,7 @@ from .admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
 def create_admin_panel_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="Рассылки",
+        text="Уведомления",
         callback_data=_broadcast_callback(AdminBroadcastAction.broadcasts),
     )
     builder.button(
@@ -125,7 +125,9 @@ def create_admin_broadcasts_keyboard(broadcasts: Iterable[AdminBroadcast]) -> In
                     short=True,
                 ),
                 callback_data=_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast.id),
-            ),
+            )
+        )
+        builder.row(
             InlineKeyboardButton(
                 text="✏️",
                 callback_data=_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast.id),
@@ -137,7 +139,7 @@ def create_admin_broadcasts_keyboard(broadcasts: Iterable[AdminBroadcast]) -> In
         )
     builder.row(
         InlineKeyboardButton(
-            text="Новая рассылка",
+            text="Новое уведомление",
             callback_data=_broadcast_callback(AdminBroadcastAction.new_broadcast),
         )
     )

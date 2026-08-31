@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from aiogram import Router
 from aiogram.fsm.context import FSMContext
@@ -31,7 +31,11 @@ from cringe_pics_telebot.services.admin_broadcast_schedules import (
     format_admin_broadcast_schedule,
     parse_admin_broadcast_schedule,
 )
-from cringe_pics_telebot.services.timezones import get_user_timezone_offset
+from cringe_pics_telebot.services.timezones import (
+    DEFAULT_TIMEZONE_OFFSET_MINUTES,
+    format_timezone_offset,
+    get_user_timezone_offset,
+)
 
 from .admin_access import IsAdministrator
 from .admin_broadcast_callback_data import AdminBroadcastAction, AdminBroadcastCallbackData
@@ -130,7 +134,7 @@ async def receive_new_broadcast_recipients(message: Message, state: FSMContext) 
 async def receive_edited_broadcast_message(message: Message, state: FSMContext) -> None:
     broadcast_id = await _state_broadcast_id(state)
     if broadcast_id is None:
-        await message.answer("Черновик потерян. Откройте рассылку заново.")
+        await message.answer("Черновик потерян. Откройте уведомление заново.")
         return
 
     async with transaction():
@@ -141,10 +145,10 @@ async def receive_edited_broadcast_message(message: Message, state: FSMContext) 
         )
     await state.clear()
     if not updated:
-        await _answer_with_broadcast_list(message, prefix="Рассылка уже начала отправляться или недоступна.")
+        await _answer_with_broadcast_list(message, prefix="Отправка уведомления уже началась или оно недоступно.")
         return
 
-    await _answer_with_broadcast_list(message, prefix="Сообщение рассылки обновлено.")
+    await _answer_with_broadcast_list(message, prefix="Сообщение уведомления обновлено.")
 
 
 @router.message(AdminBroadcastForm.edited_schedule)
@@ -155,7 +159,7 @@ async def receive_edited_broadcast_schedule(message: Message, state: FSMContext)
 
     broadcast_id = await _state_broadcast_id(state)
     if broadcast_id is None:
-        await message.answer("Черновик потерян. Откройте рассылку заново.")
+        await message.answer("Черновик потерян. Откройте уведомление заново.")
         return
 
     async with transaction():
@@ -166,10 +170,10 @@ async def receive_edited_broadcast_schedule(message: Message, state: FSMContext)
         )
     await state.clear()
     if not updated:
-        await _answer_with_broadcast_list(message, prefix="Рассылка уже начала отправляться или недоступна.")
+        await _answer_with_broadcast_list(message, prefix="Отправка уведомления уже началась или оно недоступно.")
         return
 
-    await _answer_with_broadcast_list(message, prefix="Дата и время рассылки обновлены.")
+    await _answer_with_broadcast_list(message, prefix="Дата и время уведомления обновлены.")
 
 
 @router.message(AdminBroadcastForm.edited_recipients)
@@ -179,7 +183,7 @@ async def receive_edited_broadcast_recipients(message: Message, state: FSMContex
         return
     broadcast_id = await _state_broadcast_id(state)
     if broadcast_id is None:
-        await message.answer("Черновик потерян. Откройте рассылку заново.")
+        await message.answer("Черновик потерян. Откройте уведомление заново.")
         return
     async with transaction():
         updated = await set_admin_broadcast_recipients(
@@ -188,7 +192,7 @@ async def receive_edited_broadcast_recipients(message: Message, state: FSMContex
         )
     await state.clear()
     if not updated:
-        await _answer_with_broadcast_list(message, prefix="Рассылка уже начала отправляться или недоступна.")
+        await _answer_with_broadcast_list(message, prefix="Отправка уведомления уже началась или оно недоступно.")
         return
     await _answer_with_broadcast_list(message, prefix="Дополнительные получатели обновлены.")
 
@@ -234,9 +238,9 @@ async def _dispatch_admin_broadcast_callback(
         case AdminBroadcastAction.skip_recipients:
             broadcast = await _create_broadcast_from_state(message=message, state=state, recipient_ids=set())
             if broadcast is None:
-                return "Черновик потерян. Начните создание рассылки заново."
+                return "Черновик потерян. Начните создание уведомления заново."
             await _edit_current_broadcast_list(message)
-            return _created_broadcast_text(broadcast, 0)
+            return _created_broadcast_text(broadcast, 0, html=False)
     return None
 
 
@@ -253,7 +257,7 @@ async def _start_new_broadcast(*, message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AdminBroadcastForm.new_message)
     await message.edit_text(
-        "<b>Новая рассылка</b>\n\nОтправьте сообщение, которое нужно разослать.",
+        "<b>Новое уведомление</b>\n\nОтправьте сообщение, которое нужно доставить получателям.",
         reply_markup=create_admin_form_cancel_keyboard(),
     )
 
@@ -267,7 +271,7 @@ async def _show_broadcast(
     broadcast = await _editable_broadcast(broadcast_id)
     if broadcast is None:
         await _edit_current_broadcast_list(message)
-        return "Рассылка уже начала отправляться или недоступна."
+        return "Отправка уведомления уже началась или оно недоступно."
     recipient_ids = await get_admin_broadcast_recipient_ids(broadcast.id)
     viewer_timezone_offset_minutes = await get_user_timezone_offset(viewer_user_id)
     await message.edit_text(
@@ -284,11 +288,11 @@ async def _show_broadcast(
 async def _start_edit_message(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
     if await _editable_broadcast(broadcast_id) is None:
         await _edit_current_broadcast_list(message)
-        return "Рассылка уже начала отправляться или недоступна."
+        return "Отправка уведомления уже началась или оно недоступно."
     await state.set_state(AdminBroadcastForm.edited_message)
     await state.set_data({"broadcast_id": broadcast_id})
     await message.edit_text(
-        "Отправьте новое сообщение для рассылки.",
+        "Отправьте новое сообщение для уведомления.",
         reply_markup=create_admin_form_cancel_keyboard(),
     )
     return None
@@ -297,7 +301,7 @@ async def _start_edit_message(message: Message, state: FSMContext, broadcast_id:
 async def _start_edit_schedule(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
     if await _editable_broadcast(broadcast_id) is None:
         await _edit_current_broadcast_list(message)
-        return "Рассылка уже начала отправляться или недоступна."
+        return "Отправка уведомления уже началась или оно недоступно."
     await state.set_state(AdminBroadcastForm.edited_schedule)
     await state.set_data({"broadcast_id": broadcast_id})
     await message.edit_text(
@@ -310,7 +314,7 @@ async def _start_edit_schedule(message: Message, state: FSMContext, broadcast_id
 async def _start_edit_recipients(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
     if await _editable_broadcast(broadcast_id) is None:
         await _edit_current_broadcast_list(message)
-        return "Рассылка уже начала отправляться или недоступна."
+        return "Отправка уведомления уже началась или оно недоступно."
     await state.set_state(AdminBroadcastForm.edited_recipients)
     await state.set_data({"broadcast_id": broadcast_id})
     await message.edit_text(
@@ -324,9 +328,9 @@ async def _show_delete_confirmation(message: Message, broadcast_id: int) -> str 
     broadcast = await _editable_broadcast(broadcast_id)
     if broadcast is None:
         await _edit_current_broadcast_list(message)
-        return "Рассылка уже начала отправляться или недоступна."
+        return "Отправка уведомления уже началась или оно недоступно."
     await message.edit_text(
-        "Удалить рассылку на "
+        "Удалить уведомление на "
         f"<b>{format_admin_broadcast_schedule(broadcast.scheduled_local_at, broadcast.timezone_offset_minutes)}</b>?",
         reply_markup=create_admin_broadcast_delete_keyboard(broadcast.id),
     )
@@ -337,7 +341,7 @@ async def _delete_broadcast(message: Message, broadcast_id: int) -> str | None:
     async with transaction():
         deleted = await soft_delete_admin_broadcast(broadcast_id)
     await _edit_current_broadcast_list(message)
-    return "Рассылка удалена." if deleted else "Рассылка уже начала отправляться или недоступна."
+    return "Уведомление удалено." if deleted else "Отправка уведомления уже началась или оно недоступно."
 
 
 async def _editable_broadcast(broadcast_id: int) -> AdminBroadcast | None:
@@ -353,14 +357,14 @@ async def _edit_current_broadcast_list(message: Message) -> None:
         await _edit_with_broadcast_list(message, broadcasts)
     else:
         await message.edit_text(
-            "<b>Запланированных рассылок нет.</b>",
+            "<b>Запланированных уведомлений нет.</b>",
             reply_markup=create_admin_panel_keyboard(),
         )
 
 
 async def _edit_with_broadcast_list(message: Message, broadcasts: list[AdminBroadcast]) -> None:
     await message.edit_text(
-        "<b>Запланированные рассылки</b>\n\nВыберите рассылку или создайте новую.",
+        "<b>Запланированные уведомления</b>\n\nВыберите уведомление или создайте новое.",
         reply_markup=create_admin_broadcasts_keyboard(broadcasts),
     )
 
@@ -368,7 +372,7 @@ async def _edit_with_broadcast_list(message: Message, broadcasts: list[AdminBroa
 async def _answer_with_broadcast_list(message: Message, *, prefix: str) -> None:
     broadcasts = await get_scheduled_admin_broadcasts()
     await message.answer(
-        f"{prefix}\n\n<b>Запланированные рассылки</b>",
+        f"{prefix}\n\n<b>Запланированные уведомления</b>",
         reply_markup=create_admin_broadcasts_keyboard(broadcasts),
     )
 
@@ -456,7 +460,7 @@ def _broadcast_details(
         viewer_timezone_offset_minutes=viewer_timezone_offset_minutes,
     )
     return (
-        f"<b>Рассылка #{broadcast.id}</b>\n\n"
+        f"<b>Уведомление #{broadcast.id}</b>\n\n"
         "Дата и время: "
         f"<b>{format_admin_broadcast_schedule(broadcast.scheduled_local_at, broadcast.timezone_offset_minutes)}</b>\n"
         f"{countdown_label}: <b>{countdown}</b>\n"
@@ -466,12 +470,15 @@ def _broadcast_details(
 
 
 def _schedule_prompt(*, prefix: str = "Введите дату и время отправки.") -> str:
+    example_timezone = timezone(timedelta(minutes=DEFAULT_TIMEZONE_OFFSET_MINUTES))
+    example_local_at = datetime.now(UTC).astimezone(example_timezone) + timedelta(hours=1)
+    example = f"{example_local_at:%d.%m.%Y %H:%M} {format_timezone_offset(DEFAULT_TIMEZONE_OFFSET_MINUTES)}"
     return (
         f"{prefix}\n\n"
         "Формат: <code>ДД.ММ.ГГГГ ЧЧ:ММ [+ЧЧ:ММ]</code>.\n"
         "Без UTC-смещения сообщение придёт в это локальное время каждому получателю. "
-        "Со смещением все получат его в один момент, например: "
-        "<code>20.08.2026 10:00 +07:00</code>."
+        "Со смещением все получат его в один момент.\n"
+        f"Например: <code>{example}</code>."
     )
 
 
@@ -483,7 +490,7 @@ def _recipients_prompt(*, prefix: str = "Укажите дополнительн
     return (
         f"{prefix}\n\n"
         "Разделяйте ID пробелами, запятыми или переносами строк. "
-        "Эти пользователи будут добавлены к общей активной аудитории только для этой рассылки. "
+        "Эти пользователи будут добавлены к общей активной аудитории только для этого уведомления. "
         f"Можно указать до {MAX_EXTRA_RECIPIENTS} ID. Отправьте <code>-</code>, чтобы очистить список."
     )
 
@@ -492,14 +499,17 @@ def _recipients_error(reason: str) -> str:
     return f"{reason}\n\n{_recipients_prompt(prefix='Попробуйте ещё раз.')}"
 
 
-def _created_broadcast_text(broadcast: AdminBroadcast, extra_recipient_count: int) -> str:
+def _created_broadcast_text(broadcast: AdminBroadcast, extra_recipient_count: int, *, html: bool = True) -> str:
     formatted_schedule = format_admin_broadcast_schedule(
         broadcast.scheduled_local_at,
         broadcast.timezone_offset_minutes,
     )
+    formatted_recipient_count = str(extra_recipient_count)
+    if html:
+        formatted_schedule = f"<b>{formatted_schedule}</b>"
+        formatted_recipient_count = f"<b>{formatted_recipient_count}</b>"
     return (
-        f"Рассылка запланирована на <b>{formatted_schedule}</b>. "
-        f"Дополнительных получателей: <b>{extra_recipient_count}</b>."
+        f"Уведомление запланировано на {formatted_schedule}. Дополнительных получателей: {formatted_recipient_count}."
     )
 
 

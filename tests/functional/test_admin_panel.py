@@ -1,6 +1,7 @@
+import re
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
-from datetime import datetime, time, timedelta
+from datetime import UTC, datetime, time, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -27,7 +28,9 @@ from cringe_pics_telebot.bot.admin_category_callback_data import (
 from cringe_pics_telebot.bot.admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
+from cringe_pics_telebot.services.admin_broadcast_schedules import parse_admin_broadcast_schedule
 from cringe_pics_telebot.services.media_sync import MEDIA_SYNC_LEASE_KEY, MediaSyncSummary
+from cringe_pics_telebot.services.timezones import DEFAULT_TIMEZONE_OFFSET_MINUTES
 from tests.functional.conftest import (
     REDIS_ENV,
     SEEDED_SUBSCRIPTION_TYPES,
@@ -65,7 +68,7 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
     )
     assert_that(
         _inline_keyboard_button_texts(admin_panel["payload"]),
-        equal_to(["Рассылки", "Управление категориями", "Синхронизировать медиа"]),
+        equal_to(["Уведомления", "Управление категориями", "Синхронизировать медиа"]),
     )
 
     await set_functional_administrator(user_id=42, enabled=False)
@@ -198,7 +201,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
     )
     assert_that(
         _inline_keyboard_button_texts(returned_panel["payload"]),
-        equal_to(["Рассылки", "Управление категориями", "Синхронизировать медиа"]),
+        equal_to(["Уведомления", "Управление категориями", "Синхронизировать медиа"]),
     )
 
 
@@ -419,19 +422,33 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     await fake_telegram_server.push_callback_query(data=_admin_broadcast_callback(AdminBroadcastAction.broadcasts))
     await fake_telegram_server.wait_for_request(
         "editMessageText",
-        predicate=lambda request: "Новая рассылка" in request["payload"].get("text", ""),
+        predicate=lambda request: "Новое уведомление" in request["payload"].get("text", ""),
     )
 
+    initial_prompt_started_at = datetime.now(UTC)
     await fake_telegram_server.push_message(text="Важное сообщение")
-    await fake_telegram_server.wait_for_request(
+    initial_prompt = await fake_telegram_server.wait_for_request(
         "sendMessage",
         predicate=lambda request: "ДД.ММ.ГГГГ" in request["payload"].get("text", ""),
     )
+    initial_prompt_finished_at = datetime.now(UTC)
+    _assert_dynamic_schedule_example(
+        initial_prompt["payload"]["text"],
+        generated_after=initial_prompt_started_at,
+        generated_before=initial_prompt_finished_at,
+    )
 
+    retry_prompt_started_at = datetime.now(UTC)
     await fake_telegram_server.push_message(text="не дата")
-    await fake_telegram_server.wait_for_request(
+    retry_prompt = await fake_telegram_server.wait_for_request(
         "sendMessage",
         predicate=lambda request: "Не удалось распознать" in request["payload"].get("text", ""),
+    )
+    retry_prompt_finished_at = datetime.now(UTC)
+    _assert_dynamic_schedule_example(
+        retry_prompt["payload"]["text"],
+        generated_after=retry_prompt_started_at,
+        generated_before=retry_prompt_finished_at,
     )
     assert_that(await read_admin_broadcasts(), empty())
 
@@ -443,7 +460,7 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     await fake_telegram_server.push_message(text="700, 800 700")
     confirmation = await fake_telegram_server.wait_for_request(
         "sendMessage",
-        predicate=lambda request: "Рассылка запланирована" in request["payload"].get("text", ""),
+        predicate=lambda request: "Уведомление запланировано" in request["payload"].get("text", ""),
     )
 
     broadcasts = await read_admin_broadcasts()
@@ -462,7 +479,7 @@ async def test_empty_broadcast_list_starts_creation_and_validates_schedule(
     assert_that(await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]), equal_to([700, 800]))
     assert_that(await read_user_state(700), equal_to((420, False)))
     assert_that(await read_user_state(800), equal_to((420, False)))
-    assert_that(_inline_keyboard_button_texts(confirmation["payload"]), has_item("Новая рассылка"))
+    assert_that(_inline_keyboard_button_texts(confirmation["payload"]), has_item("Новое уведомление"))
 
 
 async def test_admin_edits_and_soft_deletes_existing_broadcast(
@@ -483,11 +500,18 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     await fake_telegram_server.push_callback_query(data=_admin_broadcast_callback(AdminBroadcastAction.broadcasts))
     broadcast_list = await fake_telegram_server.wait_for_request(
         "editMessageText",
-        predicate=lambda request: "Запланированные рассылки" in request["payload"].get("text", ""),
+        predicate=lambda request: "Запланированные уведомления" in request["payload"].get("text", ""),
     )
     assert_that(
-        _inline_keyboard_button_texts(broadcast_list["payload"]),
-        equal_to(["20.08 10:00 · локально", "✏️", "🗑", "Новая рассылка", "Назад"]),
+        _inline_keyboard_button_rows(broadcast_list["payload"]),
+        equal_to(
+            [
+                ["20.08 10:00 · локально"],
+                ["✏️", "🗑"],
+                ["Новое уведомление"],
+                ["Назад"],
+            ]
+        ),
     )
 
     await fake_telegram_server.push_callback_query(
@@ -495,22 +519,29 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     )
     broadcast_details = await fake_telegram_server.wait_for_request(
         "editMessageText",
-        predicate=lambda request: "Рассылка #" in request["payload"].get("text", ""),
+        predicate=lambda request: "Уведомление #" in request["payload"].get("text", ""),
     )
     assert_that(broadcast_details["payload"]["text"], contains_string("До отправки для вас: <b>"))
 
+    edit_prompt_started_at = datetime.now(UTC)
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.edit_schedule, broadcast_id),
         message_id=101,
     )
-    await fake_telegram_server.wait_for_request(
+    edit_prompt = await fake_telegram_server.wait_for_request(
         "editMessageText",
         predicate=lambda request: "Введите новую дату" in request["payload"].get("text", ""),
+    )
+    edit_prompt_finished_at = datetime.now(UTC)
+    _assert_dynamic_schedule_example(
+        edit_prompt["payload"]["text"],
+        generated_after=edit_prompt_started_at,
+        generated_before=edit_prompt_finished_at,
     )
     await fake_telegram_server.push_message(text="21.08.2099 11:30 +04:00")
     await fake_telegram_server.wait_for_request(
         "sendMessage",
-        predicate=lambda request: "Дата и время рассылки обновлены" in request["payload"].get("text", ""),
+        predicate=lambda request: "Дата и время уведомления обновлены" in request["payload"].get("text", ""),
     )
     broadcast = await read_admin_broadcast(broadcast_id)
     assert_that(
@@ -529,7 +560,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     await fake_telegram_server.push_message(text="Новое содержимое")
     await fake_telegram_server.wait_for_request(
         "sendMessage",
-        predicate=lambda request: "Сообщение рассылки обновлено" in request["payload"].get("text", ""),
+        predicate=lambda request: "Сообщение уведомления обновлено" in request["payload"].get("text", ""),
     )
     broadcast = await read_admin_broadcast(broadcast_id)
     assert_that(
@@ -558,7 +589,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     )
     await fake_telegram_server.wait_for_request(
         "editMessageText",
-        predicate=lambda request: "Удалить рассылку" in request["payload"].get("text", ""),
+        predicate=lambda request: "Удалить уведомление" in request["payload"].get("text", ""),
     )
     await fake_telegram_server.push_callback_query(
         data=_admin_broadcast_callback(AdminBroadcastAction.confirm_delete, broadcast_id),
@@ -566,7 +597,7 @@ async def test_admin_edits_and_soft_deletes_existing_broadcast(
     )
     await fake_telegram_server.wait_for_request(
         "answerCallbackQuery",
-        predicate=lambda request: request["payload"].get("text") == "Рассылка удалена.",
+        predicate=lambda request: request["payload"].get("text") == "Уведомление удалено.",
     )
     broadcast = await read_admin_broadcast(broadcast_id)
     assert_that(
@@ -588,7 +619,7 @@ async def test_admin_can_skip_explicit_recipients(
     await fake_telegram_server.push_callback_query(data=_admin_broadcast_callback(AdminBroadcastAction.broadcasts))
     await fake_telegram_server.wait_for_request(
         "editMessageText",
-        predicate=lambda request: "Новая рассылка" in request["payload"].get("text", ""),
+        predicate=lambda request: "Новое уведомление" in request["payload"].get("text", ""),
     )
     await fake_telegram_server.push_message(text="Сообщение без дополнительных ID")
     await fake_telegram_server.wait_for_request(
@@ -605,10 +636,16 @@ async def test_admin_can_skip_explicit_recipients(
         data=_admin_broadcast_callback(AdminBroadcastAction.skip_recipients),
         message_id=106,
     )
-    await fake_telegram_server.wait_for_request(
+    alert = await fake_telegram_server.wait_for_request(
         "answerCallbackQuery",
         predicate=lambda request: "Дополнительных получателей" in request["payload"].get("text", ""),
     )
+    alert_text = alert["payload"]["text"]
+    assert alert["payload"]["show_alert"] is True
+    assert "<" not in alert_text
+    assert ">" not in alert_text
+    assert_that(alert_text, contains_string("20.08.2099 10:00 — локальное время каждого получателя"))
+    assert_that(alert_text, contains_string("Дополнительных получателей: 0."))
 
     broadcasts = await read_admin_broadcasts()
     assert_that(broadcasts, has_length(1))
@@ -637,6 +674,29 @@ async def test_private_message_reactivates_user_without_resetting_timezone(
     assert_that(await read_user_state(700), equal_to((-300, True)))
 
 
+def _assert_dynamic_schedule_example(
+    prompt: str,
+    *,
+    generated_after: datetime,
+    generated_before: datetime,
+) -> None:
+    match = re.search(r"Например: <code>(\d{2}\.\d{2}\.\d{4} \d{2}:\d{2} \+07:00)</code>", prompt)
+    assert match is not None
+    assert "20.08.2026" not in prompt
+
+    example = parse_admin_broadcast_schedule(match.group(1), now=generated_after)
+    assert example.timezone_offset_minutes == DEFAULT_TIMEZONE_OFFSET_MINUTES
+
+    example_timezone = timezone(timedelta(minutes=DEFAULT_TIMEZONE_OFFSET_MINUTES))
+    earliest = generated_after.astimezone(example_timezone).replace(tzinfo=None, second=0, microsecond=0) + timedelta(
+        hours=1
+    )
+    latest = generated_before.astimezone(example_timezone).replace(tzinfo=None, second=0, microsecond=0) + timedelta(
+        hours=1
+    )
+    assert earliest <= example.local_at <= latest
+
+
 def _admin_panel_callback(action: AdminPanelAction) -> str:
     return AdminPanelCallbackData(action=action).pack()
 
@@ -653,5 +713,9 @@ def _reply_keyboard_button_texts(payload: dict[str, Any]) -> list[str]:
     return [button["text"] for row in payload["reply_markup"]["keyboard"] for button in row]
 
 
+def _inline_keyboard_button_rows(payload: dict[str, Any]) -> list[list[str]]:
+    return [[button["text"] for button in row] for row in payload["reply_markup"]["inline_keyboard"]]
+
+
 def _inline_keyboard_button_texts(payload: dict[str, Any]) -> list[str]:
-    return [button["text"] for row in payload["reply_markup"]["inline_keyboard"] for button in row]
+    return [button_text for row in _inline_keyboard_button_rows(payload) for button_text in row]
