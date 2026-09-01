@@ -13,6 +13,10 @@ class AdminCategoryAction(StrEnum):
     deactivate = "deactivate"
     edit_time = "edit_time"
     disable_schedule = "disable_schedule"
+    edit_weekdays = "edit_days"
+    toggle_weekday = "toggle_day"
+    confirm_weekdays = "save_days"
+    daily_weekdays = "daily"
     edit_aliases = "edit_aliases"
     clear_aliases = "clear_aliases"
     cancel_form = "cancel"
@@ -21,3 +25,4 @@ class AdminCategoryAction(StrEnum):
 class AdminCategoryCallbackData(CallbackData, prefix="admin_category"):
     action: AdminCategoryAction
     category_id: int = 0
+    weekday: int = 0

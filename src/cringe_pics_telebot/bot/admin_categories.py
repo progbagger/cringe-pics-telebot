@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardMarkup, Message
 
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories.postgres import (
     CreateSubscriptionType,
     get_all_subscription_types,
@@ -27,11 +28,13 @@ from cringe_pics_telebot.services.admin_categories import (
     parse_admin_category_time,
     set_admin_category_activity,
     set_admin_category_time,
+    set_admin_category_weekdays,
 )
 from cringe_pics_telebot.services.category_aliases import (
     InvalidCategoryAliasesError,
     parse_category_search_aliases,
 )
+from cringe_pics_telebot.services.subscription_schedules import format_subscription_weekdays
 
 from .admin_access import IsAdministrator
 from .admin_category_callback_data import AdminCategoryAction, AdminCategoryCallbackData
@@ -40,6 +43,7 @@ from .admin_keyboards import (
     create_admin_category_form_cancel_keyboard,
     create_admin_category_keyboard,
     create_admin_category_schedule_mode_keyboard,
+    create_admin_category_weekdays_keyboard,
     create_admin_panel_keyboard,
 )
 
@@ -55,11 +59,16 @@ class AdminCategoryCreationForm(StatesGroup):
     s3_directory_path = State()
     schedule_mode = State()
     send_time = State()
+    weekdays = State()
     aliases = State()
 
 
 class AdminCategoryTimeForm(StatesGroup):
     send_time = State()
+
+
+class AdminCategoryWeekdaysForm(StatesGroup):
+    weekdays = State()
 
 
 class AdminCategoryAliasesForm(StatesGroup):
@@ -165,11 +174,11 @@ async def receive_new_category_time(message: Message, state: FSMContext) -> None
         )
         return
 
-    await state.update_data(send_time=send_time)
-    await state.set_state(AdminCategoryCreationForm.aliases)
+    await state.update_data(send_time=send_time, weekdays=())
+    await state.set_state(AdminCategoryCreationForm.weekdays)
     await message.answer(
-        _new_category_aliases_prompt(),
-        reply_markup=create_admin_category_form_cancel_keyboard(),
+        _new_category_weekdays_prompt(),
+        reply_markup=create_admin_category_weekdays_keyboard(()),
     )
 
 
@@ -332,6 +341,14 @@ async def _dispatch_admin_category_callback(
         case AdminCategoryAction.disable_schedule:
             await state.clear()
             return await _disable_schedule(message, callback_data.category_id)
+        case AdminCategoryAction.edit_weekdays:
+            return await _start_edit_weekdays(message, state, callback_data.category_id)
+        case AdminCategoryAction.toggle_weekday:
+            return await _toggle_weekday(message, state, callback_data.weekday)
+        case AdminCategoryAction.confirm_weekdays:
+            return await _confirm_weekdays(message, state)
+        case AdminCategoryAction.daily_weekdays:
+            return await _confirm_weekdays(message, state, weekdays=SubscriptionWeekdays.daily())
         case AdminCategoryAction.edit_aliases:
             return await _start_edit_aliases(message, state, callback_data.category_id)
         case AdminCategoryAction.clear_aliases:
@@ -394,7 +411,7 @@ async def _select_new_category_schedule(message: Message, state: FSMContext, *, 
         )
         return None
 
-    await state.update_data(send_time=None)
+    await state.update_data(send_time=None, weekdays=SubscriptionWeekdays.daily().days)
     await state.set_state(AdminCategoryCreationForm.aliases)
     await message.edit_text(
         _new_category_aliases_prompt(),
@@ -444,6 +461,102 @@ async def _disable_schedule(message: Message, category_id: int) -> str:
     return "Расписание отключено."
 
 
+async def _start_edit_weekdays(message: Message, state: FSMContext, category_id: int) -> str | None:
+    category = await get_subscription_type(category_id)
+    if category is None:
+        await _show_categories(message)
+        return "Категория больше недоступна."
+    if category.time is None:
+        await _show_category(message, category_id)
+        return "Расписание категории отключено."
+
+    await state.set_state(AdminCategoryWeekdaysForm.weekdays)
+    await state.set_data({"category_id": category_id, "weekdays": category.weekdays.days})
+    await message.edit_text(
+        _edit_category_weekdays_prompt(category.name),
+        reply_markup=create_admin_category_weekdays_keyboard(category.weekdays),
+    )
+    return None
+
+
+async def _toggle_weekday(message: Message, state: FSMContext, weekday: int) -> str | None:
+    if weekday not in range(1, 8):
+        return "Некорректный день недели."
+
+    weekdays = await _state_weekdays(state, allow_empty=True)
+    if weekdays is None:
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Начните действие заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик выбора дней потерян."
+
+    selected = set(weekdays)
+    if weekday in selected:
+        selected.remove(weekday)
+    else:
+        selected.add(weekday)
+    normalized = tuple(sorted(selected))
+    await state.update_data(weekdays=normalized)
+    await message.edit_reply_markup(reply_markup=create_admin_category_weekdays_keyboard(normalized))
+    return None
+
+
+async def _confirm_weekdays(
+    message: Message,
+    state: FSMContext,
+    *,
+    weekdays: SubscriptionWeekdays | None = None,
+) -> str | None:
+    selected = weekdays or await _state_weekdays(state, allow_empty=True)
+    if selected is None:
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Начните действие заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик выбора дней потерян."
+    if not selected:
+        return "Выберите хотя бы один день."
+
+    normalized = selected if isinstance(selected, SubscriptionWeekdays) else SubscriptionWeekdays(*selected)
+    current_state = await state.get_state()
+    if current_state == AdminCategoryCreationForm.weekdays.state:
+        await state.update_data(weekdays=normalized.days)
+        await state.set_state(AdminCategoryCreationForm.aliases)
+        await message.edit_text(
+            _new_category_aliases_prompt(),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return None
+    if current_state != AdminCategoryWeekdaysForm.weekdays.state:
+        await state.clear()
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Начните действие заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик выбора дней потерян."
+
+    category_id = await _state_category_id(state)
+    if category_id is None:
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Откройте категорию заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик выбора дней потерян."
+
+    category = await set_admin_category_weekdays(category_id, normalized)
+    await state.clear()
+    if category is None:
+        await _show_categories(message)
+        return "Категория больше недоступна."
+
+    await message.edit_text(
+        _category_details(category),
+        reply_markup=_category_keyboard(category),
+    )
+    return "Дни отправки обновлены."
+
+
 async def _start_edit_aliases(message: Message, state: FSMContext, category_id: int) -> str | None:
     category = await get_subscription_type(category_id)
     if category is None:
@@ -482,10 +595,12 @@ async def _state_creation_draft(
         await state.clear()
         return None
     send_time = data["send_time"]
+    weekdays = _weekdays_from_state_data(data)
     if (
         not isinstance(name, str)
         or not isinstance(s3_directory_path, str)
         or (send_time is not None and not isinstance(send_time, time))
+        or weekdays is None
     ):
         await state.clear()
         return None
@@ -495,6 +610,7 @@ async def _state_creation_draft(
         time=send_time,
         s3_directory_path=s3_directory_path,
         search_aliases=search_aliases,
+        weekdays=weekdays,
     )
 
 
@@ -504,6 +620,37 @@ async def _state_category_id(state: FSMContext) -> int | None:
         await state.clear()
         return None
     return category_id
+
+
+async def _state_weekdays(
+    state: FSMContext,
+    *,
+    allow_empty: bool,
+) -> SubscriptionWeekdays | tuple[int, ...] | None:
+    data = await state.get_data()
+    raw_weekdays = data.get("weekdays")
+    if not isinstance(raw_weekdays, (list, tuple)) or any(not isinstance(day, int) for day in raw_weekdays):
+        await state.clear()
+        return None
+    if not raw_weekdays:
+        return () if allow_empty else None
+    try:
+        return SubscriptionWeekdays(*raw_weekdays)
+    except ValueError:
+        await state.clear()
+        return None
+
+
+def _weekdays_from_state_data(data: dict[str, object]) -> SubscriptionWeekdays | None:
+    raw_weekdays = data.get("weekdays")
+    if not isinstance(raw_weekdays, (list, tuple)) or not raw_weekdays:
+        return None
+    if any(not isinstance(day, int) for day in raw_weekdays):
+        return None
+    try:
+        return SubscriptionWeekdays(*raw_weekdays)
+    except ValueError:
+        return None
 
 
 def _category_keyboard(category: SubscriptionType) -> InlineKeyboardMarkup:
@@ -522,11 +669,13 @@ def _category_details(category: SubscriptionType) -> str:
         aliases = "<i>не заданы</i>"
     status = "активна" if category.is_active else "неактивна"
     send_time = f"<code>{category.time.strftime('%H:%M')}</code>" if category.time is not None else "без расписания"
+    weekdays = format_subscription_weekdays(category.weekdays, daily_label="каждый день")
     return (
         f"<b>Категория {escape(category.name)}</b>\n\n"
         f"Статус: <b>{status}</b>\n"
         f"Путь к каталогу: <code>{escape(category.s3_directory_path)}</code>\n"
-        f"Локальное время отправки: {send_time}\n\n"
+        f"Локальное время отправки: {send_time}\n"
+        f"Дни отправки: {weekdays}\n\n"
         f"Алиасы для inline-поиска:\n{aliases}"
     )
 
@@ -550,7 +699,7 @@ def _path_error(reason: str) -> str:
 def _schedule_mode_prompt() -> str:
     return (
         "<b>Новая категория — режим отправки</b>\n\n"
-        "Выберите «По расписанию», чтобы задать ежедневное локальное время рассылки, "
+        "Выберите «По расписанию», чтобы задать локальное время и дни рассылки, "
         "или «Без расписания» для выдачи только по пользовательской кнопке."
     )
 
@@ -563,6 +712,20 @@ def _time_prompt(*, prefix: str = "Введите локальное время 
 
 def _time_error(reason: str) -> str:
     return f"{reason}\n\n{_time_prompt(prefix='Попробуйте ещё раз.')}"
+
+
+def _new_category_weekdays_prompt() -> str:
+    return (
+        "<b>Новая категория — дни отправки</b>\n\n"
+        "Выберите хотя бы один день недели и нажмите «Готово» либо используйте «Каждый день»."
+    )
+
+
+def _edit_category_weekdays_prompt(category_name: str) -> str:
+    return (
+        f"<b>Дни отправки категории {escape(category_name)}</b>\n\n"
+        "Измените выбранные дни и нажмите «Готово» либо используйте «Каждый день»."
+    )
 
 
 def _edit_time_prompt(*, prefix: str = "Введите новое локальное время отправки категории.") -> str:
