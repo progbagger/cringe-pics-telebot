@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import time
@@ -428,6 +429,40 @@ async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
             }
         ),
     )
+
+
+async def test_bot_ordinary_delivery_uses_persistent_non_repeating_cycle(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    set_functional_category_media_file_ids: Callable[[dict[str, str | None]], Awaitable[None]],
+    read_functional_user_media_cycle: Callable[[int, int], Awaitable[tuple[str | None, dict[str, str]] | None]],
+) -> None:
+    image_names = ["first.png", "second.png", "third.png"]
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/cycle", None, "cycle"),))
+    await fake_yandex_server.configure_directory("cycle", images=[{"name": name} for name in image_names])
+    await synchronize_functional_media_catalog()
+    await set_functional_category_media_file_ids({f"cycle/{name}": f"telegram-{name}" for name in image_names})
+    await fake_yandex_server.reset()
+
+    sent_media: list[str] = []
+    for expected_shown_count in (1, 2, 3, 1):
+        await fake_telegram_server.reset()
+        await fake_telegram_server.push_message(text="/cycle")
+        request = await fake_telegram_server.wait_for_request("editMessageMedia")
+        sent_media.append(request["payload"]["media"]["media"])
+        await _wait_for_cycle_shown_count(
+            read_functional_user_media_cycle,
+            user_id=42,
+            subscription_type_id=1,
+            expected=expected_shown_count,
+        )
+
+    assert_that(set(sent_media[:3]), equal_to({f"telegram-{name}" for name in image_names}))
+    assert_that(sent_media[3] == sent_media[2], equal_to(False))
+    assert_that(await fake_yandex_server.requests(), empty())
 
 
 async def test_bot_recovers_invalid_catalog_file_id_once(
@@ -1094,6 +1129,24 @@ async def _wait_for_metrics(
     *names: str,
 ) -> dict[str, dict[str, Any]]:
     return {name: await fake_statsd_server.wait_for_metric(name) for name in names}
+
+
+async def _wait_for_cycle_shown_count(
+    read_cycle: Callable[[int, int], Awaitable[tuple[str | None, dict[str, str]] | None]],
+    *,
+    user_id: int,
+    subscription_type_id: int,
+    expected: int,
+    timeout: float = 10,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        cycle = await read_cycle(user_id, subscription_type_id)
+        if cycle is not None and sum(status == "shown" for status in cycle[1].values()) == expected:
+            return
+        await asyncio.sleep(0.1)
+
+    raise TimeoutError(f"Cycle did not reach {expected} shown entries in {timeout} seconds")
 
 
 def _is_subscription_list_answer(request: dict[str, Any]) -> bool:

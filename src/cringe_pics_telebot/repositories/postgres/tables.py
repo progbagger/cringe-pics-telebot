@@ -183,6 +183,53 @@ category_media = sa.Table(
     ),
 )
 
+user_media_cycle_states = sa.Table(
+    "user_media_cycle_states",
+    _metadata,
+    sa.Column("user_id", sa.BIGINT, sa.ForeignKey(users.c.id, ondelete="CASCADE"), primary_key=True, nullable=False),
+    sa.Column(
+        "subscription_type_id",
+        sa.BIGINT,
+        sa.ForeignKey(subscription_types.c.id, ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    ),
+    sa.Column(
+        "last_media_id",
+        sa.BIGINT,
+        sa.ForeignKey(category_media.c.id, ondelete="SET NULL"),
+        nullable=True,
+    ),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+)
+
+user_media_cycle_entries = sa.Table(
+    "user_media_cycle_entries",
+    _metadata,
+    sa.Column("user_id", sa.BIGINT, primary_key=True, nullable=False),
+    sa.Column("subscription_type_id", sa.BIGINT, primary_key=True, nullable=False),
+    sa.Column("media_id", sa.BIGINT, sa.ForeignKey(category_media.c.id, ondelete="CASCADE"), primary_key=True),
+    sa.Column("reservation_token", sa.Text, nullable=True),
+    sa.Column("reserved_until", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("shown_at", sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint(
+        "(reservation_token IS NOT NULL AND reserved_until IS NOT NULL AND shown_at IS NULL) OR "
+        "(reservation_token IS NULL AND reserved_until IS NULL AND shown_at IS NOT NULL)",
+        name="user_media_cycle_entries_state_consistent",
+    ),
+    sa.ForeignKeyConstraint(
+        ["user_id", "subscription_type_id"],
+        [user_media_cycle_states.c.user_id, user_media_cycle_states.c.subscription_type_id],
+        ondelete="CASCADE",
+    ),
+    sa.Index(
+        "user_media_cycle_entries_reservation_token_key",
+        "reservation_token",
+        unique=True,
+        postgresql_where=sa.text("reservation_token IS NOT NULL"),
+    ),
+)
+
 subscriptions = sa.Table(
     "subscriptions",
     _metadata,
