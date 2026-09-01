@@ -64,6 +64,7 @@ class FunctionalSubscriptionType:
     s3_directory_path: str
     search_aliases: tuple[str, ...] = ()
     is_active: bool = True
+    weekdays: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7)
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +384,45 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         "migration",
         "alembic",
         "upgrade",
+        "0010",
+        env=_bot_env(dependency_ports),
+    )
+    await _prepare_pre_weekdays_rows(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
+        "0010",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_weekdays_column_absent(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
         "head",
         env=_bot_env(dependency_ports),
     )
@@ -685,6 +725,7 @@ async def read_functional_subscription_type(
                 return None
             result = dict(row)
             result["search_aliases"] = tuple(result["search_aliases"])
+            result["weekdays"] = _weekdays_from_mask(result["weekdays"])
             return result
         finally:
             await connection.close()
@@ -1205,6 +1246,19 @@ async def _prepare_legacy_schema(dependency_ports: DependencyPorts) -> None:
         await connection.close()
 
 
+async def _prepare_pre_weekdays_rows(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.execute(
+            """
+            INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
+            VALUES('/migration-null-schedule-probe', NULL, 'migration-null-schedule-probe', now(), now())
+            """
+        )
+    finally:
+        await connection.close()
+
+
 async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
@@ -1223,6 +1277,16 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         assert_that(
             await connection.fetchval("SELECT time FROM subscription_types WHERE name = '/migration-probe'"),
             equal_to(time(10, 0)),
+        )
+        assert_that(
+            await connection.fetchval("SELECT weekdays FROM subscription_types WHERE name = '/migration-probe'"),
+            equal_to(127),
+        )
+        assert_that(
+            await connection.fetchval(
+                "SELECT weekdays FROM subscription_types WHERE name = '/migration-null-schedule-probe'"
+            ),
+            equal_to(127),
         )
         assert_that(
             await connection.fetchval(
@@ -1274,16 +1338,23 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             equal_to("NO"),
         )
         await connection.execute("DELETE FROM subscription_types WHERE name = '/migration-default-probe'")
-        assert_that(
-            await connection.fetchval(
-                """
-                INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
-                VALUES('/migration-default-probe', '11:00', 'migration-default-probe', now(), now())
-                RETURNING is_active
-                """
-            ),
-            is_(False),
+        default_row = await connection.fetchrow(
+            """
+            INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
+            VALUES('/migration-default-probe', '11:00', 'migration-default-probe', now(), now())
+            RETURNING is_active, weekdays
+            """
         )
+        assert default_row is not None
+        assert_that(default_row["is_active"], is_(False))
+        assert_that(default_row["weekdays"], equal_to(127))
+        with pytest.raises(asyncpg.CheckViolationError):
+            await connection.execute(
+                """
+                INSERT INTO subscription_types(name, time, weekdays, s3_directory_path, created_at, updated_at)
+                VALUES('/migration-invalid-weekdays-probe', '11:00', 0, 'invalid-weekdays', now(), now())
+                """
+            )
         assert_that(await connection.fetchval("SELECT to_regclass('administrators')"), equal_to("administrators"))
         assert_that(
             await connection.fetchval("SELECT to_regclass('admin_broadcasts')"),
@@ -1320,6 +1391,36 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
                 """
             ),
             equal_to(b"v"),
+        )
+    finally:
+        await connection.close()
+
+
+async def _assert_weekdays_column_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert_that(
+            await connection.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'subscription_types'
+                      AND column_name = 'weekdays'
+                )
+                """
+            ),
+            is_(False),
+        )
+        assert_that(
+            await connection.fetchval(
+                "SELECT count(*) FROM subscription_types WHERE name = '/migration-null-schedule-probe'"
+            ),
+            equal_to(1),
+        )
+        await connection.execute(
+            "UPDATE subscription_types SET time = '12:00' WHERE name = '/migration-null-schedule-probe'"
         )
     finally:
         await connection.close()
@@ -1402,19 +1503,21 @@ async def _insert_subscription_types(
                 id,
                 name,
                 time,
+                weekdays,
                 s3_directory_path,
                 search_aliases,
                 is_active,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
             """,
             [
                 (
                     subscription.id,
                     subscription.name,
                     subscription.send_time,
+                    _weekdays_mask(subscription.weekdays),
                     subscription.s3_directory_path,
                     list(subscription.search_aliases),
                     subscription.is_active,
@@ -1435,6 +1538,14 @@ async def _insert_subscription_types(
         )
     finally:
         await connection.close()
+
+
+def _weekdays_mask(days: tuple[int, ...]) -> int:
+    return sum(1 << (day - 1) for day in days)
+
+
+def _weekdays_from_mask(mask: int) -> tuple[int, ...]:
+    return tuple(day for day in range(1, 8) if mask & (1 << (day - 1)))
 
 
 async def _insert_user_subscription(

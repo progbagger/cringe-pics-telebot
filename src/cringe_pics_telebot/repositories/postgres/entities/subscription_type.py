@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, time
+
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -8,6 +10,7 @@ class CreateSubscriptionType:
     time: time | None
     s3_directory_path: str
     search_aliases: tuple[str, ...]
+    weekdays: SubscriptionWeekdays = field(default_factory=SubscriptionWeekdays.daily)
 
 
 @dataclass(slots=True, eq=False)
@@ -28,6 +31,8 @@ class SubscriptionType:
     """Время создания типа подписки"""
     updated_at: datetime
     """Время обновления типа подписки"""
+    weekdays: SubscriptionWeekdays = field(default_factory=SubscriptionWeekdays.daily)
+    """ISO-дни недели, в которые исполняется расписание"""
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SubscriptionType):

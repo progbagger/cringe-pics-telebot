@@ -63,6 +63,7 @@ from .subscription_types import get_subscription_types as get_subscription_types
 from .subscription_types import set_subscription_type_activity as set_subscription_type_activity
 from .subscription_types import update_subscription_type_search_aliases as update_subscription_type_search_aliases
 from .subscription_types import update_subscription_type_time as update_subscription_type_time
+from .subscription_types import update_subscription_type_weekdays as update_subscription_type_weekdays
 from .users import create_user as create_user
 from .users import deactivate_user as deactivate_user
 from .users import get_active_users as get_active_users
