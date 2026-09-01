@@ -12,10 +12,9 @@ from cringe_pics_telebot.repositories.postgres import (
     SubscriptionType,
     get_category_media_by_subscription_types,
 )
-from cringe_pics_telebot.services.media_delivery import deliver_category_media
-from cringe_pics_telebot.services.random_image import choose_random_image
 from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
 from cringe_pics_telebot.services.subscriptions import get_scheduled_subscription_types, get_subscription_users
+from cringe_pics_telebot.services.user_media_cycles import deliver_user_category_media
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +118,10 @@ async def _send_scheduled_image_to_user(
     media: Sequence[CategoryMedia],
 ) -> int:
     try:
-        selected_media = choose_random_image(media)
-        await deliver_category_media(
-            selected_media,
+        await deliver_user_category_media(
+            user_id=user_id,
+            subscription_type_id=subscription_type.id,
+            media=media,
             send=lambda image: send_image_to_chat(bot=bot, chat_id=user_id, image=image),
         )
     except Exception:

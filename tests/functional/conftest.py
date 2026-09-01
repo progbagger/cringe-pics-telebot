@@ -998,6 +998,44 @@ async def read_functional_category_media_states(
 
 
 @pytest.fixture
+async def read_functional_user_media_cycle(
+    docker_compose: DependencyPorts,
+) -> Callable[[int, int], Awaitable[tuple[str | None, dict[str, str]] | None]]:
+    async def read(user_id: int, subscription_type_id: int) -> tuple[str | None, dict[str, str]] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            state = await connection.fetchrow(
+                """
+                SELECT last_media.source_path AS last_media_path
+                FROM user_media_cycle_states AS state
+                LEFT JOIN category_media AS last_media ON last_media.id = state.last_media_id
+                WHERE state.user_id = $1 AND state.subscription_type_id = $2
+                """,
+                user_id,
+                subscription_type_id,
+            )
+            if state is None:
+                return None
+            entries = await connection.fetch(
+                """
+                SELECT media.source_path,
+                       CASE WHEN entry.reservation_token IS NULL THEN 'shown' ELSE 'reserved' END AS entry_status
+                FROM user_media_cycle_entries AS entry
+                JOIN category_media AS media ON media.id = entry.media_id
+                WHERE entry.user_id = $1 AND entry.subscription_type_id = $2
+                ORDER BY media.source_path
+                """,
+                user_id,
+                subscription_type_id,
+            )
+            return state["last_media_path"], {row["source_path"]: row["entry_status"] for row in entries}
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 def run_subscription_broadcasts_at(
     docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
@@ -1105,6 +1143,8 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
         await connection.execute(
             """
             TRUNCATE
+                user_media_cycle_entries,
+                user_media_cycle_states,
                 category_media,
                 admin_broadcast_deliveries,
                 admin_broadcast_recipients,
@@ -1263,6 +1303,14 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             equal_to("category_media"),
         )
         assert_that(
+            await connection.fetchval("SELECT to_regclass('user_media_cycle_states')"),
+            equal_to("user_media_cycle_states"),
+        )
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('user_media_cycle_entries')"),
+            equal_to("user_media_cycle_entries"),
+        )
+        assert_that(
             await connection.fetchval(
                 """
                 SELECT attgenerated
@@ -1281,6 +1329,8 @@ async def _assert_category_media_table_absent(dependency_ports: DependencyPorts)
     connection = await _create_postgres_connection(dependency_ports)
     try:
         assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), none())
+        assert_that(await connection.fetchval("SELECT to_regclass('user_media_cycle_states')"), none())
+        assert_that(await connection.fetchval("SELECT to_regclass('user_media_cycle_entries')"), none())
         assert_that(
             await connection.fetchval(
                 """

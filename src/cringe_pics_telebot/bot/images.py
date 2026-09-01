@@ -16,9 +16,12 @@ from cringe_pics_telebot.bot.keyboards import (
 )
 from cringe_pics_telebot.bot.media import add_image_to_message
 from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
-from cringe_pics_telebot.repositories.postgres import SubscriptionType, is_administrator
-from cringe_pics_telebot.services.media_delivery import deliver_category_media
-from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia, get_random_image
+from cringe_pics_telebot.repositories.postgres import (
+    SubscriptionType,
+    get_category_media_by_subscription_types,
+    is_administrator,
+)
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import (
     SubscriptionTypeUnavailableError,
     get_subscription_types,
@@ -33,6 +36,7 @@ from cringe_pics_telebot.services.timezones import (
     parse_timezone_offset,
     set_user_timezone_offset,
 )
+from cringe_pics_telebot.services.user_media_cycles import deliver_user_category_media
 
 logger = logging.getLogger(__name__)
 
@@ -221,9 +225,11 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
     sent_message = await message.reply("<i>Выбираю картинку</i>")
 
     try:
-        media = await get_random_image(subscription_type.id)
-        await deliver_category_media(
-            media,
+        media = await get_category_media_by_subscription_types([subscription_type.id])
+        await deliver_user_category_media(
+            user_id=message.from_user.id,
+            subscription_type_id=subscription_type.id,
+            media=media,
             send=lambda image: _add_image_to_chat_message(message=sent_message, image=image),
         )
 

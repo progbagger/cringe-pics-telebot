@@ -37,6 +37,16 @@ from .entities import Subscription as Subscription
 from .entities import SubscriptionType as SubscriptionType
 from .entities import TelegramMediaType as TelegramMediaType
 from .entities import User as User
+from .media_cycles import UserMediaCycleEntries as UserMediaCycleEntries
+from .media_cycles import confirm_user_media_cycle_reservation as confirm_user_media_cycle_reservation
+from .media_cycles import create_user_media_cycle_reservation as create_user_media_cycle_reservation
+from .media_cycles import (
+    delete_expired_user_media_cycle_reservations as delete_expired_user_media_cycle_reservations,
+)
+from .media_cycles import get_user_media_cycle_entries as get_user_media_cycle_entries
+from .media_cycles import lock_user_media_cycle as lock_user_media_cycle
+from .media_cycles import release_user_media_cycle_reservation as release_user_media_cycle_reservation
+from .media_cycles import reset_user_media_cycle as reset_user_media_cycle
 from .subscription import create_subscription as create_subscription
 from .subscription import delete_subscription as delete_subscription
 from .subscription import get_subscription_users as get_subscription_users

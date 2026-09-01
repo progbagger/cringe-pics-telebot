@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime, time, timedelta, timezone
 from typing import cast
 
@@ -50,7 +51,7 @@ def test_same_local_minute(
     )
 
 
-async def test_broadcast_fetches_media_once_and_prefers_pending_for_every_recipient(
+async def test_broadcast_fetches_media_once_and_delivers_snapshot_for_every_recipient(
     monkeypatch: MonkeyPatch,
 ) -> None:
     now = datetime(2026, 8, 25, 3, 0, tzinfo=UTC)
@@ -59,7 +60,7 @@ async def test_broadcast_fetches_media_once_and_prefers_pending_for_every_recipi
     ready = _media(1, status=CategoryMediaStatus.ready)
     pending = _media(2, status=CategoryMediaStatus.pending)
     requested_category_ids: list[list[int]] = []
-    delivered: list[CategoryMedia] = []
+    deliveries: list[tuple[int, int, list[CategoryMedia]]] = []
 
     async def get_users(subscription_type_id: int) -> list[User]:
         assert_that(subscription_type_id, equal_to(subscription_type.id))
@@ -72,13 +73,19 @@ async def test_broadcast_fetches_media_once_and_prefers_pending_for_every_recipi
     async def reserve(**kwargs: object) -> bool:
         return True
 
-    async def deliver(media: CategoryMedia, **kwargs: object) -> None:
-        delivered.append(media)
+    async def deliver(
+        *,
+        user_id: int,
+        subscription_type_id: int,
+        media: Sequence[CategoryMedia],
+        **kwargs: object,
+    ) -> None:
+        deliveries.append((user_id, subscription_type_id, list(media)))
 
     monkeypatch.setattr(subscription_broadcasts, "get_subscription_users", get_users)
     monkeypatch.setattr(subscription_broadcasts, "get_category_media_by_subscription_types", get_media)
     monkeypatch.setattr(subscription_broadcasts, "_reserve_scheduled_send", reserve)
-    monkeypatch.setattr(subscription_broadcasts, "deliver_category_media", deliver)
+    monkeypatch.setattr(subscription_broadcasts, "deliver_user_category_media", deliver)
 
     sent = await subscription_broadcasts._broadcast_subscription_type(
         bot=cast(Bot, object()),
@@ -88,7 +95,15 @@ async def test_broadcast_fetches_media_once_and_prefers_pending_for_every_recipi
 
     assert_that(sent, equal_to(2))
     assert_that(requested_category_ids, equal_to([[subscription_type.id]]))
-    assert_that(delivered, equal_to([pending, pending]))
+    assert_that(
+        deliveries,
+        equal_to(
+            [
+                (701, subscription_type.id, [ready, pending]),
+                (702, subscription_type.id, [ready, pending]),
+            ]
+        ),
+    )
 
 
 async def test_broadcast_does_not_reserve_empty_category(monkeypatch: MonkeyPatch) -> None:
