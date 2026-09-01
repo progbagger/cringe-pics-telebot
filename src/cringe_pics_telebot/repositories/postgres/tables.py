@@ -117,6 +117,7 @@ subscription_types = sa.Table(
     sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=True),
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
     sa.Column("time", sa.TIME(False), nullable=True),
+    sa.Column("weekdays", sa.SMALLINT, nullable=False, server_default=sa.text("127")),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
     sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column(
@@ -127,6 +128,10 @@ subscription_types = sa.Table(
     ),
     _time_column("created_at"),
     _time_column("updated_at"),
+    sa.CheckConstraint(
+        "weekdays BETWEEN 1 AND 127",
+        name="subscription_types_weekdays_valid",
+    ),
 )
 
 category_media = sa.Table(

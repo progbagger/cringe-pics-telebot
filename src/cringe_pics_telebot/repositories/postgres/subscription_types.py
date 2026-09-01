@@ -6,6 +6,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Row
 
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
+
 from .connection import get_connection
 from .entities.subscription_type import CreateSubscriptionType, SubscriptionType
 from .tables import subscription_types
@@ -49,6 +51,7 @@ async def create_subscription_type(data: CreateSubscriptionType) -> Subscription
                 .values(
                     name=data.name,
                     time=data.time,
+                    weekdays=data.weekdays.mask,
                     s3_directory_path=data.s3_directory_path,
                     search_aliases=list(data.search_aliases),
                     is_active=False,
@@ -119,6 +122,22 @@ async def update_subscription_type_time(
     return _subscription_type_from_row(row) if row is not None else None
 
 
+async def update_subscription_type_weekdays(
+    subscription_type_id: int,
+    weekdays: SubscriptionWeekdays,
+) -> SubscriptionType | None:
+    async with get_connection() as conn:
+        row = (
+            await conn.execute(
+                update(subscription_types)
+                .where(subscription_types.c.id == subscription_type_id)
+                .values(weekdays=weekdays.mask, updated_at=func.now())
+                .returning(subscription_types)
+            )
+        ).one_or_none()
+    return _subscription_type_from_row(row) if row is not None else None
+
+
 async def update_subscription_type_search_aliases(
     subscription_type_id: int,
     search_aliases: Sequence[str],
@@ -173,6 +192,7 @@ def _subscription_type_from_row(row: Row[Any]) -> SubscriptionType:
         id=row.id,
         name=row.name,
         time=row.time,
+        weekdays=SubscriptionWeekdays.from_mask(row.weekdays),
         s3_directory_path=row.s3_directory_path,
         search_aliases=tuple(row.search_aliases),
         is_active=row.is_active,

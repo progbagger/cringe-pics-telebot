@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -73,6 +73,30 @@ def create_admin_category_schedule_mode_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def create_admin_category_weekdays_keyboard(selected_weekdays: Collection[int]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for day, abbreviation in enumerate(("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"), start=1):
+        selected = day in selected_weekdays
+        builder.button(
+            text=f"✅ {abbreviation}" if selected else abbreviation,
+            callback_data=_category_callback(AdminCategoryAction.toggle_weekday, weekday=day),
+        )
+    builder.button(
+        text="Готово",
+        callback_data=_category_callback(AdminCategoryAction.confirm_weekdays),
+    )
+    builder.button(
+        text="Каждый день",
+        callback_data=_category_callback(AdminCategoryAction.daily_weekdays),
+    )
+    builder.button(
+        text="Отмена",
+        callback_data=_category_callback(AdminCategoryAction.cancel_form),
+    )
+    builder.adjust(4, 3, 1, 1, 1)
+    return builder.as_markup()
+
+
 def create_admin_category_keyboard(
     category_id: int,
     *,
@@ -93,6 +117,10 @@ def create_admin_category_keyboard(
         callback_data=_category_callback(AdminCategoryAction.edit_time, category_id),
     )
     if has_schedule:
+        builder.button(
+            text="Изменить дни отправки",
+            callback_data=_category_callback(AdminCategoryAction.edit_weekdays, category_id),
+        )
         builder.button(
             text="Отключить расписание",
             callback_data=_category_callback(AdminCategoryAction.disable_schedule, category_id),
@@ -228,8 +256,8 @@ def _broadcast_callback(action: AdminBroadcastAction, broadcast_id: int = 0) -> 
     return AdminBroadcastCallbackData(action=action, broadcast_id=broadcast_id).pack()
 
 
-def _category_callback(action: AdminCategoryAction, category_id: int = 0) -> str:
-    return AdminCategoryCallbackData(action=action, category_id=category_id).pack()
+def _category_callback(action: AdminCategoryAction, category_id: int = 0, weekday: int = 0) -> str:
+    return AdminCategoryCallbackData(action=action, category_id=category_id, weekday=weekday).pack()
 
 
 def _admin_panel_callback(action: AdminPanelAction) -> str:

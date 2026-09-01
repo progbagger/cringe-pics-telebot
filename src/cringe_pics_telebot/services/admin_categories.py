@@ -1,6 +1,8 @@
 import re
+from collections.abc import Iterable
 from datetime import datetime, time
 
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories.postgres import (
     CreateSubscriptionType,
     SubscriptionType,
@@ -9,6 +11,7 @@ from cringe_pics_telebot.repositories.postgres import (
     set_subscription_type_activity,
     transaction,
     update_subscription_type_time,
+    update_subscription_type_weekdays,
 )
 
 _LOCAL_TIME_PATTERN = re.compile(r"\d{2}:\d{2}")
@@ -69,6 +72,15 @@ async def set_admin_category_time(
 ) -> SubscriptionType | None:
     async with transaction():
         return await update_subscription_type_time(category_id, send_time)
+
+
+async def set_admin_category_weekdays(
+    category_id: int,
+    weekdays: Iterable[int],
+) -> SubscriptionType | None:
+    normalized_weekdays = SubscriptionWeekdays(*weekdays)
+    async with transaction():
+        return await update_subscription_type_weekdays(category_id, normalized_weekdays)
 
 
 async def set_admin_category_activity(

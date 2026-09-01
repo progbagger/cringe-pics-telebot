@@ -1,6 +1,7 @@
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 
 from .connection import get_connection
@@ -44,6 +45,7 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
                     st.c.id,
                     st.c.name,
                     st.c.time,
+                    st.c.weekdays,
                     us.c.id.is_not(None).label("subscribed"),
                 )
                 .select_from(st.outerjoin(us, us.c.subscription_type_id == st.c.id))
@@ -56,6 +58,7 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
                 id=row.id,
                 name=row.name,
                 send_time=row.time,
+                weekdays=SubscriptionWeekdays.from_mask(row.weekdays),
                 subscribed=row.subscribed,
             )
             for row in rows

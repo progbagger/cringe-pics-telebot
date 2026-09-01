@@ -13,6 +13,7 @@ from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import (
     SubscriptionType,
 )
+from cringe_pics_telebot.services.subscription_schedules import format_subscription_weekdays
 
 
 def create_inline_subscriptions_keyboard(
@@ -22,8 +23,9 @@ def create_inline_subscriptions_keyboard(
 
     for subscription in sorted(subscriptions, key=lambda s: s.send_time):
         emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
+        schedule = format_subscription_weekdays(subscription.weekdays)
         inline_keyboard_builder.button(
-            text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')}",
+            text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')} · {schedule}",
             callback_data=SubscriptionCallbackData(
                 category_id=subscription.id,
                 subscribe=not subscription.subscribed,

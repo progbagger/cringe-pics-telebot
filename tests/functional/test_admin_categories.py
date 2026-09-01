@@ -63,7 +63,14 @@ async def test_admin_creates_inactive_category_with_all_fields(
         equal_to(["По расписанию", "Без расписания", "Отмена"]),
     )
     await _choose_category_schedule_mode(fake_telegram_server, scheduled=True)
-    await _send_message_and_wait(fake_telegram_server, " 15:30 ", "Новая категория — алиасы")
+    weekdays = await _send_message_and_wait(fake_telegram_server, " 15:30 ", "Новая категория — дни отправки")
+    assert_that(
+        _inline_keyboard_button_texts(weekdays["payload"]),
+        equal_to(["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс", "Готово", "Каждый день", "Отмена"]),
+    )
+    for weekday in (1, 3, 5):
+        await _toggle_category_weekday(fake_telegram_server, weekday)
+    await _finish_category_weekdays(fake_telegram_server, daily=False)
     created = await _send_message_and_wait(
         fake_telegram_server,
         "  после обеда  \n/ДЕНЬ\nдень\n\nвечерком",
@@ -76,12 +83,14 @@ async def test_admin_creates_inactive_category_with_all_fields(
     )
     assert_that(created["payload"]["text"], contains_string("<code>afternoon/images</code>"))
     assert_that(created["payload"]["text"], contains_string("<code>15:30</code>"))
+    assert_that(created["payload"]["text"], contains_string("Дни отправки: Пн, Ср, Пт"))
     assert_that(
         _inline_keyboard_button_texts(created["payload"]),
         equal_to(
             [
                 "Активировать",
                 "Изменить время отправки",
+                "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
@@ -100,6 +109,7 @@ async def test_admin_creates_inactive_category_with_all_fields(
             s3_directory_path="afternoon/images",
             search_aliases=("после обеда", "/ДЕНЬ", "вечерком"),
             is_active=False,
+            weekdays=(1, 3, 5),
         ),
     )
 
@@ -133,6 +143,7 @@ async def test_admin_creates_and_activates_category_without_schedule(
     )
 
     assert_that(created["payload"]["text"], contains_string("Локальное время отправки: без расписания"))
+    assert_that(created["payload"]["text"], contains_string("Дни отправки: каждый день"))
     assert_that(
         _inline_keyboard_button_texts(created["payload"]),
         equal_to(["Активировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
@@ -146,6 +157,7 @@ async def test_admin_creates_and_activates_category_without_schedule(
             s3_directory_path="instant",
             search_aliases=("моментально",),
             is_active=False,
+            weekdays=(1, 2, 3, 4, 5, 6, 7),
         ),
     )
 
@@ -193,14 +205,29 @@ async def test_category_creation_validates_each_step_without_partial_write(
     await _send_message_and_wait(fake_telegram_server, "24:00", "Не удалось распознать локальное время")
     assert await read_functional_subscription_type("/validated") is None
 
-    await _send_message_and_wait(fake_telegram_server, "09:00", "Новая категория — алиасы")
+    await _send_message_and_wait(fake_telegram_server, "09:00", "Новая категория — дни отправки")
+    await fake_telegram_server.push_callback_query(data=_category_callback(AdminCategoryAction.confirm_weekdays))
+    empty_weekdays = await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Выберите хотя бы один день.",
+    )
+    assert empty_weekdays["payload"]["show_alert"] is True
+    assert await read_functional_subscription_type("/validated") is None
+    await _finish_category_weekdays(fake_telegram_server, daily=True)
     await _send_message_and_wait(fake_telegram_server, " \n / \n", "Не найдено ни одного непустого алиаса")
     assert await read_functional_subscription_type("/validated") is None
 
     await _send_message_and_wait(fake_telegram_server, "проверка", "Категория создана неактивной")
     category = await read_functional_subscription_type("/validated")
     assert category is not None
-    assert_that(category, has_entries(is_active=False, search_aliases=("проверка",)))
+    assert_that(
+        category,
+        has_entries(
+            is_active=False,
+            search_aliases=("проверка",),
+            weekdays=(1, 2, 3, 4, 5, 6, 7),
+        ),
+    )
 
 
 @pytest.mark.parametrize(
@@ -210,6 +237,7 @@ async def test_category_creation_validates_each_step_without_partial_write(
         ("/cancelled",),
         ("/cancelled", "cancelled"),
         ("/cancelled", "cancelled", "10:00"),
+        ("/cancelled", "cancelled", "10:00", "daily"),
     ],
 )
 async def test_category_creation_cancel_clears_every_form_state(
@@ -228,7 +256,9 @@ async def test_category_creation_cancel_clears_every_form_state(
         await _send_message_and_wait(fake_telegram_server, entered_values[1], "режим отправки")
     if len(entered_values) >= 3:
         await _choose_category_schedule_mode(fake_telegram_server, scheduled=True)
-        await _send_message_and_wait(fake_telegram_server, entered_values[2], "Новая категория — алиасы")
+        await _send_message_and_wait(fake_telegram_server, entered_values[2], "Новая категория — дни отправки")
+    if len(entered_values) >= 4:
+        await _finish_category_weekdays(fake_telegram_server, daily=True)
 
     await fake_telegram_server.push_callback_query(
         data=_category_callback(AdminCategoryAction.cancel_form),
@@ -265,7 +295,13 @@ async def test_concurrent_category_creation_handles_final_name_conflict(
         await _send_message_and_wait(fake_telegram_server, "/race", "путь к каталогу", user_id=user_id)
         await _send_message_and_wait(fake_telegram_server, "race", "режим отправки", user_id=user_id)
         await _choose_category_schedule_mode(fake_telegram_server, scheduled=True, user_id=user_id)
-        await _send_message_and_wait(fake_telegram_server, "12:00", "Новая категория — алиасы", user_id=user_id)
+        await _send_message_and_wait(
+            fake_telegram_server,
+            "12:00",
+            "Новая категория — дни отправки",
+            user_id=user_id,
+        )
+        await _finish_category_weekdays(fake_telegram_server, daily=True, user_id=user_id)
 
     await _send_message_and_wait(fake_telegram_server, "гонка", "Категория создана неактивной", user_id=42)
     conflict = await _send_message_and_wait(
@@ -322,6 +358,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
             [
                 "Деактивировать",
                 "Изменить время отправки",
+                "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
@@ -348,6 +385,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
             [
                 "Активировать",
                 "Изменить время отправки",
+                "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
@@ -392,6 +430,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
             [
                 "Деактивировать",
                 "Изменить время отправки",
+                "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
@@ -413,6 +452,44 @@ async def test_admin_updates_disables_and_restores_category_schedule(
 ) -> None:
     await set_functional_administrator(user_id=42)
     await create_user_subscription(user_id=700, subscription_type_id=2)
+    before_schedule = await _required_category(read_functional_subscription_type, "/day")
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_weekdays, category_id=2),
+    )
+    edit_weekdays = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Дни отправки категории /day" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(edit_weekdays["payload"]),
+        equal_to(
+            [
+                "✅ Пн",
+                "✅ Вт",
+                "✅ Ср",
+                "✅ Чт",
+                "✅ Пт",
+                "✅ Сб",
+                "✅ Вс",
+                "Готово",
+                "Каждый день",
+                "Отмена",
+            ]
+        ),
+    )
+    for weekday in (2, 4, 6, 7):
+        await _toggle_category_weekday(fake_telegram_server, weekday)
+    await _finish_category_weekdays(
+        fake_telegram_server,
+        daily=False,
+        expected_text="Дни отправки: Пн, Ср, Пт",
+    )
+    selected_schedule = await _required_category(read_functional_subscription_type, "/day")
+    assert_that(
+        _category_business_data(selected_schedule),
+        equal_to(_category_business_data(before_schedule) | {"weekdays": (1, 3, 5)}),
+    )
 
     await fake_telegram_server.push_callback_query(
         data=_category_callback(AdminCategoryAction.edit_time, category_id=2),
@@ -452,6 +529,7 @@ async def test_admin_updates_disables_and_restores_category_schedule(
     without_schedule = await read_functional_subscription_type("/day")
     assert without_schedule is not None
     assert without_schedule["time"] is None
+    assert_that(without_schedule["weekdays"], equal_to((1, 3, 5)))
     assert_that(await count_user_subscriptions(700), equal_to(1))
 
     await fake_telegram_server.reset()
@@ -487,8 +565,47 @@ async def test_admin_updates_disables_and_restores_category_schedule(
             request["payload"].get("chat_id") == 700 and "список" in request["payload"].get("text", "")
         ),
     )
-    assert_that(_inline_keyboard_button_texts(restored_subscriptions["payload"]), has_item("✅ /day – 16:00"))
+    assert_that(
+        _inline_keyboard_button_texts(restored_subscriptions["payload"]),
+        has_item("✅ /day – 16:00 · Пн, Ср, Пт"),
+    )
     assert_that(await count_user_subscriptions(700), equal_to(1))
+
+
+async def test_admin_cancels_weekday_edit_without_changing_category(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    before = await _required_category(read_functional_subscription_type, "/day")
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_weekdays, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Дни отправки категории /day" in request["payload"].get("text", ""),
+    )
+    await _toggle_category_weekday(fake_telegram_server, 1)
+    assert_that(
+        _category_business_data(await _required_category(read_functional_subscription_type, "/day")),
+        equal_to(_category_business_data(before)),
+    )
+
+    await fake_telegram_server.push_callback_query(data=_category_callback(AdminCategoryAction.cancel_form))
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            "Создание или редактирование категории отменено" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(
+        _category_business_data(await _required_category(read_functional_subscription_type, "/day")),
+        equal_to(_category_business_data(before)),
+    )
+    assert_that(len(await fake_telegram_server.requests(method="answerCallbackQuery")), equal_to(3))
 
 
 async def _open_category_creation(
@@ -548,8 +665,43 @@ async def _send_message_and_wait(
     )
 
 
-def _category_callback(action: AdminCategoryAction, category_id: int = 0) -> str:
-    return AdminCategoryCallbackData(action=action, category_id=category_id).pack()
+async def _toggle_category_weekday(
+    fake_telegram_server: FakeTelegramServer,
+    weekday: int,
+    *,
+    user_id: int = 42,
+) -> dict[str, Any]:
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.toggle_weekday, weekday=weekday),
+        user_id=user_id,
+    )
+    return await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: request["payload"].get("chat_id") == user_id,
+    )
+
+
+async def _finish_category_weekdays(
+    fake_telegram_server: FakeTelegramServer,
+    *,
+    daily: bool,
+    user_id: int = 42,
+    expected_text: str = "Новая категория — алиасы",
+) -> dict[str, Any]:
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.daily_weekdays if daily else AdminCategoryAction.confirm_weekdays),
+        user_id=user_id,
+    )
+    return await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == user_id and expected_text in request["payload"].get("text", "")
+        ),
+    )
+
+
+def _category_callback(action: AdminCategoryAction, category_id: int = 0, weekday: int = 0) -> str:
+    return AdminCategoryCallbackData(action=action, category_id=category_id, weekday=weekday).pack()
 
 
 def _inline_keyboard_button_texts(payload: dict[str, Any]) -> list[str]:
@@ -563,6 +715,7 @@ def _category_business_data(category: dict[str, Any]) -> dict[str, Any]:
         "s3_directory_path": category["s3_directory_path"],
         "search_aliases": category["search_aliases"],
         "is_active": category["is_active"],
+        "weekdays": category["weekdays"],
     }
 
 

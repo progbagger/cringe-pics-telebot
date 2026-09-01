@@ -3,6 +3,8 @@ from datetime import time
 import pytest
 from hamcrest import assert_that, equal_to
 
+from cringe_pics_telebot.bot.admin_category_callback_data import AdminCategoryAction, AdminCategoryCallbackData
+from cringe_pics_telebot.bot.admin_keyboards import create_admin_category_weekdays_keyboard
 from cringe_pics_telebot.services.admin_categories import (
     InvalidAdminCategoryNameError,
     InvalidAdminCategoryPathError,
@@ -47,3 +49,18 @@ def test_parse_admin_category_time_returns_naive_time() -> None:
 def test_parse_admin_category_time_rejects_non_hh_mm_value(value: str) -> None:
     with pytest.raises(InvalidAdminCategoryTimeError):
         parse_admin_category_time(value)
+
+
+def test_admin_category_weekdays_keyboard_marks_selection_and_keeps_callbacks_short() -> None:
+    markup = create_admin_category_weekdays_keyboard((1, 3, 5))
+    buttons = [button for row in markup.inline_keyboard for button in row]
+
+    assert_that(
+        [button.text for button in buttons],
+        equal_to(["✅ Пн", "Вт", "✅ Ср", "Чт", "✅ Пт", "Сб", "Вс", "Готово", "Каждый день", "Отмена"]),
+    )
+    callback_values = [button.callback_data for button in buttons]
+    assert all(value is not None and len(value.encode()) <= 64 for value in callback_values)
+    monday = AdminCategoryCallbackData.unpack(callback_values[0] or "")
+    assert monday.action is AdminCategoryAction.toggle_weekday
+    assert monday.weekday == 1

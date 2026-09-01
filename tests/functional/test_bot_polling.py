@@ -94,11 +94,11 @@ async def test_bot_shows_subscription_list(
         _inline_keyboard_button_texts(payload),
         equal_to(
             [
-                "❌ /random – 00:00",
-                "❌ /morning – 08:00",
-                "❌ /day – 13:00",
-                "❌ /evening – 19:00",
-                "❌ /night – 23:00",
+                "❌ /random – 00:00 · ежедневно",
+                "❌ /morning – 08:00 · ежедневно",
+                "❌ /day – 13:00 · ежедневно",
+                "❌ /evening – 19:00 · ежедневно",
+                "❌ /night – 23:00 · ежедневно",
             ]
         ),
     )
@@ -137,7 +137,7 @@ async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callba
     )
     assert_that(
         _inline_keyboard_button_texts(subscriptions_request["payload"]),
-        equal_to(["❌ /active – 08:00"]),
+        equal_to(["❌ /active – 08:00 · ежедневно"]),
     )
 
     await fake_telegram_server.reset()
@@ -181,7 +181,14 @@ async def test_immediate_only_category_is_available_for_ordinary_and_inline_deli
 ) -> None:
     await seed_functional_subscription_types(
         (
-            FunctionalSubscriptionType(1, "/scheduled", time(8), "scheduled", ("плановая",)),
+            FunctionalSubscriptionType(
+                1,
+                "/scheduled",
+                time(8),
+                "scheduled",
+                ("плановая",),
+                weekdays=(1, 3, 5),
+            ),
             FunctionalSubscriptionType(2, "/instant", None, "instant", ("сейчас",)),
         )
     )
@@ -209,7 +216,7 @@ async def test_immediate_only_category_is_available_for_ordinary_and_inline_deli
     )
     assert_that(
         _inline_keyboard_button_texts(subscriptions_request["payload"]),
-        equal_to(["❌ /scheduled – 08:00"]),
+        equal_to(["❌ /scheduled – 08:00 · Пн, Ср, Пт"]),
     )
 
     await fake_telegram_server.reset()
@@ -329,7 +336,10 @@ async def test_bot_subscribes_from_callback(
             )
         ),
     )
-    assert_that(_inline_keyboard_button_texts(subscribe_markup["payload"]), has_item("✅ /morning – 08:00"))
+    assert_that(
+        _inline_keyboard_button_texts(subscribe_markup["payload"]),
+        has_item("✅ /morning – 08:00 · ежедневно"),
+    )
 
 
 async def test_bot_unsubscribes_from_callback(
@@ -357,7 +367,10 @@ async def test_bot_unsubscribes_from_callback(
             )
         ),
     )
-    assert_that(_inline_keyboard_button_texts(unsubscribe_markup["payload"]), has_item("❌ /morning – 08:00"))
+    assert_that(
+        _inline_keyboard_button_texts(unsubscribe_markup["payload"]),
+        has_item("❌ /morning – 08:00 · ежедневно"),
+    )
 
 
 @pytest.mark.parametrize("category_name", ["/morning", "/day", "/evening", "/night", "/random"])
