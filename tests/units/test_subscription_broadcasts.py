@@ -7,6 +7,7 @@ from aiogram import Bot
 from hamcrest import assert_that, equal_to, is_
 from pytest import MonkeyPatch
 
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
     CategoryMediaStatus,
@@ -15,35 +16,41 @@ from cringe_pics_telebot.repositories.postgres import (
     User,
 )
 from cringe_pics_telebot.services import subscription_broadcasts
-from cringe_pics_telebot.services.subscription_broadcasts import _same_local_minute
+from cringe_pics_telebot.services.subscription_broadcasts import _is_subscription_due
 
 
 @pytest.mark.parametrize(
-    ("scheduled_time", "current_time", "timezone_offset_minutes", "expected"),
+    ("scheduled_time", "weekdays", "current_time", "timezone_offset_minutes", "expected"),
     [
-        (time(10, 0), datetime(2026, 8, 16, 3, 0, tzinfo=UTC), 7 * 60, True),
-        (time(10, 0), datetime(2026, 8, 16, 3, 0, tzinfo=UTC), 4 * 60, False),
-        (time(10, 0), datetime(2026, 8, 16, 6, 0, tzinfo=UTC), 4 * 60, True),
-        (time(23, 30), datetime(2026, 8, 17, 4, 30, tzinfo=UTC), -5 * 60, True),
-        (time(1, 15), datetime(2026, 8, 16, 11, 15, tzinfo=UTC), 14 * 60, True),
+        (time(10, 0), SubscriptionWeekdays.daily(), datetime(2026, 8, 16, 3, 0, tzinfo=UTC), 7 * 60, True),
+        (time(10, 0), SubscriptionWeekdays.daily(), datetime(2026, 8, 16, 3, 0, tzinfo=UTC), 4 * 60, False),
+        (time(10, 0), SubscriptionWeekdays.daily(), datetime(2026, 8, 16, 6, 0, tzinfo=UTC), 4 * 60, True),
+        (time(23, 30), SubscriptionWeekdays(7), datetime(2026, 8, 17, 4, 30, tzinfo=UTC), -5 * 60, True),
+        (time(1, 15), SubscriptionWeekdays(1), datetime(2026, 8, 16, 11, 15, tzinfo=UTC), 14 * 60, True),
+        (time(0), SubscriptionWeekdays(1), datetime(2026, 8, 16, 12, tzinfo=UTC), 12 * 60, True),
+        (time(0), SubscriptionWeekdays(1), datetime(2026, 8, 16, 12, tzinfo=UTC), -12 * 60, False),
+        (time(0), SubscriptionWeekdays(7), datetime(2026, 8, 16, 12, tzinfo=UTC), -12 * 60, True),
         (
             time(10, 0, tzinfo=timezone(timedelta(hours=9))),
+            SubscriptionWeekdays.daily(),
             datetime(2026, 8, 16, 3, 0, tzinfo=UTC),
             7 * 60,
             True,
         ),
-        (time(10, 0), datetime(2026, 8, 16, 3, 1, tzinfo=UTC), 7 * 60, False),
+        (time(10, 0), SubscriptionWeekdays.daily(), datetime(2026, 8, 16, 3, 1, tzinfo=UTC), 7 * 60, False),
     ],
 )
-def test_same_local_minute(
+def test_subscription_due_matches_local_minute_and_weekday(
     scheduled_time: time,
+    weekdays: SubscriptionWeekdays,
     current_time: datetime,
     timezone_offset_minutes: int,
     expected: bool,
 ) -> None:
     assert_that(
-        _same_local_minute(
+        _is_subscription_due(
             scheduled_time,
+            weekdays,
             current_time,
             timezone_offset_minutes=timezone_offset_minutes,
         ),

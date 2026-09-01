@@ -487,7 +487,10 @@ async def test_admin_updates_disables_and_restores_category_schedule(
             request["payload"].get("chat_id") == 700 and "список" in request["payload"].get("text", "")
         ),
     )
-    assert_that(_inline_keyboard_button_texts(restored_subscriptions["payload"]), has_item("✅ /day – 16:00"))
+    assert_that(
+        _inline_keyboard_button_texts(restored_subscriptions["payload"]),
+        has_item("✅ /day – 16:00 · ежедневно"),
+    )
     assert_that(await count_user_subscriptions(700), equal_to(1))
 
 

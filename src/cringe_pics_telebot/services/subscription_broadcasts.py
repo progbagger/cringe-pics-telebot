@@ -6,6 +6,7 @@ from datetime import UTC, datetime, time, timedelta, timezone
 from aiogram import Bot
 
 from cringe_pics_telebot.bot.media import send_image_to_chat
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -67,8 +68,9 @@ async def _broadcast_subscription_type(*, bot: Bot, subscription_type: Subscript
     users = [
         user
         for user in await get_subscription_users(subscription_type.id)
-        if _same_local_minute(
+        if _is_subscription_due(
             scheduled_time,
+            subscription_type.weekdays,
             current_time,
             timezone_offset_minutes=user.timezone_offset_minutes,
         )
@@ -149,14 +151,19 @@ def _dedupe_key(*, subscription_type_id: int, user_id: int, current_time: dateti
     return f"subscription-broadcast:{subscription_type_id}:{user_id}:{minute}"
 
 
-def _same_local_minute(
+def _is_subscription_due(
     scheduled_time: time,
+    weekdays: SubscriptionWeekdays,
     current_time: datetime,
     *,
     timezone_offset_minutes: int,
 ) -> bool:
-    local_time = aware_datetime(current_time).astimezone(timezone(timedelta(minutes=timezone_offset_minutes)))
-    return scheduled_time.hour == local_time.hour and scheduled_time.minute == local_time.minute
+    local_datetime = aware_datetime(current_time).astimezone(timezone(timedelta(minutes=timezone_offset_minutes)))
+    return (
+        scheduled_time.hour == local_datetime.hour
+        and scheduled_time.minute == local_datetime.minute
+        and local_datetime.isoweekday() in weekdays
+    )
 
 
 def _now() -> datetime:

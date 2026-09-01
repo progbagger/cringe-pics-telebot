@@ -67,6 +67,36 @@ async def test_subscription_broadcasts_use_each_users_local_time_without_duplica
     assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
+async def test_subscription_broadcasts_use_each_users_local_weekday_across_sunday_to_monday(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await seed_functional_subscription_types(
+        (FunctionalSubscriptionType(1, "/monday", time(0), "monday", weekdays=(1,)),)
+    )
+    await create_user_subscription(
+        user_id=700,
+        subscription_type_id=1,
+        timezone_offset_minutes=12 * 60,
+    )
+    await create_user_subscription(
+        user_id=400,
+        subscription_type_id=1,
+        timezone_offset_minutes=-12 * 60,
+    )
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    sunday_utc = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    assert_that(await run_subscription_broadcasts_at(sunday_utc), equal_to(1))
+    assert_that(await run_subscription_broadcasts_at(sunday_utc.replace(second=45)), equal_to(0))
+    assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
+
+
 async def test_inactive_subscription_broadcast_resumes_after_reactivation_without_deleting_subscription(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,

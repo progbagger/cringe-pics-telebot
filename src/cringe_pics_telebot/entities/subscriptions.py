@@ -2,6 +2,8 @@ from datetime import time
 
 from attr import dataclass
 
+from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
+
 
 @dataclass
 class SubscriptionInfo:
@@ -11,6 +13,8 @@ class SubscriptionInfo:
     """Название подписки"""
     send_time: time
     """Время отправки подписки"""
+    weekdays: SubscriptionWeekdays
+    """ISO-дни недели отправки подписки"""
     subscribed: bool
     """Активна ли подписка"""
 
