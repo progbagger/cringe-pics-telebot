@@ -2,13 +2,18 @@ from collections.abc import Iterable
 from datetime import time
 
 from aiogram.types import (
+    InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from cringe_pics_telebot.bot.emojis import Emoji
-from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
+from cringe_pics_telebot.bot.inline_pagination import paginate_inline_keyboard
+from cringe_pics_telebot.bot.subscription_callback_data import (
+    SubscriptionActionCallbackData,
+    SubscriptionPageCallbackData,
+)
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import (
     SubscriptionType,
@@ -18,21 +23,43 @@ from cringe_pics_telebot.services.subscription_schedules import format_subscript
 
 def create_inline_subscriptions_keyboard(
     subscriptions: Iterable[SubscriptionInfo],
+    *,
+    page: int = 0,
 ) -> InlineKeyboardMarkup:
     inline_keyboard_builder = InlineKeyboardBuilder()
+    sorted_subscriptions = sorted(subscriptions, key=lambda subscription: subscription.send_time)
+    current_page = paginate_inline_keyboard(sorted_subscriptions, page)
 
-    for subscription in sorted(subscriptions, key=lambda s: s.send_time):
+    for subscription in current_page.items:
         emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
         schedule = format_subscription_weekdays(subscription.weekdays)
         inline_keyboard_builder.button(
             text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')} · {schedule}",
-            callback_data=SubscriptionCallbackData(
+            callback_data=SubscriptionActionCallbackData(
                 category_id=subscription.id,
                 subscribe=not subscription.subscribed,
+                page=current_page.number,
             ),
         )
 
     inline_keyboard_builder.adjust(1, repeat=True)
+    navigation = []
+    if current_page.previous_number is not None:
+        navigation.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=SubscriptionPageCallbackData(page=current_page.previous_number).pack(),
+            )
+        )
+    if current_page.next_number is not None:
+        navigation.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=SubscriptionPageCallbackData(page=current_page.next_number).pack(),
+            )
+        )
+    if navigation:
+        inline_keyboard_builder.row(*navigation)
     return inline_keyboard_builder.as_markup()
 
 

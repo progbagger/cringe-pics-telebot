@@ -15,7 +15,11 @@ from cringe_pics_telebot.bot.keyboards import (
     create_reply_keyboard,
 )
 from cringe_pics_telebot.bot.media import add_image_to_message
-from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
+from cringe_pics_telebot.bot.subscription_callback_data import (
+    SubscriptionActionCallbackData,
+    SubscriptionCallbackData,
+    SubscriptionPageCallbackData,
+)
 from cringe_pics_telebot.repositories.postgres import (
     SubscriptionType,
     get_category_media_by_subscription_types,
@@ -142,43 +146,79 @@ async def show_subscriptions(message: Message) -> None:
     )
 
 
+@router.callback_query(SubscriptionPageCallbackData.filter())
+async def paginate_subscriptions(callback: CallbackQuery) -> None:
+    if callback.data is None:
+        logger.error("Received subscription page callback without data: %d", callback.id)
+        return
+
+    try:
+        page = SubscriptionPageCallbackData.unpack(callback.data).page
+        if callback.message is None or isinstance(callback.message, InaccessibleMessage):
+            logger.error("Subscription list message is not accessible for callback %d", callback.id)
+            await callback.answer("Список подписок недоступен.", show_alert=True)
+            return
+
+        subscriptions = await get_user_subscriptions(callback.from_user.id)
+        await callback.message.edit_reply_markup(
+            reply_markup=create_inline_subscriptions_keyboard(subscriptions, page=page)
+        )
+        await callback.answer()
+    except Exception:
+        logger.exception("Failed to change subscription page for user %d", callback.from_user.id)
+        if not await callback.answer("Что-то пошло не так...", show_alert=True):
+            logger.error("Failed to show alert to user %d", callback.from_user.id)
+
+
+@router.callback_query(SubscriptionActionCallbackData.filter())
 @router.callback_query(SubscriptionCallbackData.filter())
-async def process_subscribtion(callback: CallbackQuery) -> None:
+async def process_subscription(callback: CallbackQuery) -> None:
     if callback.data is None:
         logger.error("Received callback query without data: %d", callback.id)
         return
 
     subscription_category_id: int | None = None
     try:
-        subscription_params = SubscriptionCallbackData.unpack(callback.data)
-        subscription_category_id = subscription_params.category_id
-        if subscription_params.subscribe:
+        if callback.data.startswith("subscription_action:"):
+            action_params = SubscriptionActionCallbackData.unpack(callback.data)
+            page = action_params.page
+        else:
+            legacy_params = SubscriptionCallbackData.unpack(callback.data)
+            action_params = SubscriptionActionCallbackData(
+                category_id=legacy_params.category_id,
+                subscribe=legacy_params.subscribe,
+                page=0,
+            )
+            page = 0
+        subscription_category_id = action_params.category_id
+        if action_params.subscribe:
             try:
-                await subscribe(user_id=callback.from_user.id, subscription_type_id=subscription_params.category_id)
+                await subscribe(user_id=callback.from_user.id, subscription_type_id=action_params.category_id)
             except SubscriptionTypeUnavailableError:
                 logger.info(
                     "User %d tried to subscribe to unavailable category %d",
                     callback.from_user.id,
-                    subscription_params.category_id,
+                    action_params.category_id,
                 )
+                await _refresh_subscription_keyboard(callback, page=page)
                 await callback.answer("Категория больше недоступна.", show_alert=True)
                 return
 
             logger.info(
                 "User %d subscribed to category %d",
                 callback.from_user.id,
-                subscription_params.category_id,
+                action_params.category_id,
             )
             await callback.answer("Подписка оформлена!")
         else:
             await unsubscribe(
                 user_id=callback.from_user.id,
-                subscription_type_id=subscription_params.category_id,
+                subscription_type_id=action_params.category_id,
             )
             logger.info(
                 "User %d unsubscribed from category %d",
                 callback.from_user.id,
-                subscription_params.category_id,
+                action_params.category_id,
             )
             await callback.answer("Подписка удалена!")
 
@@ -186,10 +226,7 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
             callback.message,
             InaccessibleMessage,
         ):
-            updated_user_subscriptions = await get_user_subscriptions(callback.from_user.id)
-            await callback.message.edit_reply_markup(
-                reply_markup=create_inline_subscriptions_keyboard(updated_user_subscriptions)
-            )
+            await _refresh_subscription_keyboard(callback, page=page)
         else:
             logger.error(
                 "Message is not accessible for user %d in callback %d",
@@ -205,6 +242,15 @@ async def process_subscribtion(callback: CallbackQuery) -> None:
 
         if not await callback.answer("Что-то пошло не так...", show_alert=True):
             logger.error("Failed to show alert to user %d", callback.from_user.id)
+
+
+async def _refresh_subscription_keyboard(callback: CallbackQuery, *, page: int) -> None:
+    if callback.message is None or isinstance(callback.message, InaccessibleMessage):
+        return
+    subscriptions = await get_user_subscriptions(callback.from_user.id)
+    await callback.message.edit_reply_markup(
+        reply_markup=create_inline_subscriptions_keyboard(subscriptions, page=page)
+    )
 
 
 async def _subscription_type_filter(message: Message) -> dict[str, SubscriptionType] | bool:

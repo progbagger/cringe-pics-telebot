@@ -20,7 +20,11 @@ from hamcrest import (
     starts_with,
 )
 
-from cringe_pics_telebot.bot.subscription_callback_data import SubscriptionCallbackData
+from cringe_pics_telebot.bot.subscription_callback_data import (
+    SubscriptionActionCallbackData,
+    SubscriptionCallbackData,
+    SubscriptionPageCallbackData,
+)
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
     FakeStatsDServer,
@@ -161,14 +165,19 @@ async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callba
     assert_that(inline_answer["payload"]["results"], empty())
 
     await fake_telegram_server.reset()
-    await fake_telegram_server.push_callback_query(data=_subscription_callback(category_id=2, subscribe=True))
+    await fake_telegram_server.push_callback_query(data=SubscriptionCallbackData(category_id=2, subscribe=True).pack())
     callback_answer = await fake_telegram_server.wait_for_request(
         "answerCallbackQuery",
         predicate=lambda request: request["payload"].get("text") == "Категория больше недоступна.",
     )
     assert_that(callback_answer["payload"]["show_alert"], is_(True))
     assert_that(await count_user_subscriptions(42), equal_to(0))
-    assert_that(await fake_telegram_server.requests(method="editMessageReplyMarkup"), empty())
+    refreshed_lists = await fake_telegram_server.requests(method="editMessageReplyMarkup")
+    assert_that(refreshed_lists, has_length(1))
+    assert_that(
+        _inline_keyboard_button_texts(refreshed_lists[0]["payload"]),
+        equal_to(["❌ /active – 08:00 · ежедневно"]),
+    )
 
 
 async def test_immediate_only_category_is_available_for_ordinary_and_inline_delivery(
@@ -257,7 +266,12 @@ async def test_immediate_only_category_is_available_for_ordinary_and_inline_deli
     )
     assert_that(callback_answer["payload"]["show_alert"], is_(True))
     assert_that(await count_user_subscriptions(42), equal_to(0))
-    assert_that(await fake_telegram_server.requests(method="editMessageReplyMarkup"), empty())
+    refreshed_lists = await fake_telegram_server.requests(method="editMessageReplyMarkup")
+    assert_that(refreshed_lists, has_length(1))
+    assert_that(
+        _inline_keyboard_button_texts(refreshed_lists[0]["payload"]),
+        equal_to(["❌ /scheduled – 08:00 · Пн, Ср, Пт"]),
+    )
 
 
 async def test_bot_shows_default_timezone(
@@ -370,6 +384,68 @@ async def test_bot_unsubscribes_from_callback(
     assert_that(
         _inline_keyboard_button_texts(unsubscribe_markup["payload"]),
         has_item("❌ /morning – 08:00 · ежедневно"),
+    )
+
+
+async def test_subscription_navigation_updates_message_and_preserves_page_after_action(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    subscription_types = tuple(
+        FunctionalSubscriptionType(
+            id=index + 1,
+            name=f"/category-{index:02d}",
+            send_time=time(index),
+            s3_directory_path=f"category-{index:02d}",
+        )
+        for index in range(17)
+    )
+    await reset_functional_state(subscription_types)
+    await fake_telegram_server.push_message(text="/subscriptions")
+    first_page = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_subscription_list_answer)
+    assert_that(_inline_keyboard_button_texts(first_page["payload"])[-1], equal_to(">"))
+
+    sent_messages_before_navigation = len(await fake_telegram_server.requests(method="sendMessage"))
+    await fake_telegram_server.push_callback_query(data=SubscriptionPageCallbackData(page=1).pack())
+    middle_page = await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: any(
+            "/category-08" in text for text in _inline_keyboard_button_texts(request["payload"])
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(middle_page["payload"]),
+        equal_to(
+            [
+                *[f"❌ /category-{index:02d} – {index:02d}:00 · ежедневно" for index in range(8, 16)],
+                "<",
+                ">",
+            ]
+        ),
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("callback_query_id") == "callback-100",
+    )
+    assert_that(
+        len(await fake_telegram_server.requests(method="sendMessage")),
+        equal_to(sent_messages_before_navigation),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_subscription_callback(category_id=9, subscribe=True, page=1),
+        message_id=101,
+    )
+    updated_middle_page = await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: any(
+            "✅ /category-08" in text for text in _inline_keyboard_button_texts(request["payload"])
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(updated_middle_page["payload"])[-2:],
+        equal_to(["<", ">"]),
     )
 
 
@@ -1167,8 +1243,8 @@ def _is_subscription_list_answer(request: dict[str, Any]) -> bool:
     return payload.get("chat_id") == 42 and "список" in payload.get("text", "")
 
 
-def _subscription_callback(*, category_id: int, subscribe: bool) -> str:
-    return SubscriptionCallbackData(category_id=category_id, subscribe=subscribe).pack()
+def _subscription_callback(*, category_id: int, subscribe: bool, page: int = 0) -> str:
+    return SubscriptionActionCallbackData(category_id=category_id, subscribe=subscribe, page=page).pack()
 
 
 def _matches_inline_query_id(request: dict[str, Any], *, query_id: str) -> bool:
