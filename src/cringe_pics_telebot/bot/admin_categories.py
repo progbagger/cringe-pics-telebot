@@ -37,7 +37,11 @@ from cringe_pics_telebot.services.category_aliases import (
 from cringe_pics_telebot.services.subscription_schedules import format_subscription_weekdays
 
 from .admin_access import IsAdministrator
-from .admin_category_callback_data import AdminCategoryAction, AdminCategoryCallbackData
+from .admin_category_callback_data import (
+    AdminCategoryAction,
+    AdminCategoryCallbackData,
+    AdminCategoryPagedCallbackData,
+)
 from .admin_keyboards import (
     create_admin_categories_keyboard,
     create_admin_category_form_cancel_keyboard,
@@ -75,6 +79,7 @@ class AdminCategoryAliasesForm(StatesGroup):
     aliases = State()
 
 
+@router.callback_query(AdminCategoryPagedCallbackData.filter())
 @router.callback_query(AdminCategoryCallbackData.filter())
 async def handle_admin_category_callback(callback: CallbackQuery, state: FSMContext) -> None:
     message = _callback_message(callback)
@@ -82,7 +87,7 @@ async def handle_admin_category_callback(callback: CallbackQuery, state: FSMCont
         await callback.answer("Сообщение панели недоступно.", show_alert=True)
         return
 
-    callback_data = AdminCategoryCallbackData.unpack(callback.data)
+    callback_data = _unpack_category_callback(callback.data)
     try:
         notice = await _dispatch_admin_category_callback(
             callback_data=callback_data,
@@ -201,6 +206,7 @@ async def receive_category_time(message: Message, state: FSMContext) -> None:
         return
 
     category_id = await _state_category_id(state)
+    page = await _state_page(state)
     if category_id is None:
         await message.answer(
             "Черновик потерян. Откройте категорию заново.",
@@ -219,7 +225,7 @@ async def receive_category_time(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         f"Время отправки обновлено.\n\n{_category_details(category)}",
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
 
 
@@ -249,11 +255,13 @@ async def receive_new_category_aliases(message: Message, state: FSMContext) -> N
         )
         return
 
+    page = await _state_page(state)
     try:
         category = await create_admin_category(draft)
     except AdminCategoryNameConflictError:
         await state.clear()
         await state.set_state(AdminCategoryCreationForm.name)
+        await state.set_data({"page": page})
         await message.answer(
             _name_error("Категория с таким названием уже была создана. Введите другое название."),
             reply_markup=create_admin_category_form_cancel_keyboard(),
@@ -263,7 +271,7 @@ async def receive_new_category_aliases(message: Message, state: FSMContext) -> N
     await state.clear()
     await message.answer(
         f"Категория создана неактивной.\n\n{_category_details(category)}",
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
 
 
@@ -286,6 +294,7 @@ async def receive_category_aliases(message: Message, state: FSMContext) -> None:
         return
 
     category_id = await _state_category_id(state)
+    page = await _state_page(state)
     if category_id is None:
         await message.answer(
             "Черновик потерян. Откройте категорию заново.",
@@ -307,42 +316,52 @@ async def receive_category_aliases(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         f"Алиасы категории обновлены.\n\n{_category_details(category)}",
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
 
 
 async def _dispatch_admin_category_callback(
     *,
-    callback_data: AdminCategoryCallbackData,
+    callback_data: AdminCategoryPagedCallbackData,
     message: Message,
     state: FSMContext,
 ) -> str | None:
     match callback_data.action:
         case AdminCategoryAction.categories:
             await state.clear()
-            await _show_categories(message)
+            await _show_categories(message, page=callback_data.page)
         case AdminCategoryAction.category:
             await state.clear()
-            return await _show_category(message, callback_data.category_id)
+            return await _show_category(message, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.create:
-            await _start_new_category(message, state)
+            await _start_new_category(message, state, page=callback_data.page)
         case AdminCategoryAction.create_scheduled:
             return await _select_new_category_schedule(message, state, scheduled=True)
         case AdminCategoryAction.create_without_schedule:
             return await _select_new_category_schedule(message, state, scheduled=False)
         case AdminCategoryAction.activate:
             await state.clear()
-            return await _set_category_activity(message, callback_data.category_id, is_active=True)
+            return await _set_category_activity(
+                message,
+                callback_data.category_id,
+                is_active=True,
+                page=callback_data.page,
+            )
         case AdminCategoryAction.deactivate:
             await state.clear()
-            return await _set_category_activity(message, callback_data.category_id, is_active=False)
+            return await _set_category_activity(
+                message,
+                callback_data.category_id,
+                is_active=False,
+                page=callback_data.page,
+            )
         case AdminCategoryAction.edit_time:
-            return await _start_edit_time(message, state, callback_data.category_id)
+            return await _start_edit_time(message, state, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.disable_schedule:
             await state.clear()
-            return await _disable_schedule(message, callback_data.category_id)
+            return await _disable_schedule(message, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.edit_weekdays:
-            return await _start_edit_weekdays(message, state, callback_data.category_id)
+            return await _start_edit_weekdays(message, state, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.toggle_weekday:
             return await _toggle_weekday(message, state, callback_data.weekday)
         case AdminCategoryAction.confirm_weekdays:
@@ -350,43 +369,43 @@ async def _dispatch_admin_category_callback(
         case AdminCategoryAction.daily_weekdays:
             return await _confirm_weekdays(message, state, weekdays=SubscriptionWeekdays.daily())
         case AdminCategoryAction.edit_aliases:
-            return await _start_edit_aliases(message, state, callback_data.category_id)
+            return await _start_edit_aliases(message, state, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.clear_aliases:
             await state.clear()
-            return await _clear_aliases(message, callback_data.category_id)
+            return await _clear_aliases(message, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.cancel_form:
+            page = await _state_page(state)
             await state.clear()
-            await message.edit_text(
-                "<b>Админ-панель</b>\n\nСоздание или редактирование категории отменено.",
-                reply_markup=create_admin_panel_keyboard(),
-            )
+            await _show_categories(message, page=page, prefix="Создание или редактирование категории отменено.")
     return None
 
 
-async def _show_categories(message: Message) -> None:
+async def _show_categories(message: Message, *, page: int = 0, prefix: str | None = None) -> None:
     subscription_types = await get_all_subscription_types()
+    heading = "<b>Управление категориями</b>\n\nВыберите категорию или создайте новую."
     await message.edit_text(
-        "<b>Управление категориями</b>\n\nВыберите категорию или создайте новую.",
-        reply_markup=create_admin_categories_keyboard(subscription_types),
+        f"{prefix}\n\n{heading}" if prefix is not None else heading,
+        reply_markup=create_admin_categories_keyboard(subscription_types, page=page),
     )
 
 
-async def _show_category(message: Message, category_id: int) -> str | None:
+async def _show_category(message: Message, category_id: int, *, page: int = 0) -> str | None:
     category = await get_subscription_type(category_id)
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
     await message.edit_text(
         _category_details(category),
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
     return None
 
 
-async def _start_new_category(message: Message, state: FSMContext) -> None:
+async def _start_new_category(message: Message, state: FSMContext, *, page: int = 0) -> None:
     await state.clear()
     await state.set_state(AdminCategoryCreationForm.name)
+    await state.set_data({"page": page})
     await message.edit_text(
         _name_prompt(),
         reply_markup=create_admin_category_form_cancel_keyboard(),
@@ -420,27 +439,39 @@ async def _select_new_category_schedule(message: Message, state: FSMContext, *, 
     return None
 
 
-async def _set_category_activity(message: Message, category_id: int, *, is_active: bool) -> str:
+async def _set_category_activity(
+    message: Message,
+    category_id: int,
+    *,
+    is_active: bool,
+    page: int,
+) -> str:
     category = await set_admin_category_activity(category_id, is_active=is_active)
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
     await message.edit_text(
         _category_details(category),
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
     return "Категория активирована." if is_active else "Категория деактивирована."
 
 
-async def _start_edit_time(message: Message, state: FSMContext, category_id: int) -> str | None:
+async def _start_edit_time(
+    message: Message,
+    state: FSMContext,
+    category_id: int,
+    *,
+    page: int,
+) -> str | None:
     category = await get_subscription_type(category_id)
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
     await state.set_state(AdminCategoryTimeForm.send_time)
-    await state.set_data({"category_id": category_id})
+    await state.set_data({"category_id": category_id, "page": page})
     await message.edit_text(
         _edit_time_prompt(),
         reply_markup=create_admin_category_form_cancel_keyboard(),
@@ -448,30 +479,36 @@ async def _start_edit_time(message: Message, state: FSMContext, category_id: int
     return None
 
 
-async def _disable_schedule(message: Message, category_id: int) -> str:
+async def _disable_schedule(message: Message, category_id: int, *, page: int) -> str:
     category = await set_admin_category_time(category_id, None)
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
     await message.edit_text(
         _category_details(category),
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
     return "Расписание отключено."
 
 
-async def _start_edit_weekdays(message: Message, state: FSMContext, category_id: int) -> str | None:
+async def _start_edit_weekdays(
+    message: Message,
+    state: FSMContext,
+    category_id: int,
+    *,
+    page: int,
+) -> str | None:
     category = await get_subscription_type(category_id)
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
     if category.time is None:
-        await _show_category(message, category_id)
+        await _show_category(message, category_id, page=page)
         return "Расписание категории отключено."
 
     await state.set_state(AdminCategoryWeekdaysForm.weekdays)
-    await state.set_data({"category_id": category_id, "weekdays": category.weekdays.days})
+    await state.set_data({"category_id": category_id, "weekdays": category.weekdays.days, "page": page})
     await message.edit_text(
         _edit_category_weekdays_prompt(category.name),
         reply_markup=create_admin_category_weekdays_keyboard(category.weekdays),
@@ -537,6 +574,7 @@ async def _confirm_weekdays(
         return "Черновик выбора дней потерян."
 
     category_id = await _state_category_id(state)
+    page = await _state_page(state)
     if category_id is None:
         await message.edit_text(
             "<b>Админ-панель</b>\n\nЧерновик потерян. Откройте категорию заново.",
@@ -547,24 +585,30 @@ async def _confirm_weekdays(
     category = await set_admin_category_weekdays(category_id, normalized)
     await state.clear()
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
     await message.edit_text(
         _category_details(category),
-        reply_markup=_category_keyboard(category),
+        reply_markup=_category_keyboard(category, page=page),
     )
     return "Дни отправки обновлены."
 
 
-async def _start_edit_aliases(message: Message, state: FSMContext, category_id: int) -> str | None:
+async def _start_edit_aliases(
+    message: Message,
+    state: FSMContext,
+    category_id: int,
+    *,
+    page: int,
+) -> str | None:
     category = await get_subscription_type(category_id)
     if category is None:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
     await state.set_state(AdminCategoryAliasesForm.aliases)
-    await state.set_data({"category_id": category_id})
+    await state.set_data({"category_id": category_id, "page": page})
     await message.edit_text(
         _aliases_prompt(category.name),
         reply_markup=create_admin_category_form_cancel_keyboard(),
@@ -572,14 +616,14 @@ async def _start_edit_aliases(message: Message, state: FSMContext, category_id: 
     return None
 
 
-async def _clear_aliases(message: Message, category_id: int) -> str:
+async def _clear_aliases(message: Message, category_id: int, *, page: int) -> str:
     async with transaction():
         updated = await update_subscription_type_search_aliases(category_id, ())
     if not updated:
-        await _show_categories(message)
+        await _show_categories(message, page=page)
         return "Категория больше недоступна."
 
-    await _show_category(message, category_id)
+    await _show_category(message, category_id, page=page)
     return "Алиасы очищены."
 
 
@@ -622,6 +666,11 @@ async def _state_category_id(state: FSMContext) -> int | None:
     return category_id
 
 
+async def _state_page(state: FSMContext) -> int:
+    page = (await state.get_data()).get("page", 0)
+    return page if isinstance(page, int) else 0
+
+
 async def _state_weekdays(
     state: FSMContext,
     *,
@@ -653,12 +702,24 @@ def _weekdays_from_state_data(data: dict[str, object]) -> SubscriptionWeekdays |
         return None
 
 
-def _category_keyboard(category: SubscriptionType) -> InlineKeyboardMarkup:
+def _category_keyboard(category: SubscriptionType, *, page: int = 0) -> InlineKeyboardMarkup:
     return create_admin_category_keyboard(
         category.id,
         has_aliases=bool(category.search_aliases),
         has_schedule=category.time is not None,
         is_active=category.is_active,
+        page=page,
+    )
+
+
+def _unpack_category_callback(data: str) -> AdminCategoryPagedCallbackData:
+    if data.startswith("acp:"):
+        return AdminCategoryPagedCallbackData.unpack(data)
+    legacy = AdminCategoryCallbackData.unpack(data)
+    return AdminCategoryPagedCallbackData(
+        action=legacy.action,
+        category_id=legacy.category_id,
+        weekday=legacy.weekday,
     )
 
 

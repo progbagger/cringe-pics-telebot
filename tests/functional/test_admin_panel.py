@@ -20,6 +20,7 @@ from hamcrest import (
 from cringe_pics_telebot.bot.admin_broadcast_callback_data import (
     AdminBroadcastAction,
     AdminBroadcastCallbackData,
+    AdminBroadcastPagedCallbackData,
 )
 from cringe_pics_telebot.bot.admin_category_callback_data import (
     AdminCategoryAction,
@@ -661,6 +662,114 @@ async def test_admin_can_skip_explicit_recipients(
     assert_that(broadcasts, has_length(1))
     assert_that(broadcasts[0], has_entries(created_by_user_id=42))
     assert_that(await read_admin_broadcast_recipient_ids(broadcasts[0]["id"]), empty())
+
+
+async def test_admin_broadcast_navigation_preserves_page_and_normalizes_after_delete(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    create_functional_admin_broadcast: Callable[..., Awaitable[int]],
+    read_admin_broadcasts: Callable[[], Awaitable[list[dict[str, Any]]]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    broadcast_ids = [
+        await create_functional_admin_broadcast(scheduled_local_at=datetime(2099, 9, 7 + index, 10))
+        for index in range(5)
+    ]
+
+    await fake_telegram_server.push_callback_query(
+        data=AdminBroadcastPagedCallbackData(action=AdminBroadcastAction.page).pack(),
+        message_id=120,
+    )
+    first_page = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: request["payload"].get("message_id") == 120,
+    )
+    assert_that(
+        _inline_keyboard_button_rows(first_page["payload"])[-3:],
+        equal_to([["Новое уведомление"], ["Назад"], [">"]]),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=AdminBroadcastPagedCallbackData(action=AdminBroadcastAction.page, page=1).pack(),
+        message_id=121,
+    )
+    last_page = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: request["payload"].get("message_id") == 121,
+    )
+    assert_that(
+        _inline_keyboard_button_rows(last_page["payload"]),
+        equal_to(
+            [
+                ["11.09 10:00 · локально"],
+                ["✏️", "🗑"],
+                ["Новое уведомление"],
+                ["Назад"],
+                ["<"],
+            ]
+        ),
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("callback_query_id") == "callback-121",
+    )
+
+    last_broadcast_id = broadcast_ids[-1]
+    await fake_telegram_server.push_callback_query(
+        data=AdminBroadcastPagedCallbackData(
+            action=AdminBroadcastAction.edit_message,
+            broadcast_id=last_broadcast_id,
+            page=1,
+        ).pack(),
+        message_id=122,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: request["payload"].get("message_id") == 122,
+    )
+    await fake_telegram_server.push_message(text="Новое содержимое последнего уведомления")
+    updated_list = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Сообщение уведомления обновлено" in request["payload"].get("text", ""),
+    )
+    assert_that(_inline_keyboard_button_rows(updated_list["payload"])[-1], equal_to(["<"]))
+
+    await fake_telegram_server.push_callback_query(
+        data=AdminBroadcastPagedCallbackData(
+            action=AdminBroadcastAction.delete_broadcast,
+            broadcast_id=last_broadcast_id,
+            page=1,
+        ).pack(),
+        message_id=123,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("message_id") == 123 and "Удалить уведомление" in request["payload"].get("text", "")
+        ),
+    )
+    await fake_telegram_server.push_callback_query(
+        data=AdminBroadcastPagedCallbackData(
+            action=AdminBroadcastAction.confirm_delete,
+            broadcast_id=last_broadcast_id,
+            page=1,
+        ).pack(),
+        message_id=124,
+    )
+    normalized_list = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("message_id") == 124
+            and "Запланированные уведомления" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_rows(normalized_list["payload"])[-2:],
+        equal_to([["Новое уведомление"], ["Назад"]]),
+    )
+    broadcasts = await read_admin_broadcasts()
+    assert_that([item["status"] for item in broadcasts], equal_to(["scheduled"] * 4 + ["deleted"]))
 
 
 async def test_private_message_reactivates_user_without_resetting_timezone(

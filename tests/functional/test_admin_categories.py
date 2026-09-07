@@ -9,6 +9,7 @@ from hamcrest import assert_that, contains_string, empty, equal_to, has_entries,
 from cringe_pics_telebot.bot.admin_category_callback_data import (
     AdminCategoryAction,
     AdminCategoryCallbackData,
+    AdminCategoryPagedCallbackData,
 )
 from tests.functional.conftest import (
     SEEDED_SUBSCRIPTION_TYPES,
@@ -122,6 +123,80 @@ async def test_admin_creates_inactive_category_with_all_fields(
     assert_that(
         _inline_keyboard_button_texts(updated_list["payload"]),
         has_item("⏸ /afternoon — неактивна"),
+    )
+
+
+async def test_admin_category_navigation_and_text_form_preserve_page(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    set_functional_administrator: Callable[..., Awaitable[None]],
+) -> None:
+    categories = tuple(
+        FunctionalSubscriptionType(
+            id=index + 1,
+            name=f"/category-{index:02d}",
+            send_time=time(index),
+            s3_directory_path=f"category-{index:02d}",
+        )
+        for index in range(9)
+    )
+    await reset_functional_state(categories)
+    await set_functional_administrator(user_id=42)
+
+    await fake_telegram_server.push_callback_query(
+        data=AdminCategoryPagedCallbackData(action=AdminCategoryAction.categories, page=1).pack(),
+        message_id=110,
+    )
+    last_page = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("message_id") == 110
+            and "Управление категориями" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(last_page["payload"]),
+        equal_to(["✅ /category-08 — активна", "Создать категорию", "Назад", "<"]),
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("callback_query_id") == "callback-110",
+    )
+    assert_that(await fake_telegram_server.requests(method="sendMessage"), empty())
+
+    await fake_telegram_server.push_callback_query(
+        data=AdminCategoryPagedCallbackData(
+            action=AdminCategoryAction.edit_time,
+            category_id=9,
+            page=1,
+        ).pack(),
+        message_id=111,
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: request["payload"].get("message_id") == 111,
+    )
+    await fake_telegram_server.push_message(text="18:30")
+    updated = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: "Время отправки обновлено" in request["payload"].get("text", ""),
+    )
+    back_callback = _button_callback_data(updated["payload"], "Назад")
+    assert back_callback is not None
+    assert_that(AdminCategoryPagedCallbackData.unpack(back_callback).page, equal_to(1))
+
+    await fake_telegram_server.push_callback_query(data=back_callback, message_id=112)
+    returned_page = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            request["payload"].get("message_id") == 112
+            and "Управление категориями" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(returned_page["payload"]),
+        equal_to(["✅ /category-08 — активна", "Создать категорию", "Назад", "<"]),
     )
 
 
@@ -674,10 +749,13 @@ async def _toggle_category_weekday(
     await fake_telegram_server.push_callback_query(
         data=_category_callback(AdminCategoryAction.toggle_weekday, weekday=weekday),
         user_id=user_id,
+        message_id=100 + weekday,
     )
     return await fake_telegram_server.wait_for_request(
         "editMessageReplyMarkup",
-        predicate=lambda request: request["payload"].get("chat_id") == user_id,
+        predicate=lambda request: (
+            request["payload"].get("chat_id") == user_id and request["payload"].get("message_id") == 100 + weekday
+        ),
     )
 
 
@@ -706,6 +784,14 @@ def _category_callback(action: AdminCategoryAction, category_id: int = 0, weekda
 
 def _inline_keyboard_button_texts(payload: dict[str, Any]) -> list[str]:
     return [button["text"] for row in payload["reply_markup"]["inline_keyboard"] for button in row]
+
+
+def _button_callback_data(payload: dict[str, Any], text: str) -> str | None:
+    for row in payload["reply_markup"]["inline_keyboard"]:
+        for button in row:
+            if button["text"] == text:
+                return button["callback_data"]
+    return None
 
 
 def _category_business_data(category: dict[str, Any]) -> dict[str, Any]:

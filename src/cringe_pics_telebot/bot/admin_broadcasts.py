@@ -38,7 +38,11 @@ from cringe_pics_telebot.services.timezones import (
 )
 
 from .admin_access import IsAdministrator
-from .admin_broadcast_callback_data import AdminBroadcastAction, AdminBroadcastCallbackData
+from .admin_broadcast_callback_data import (
+    AdminBroadcastAction,
+    AdminBroadcastCallbackData,
+    AdminBroadcastPagedCallbackData,
+)
 from .admin_keyboards import (
     create_admin_broadcast_delete_keyboard,
     create_admin_broadcast_keyboard,
@@ -64,6 +68,7 @@ class AdminBroadcastForm(StatesGroup):
     edited_recipients = State()
 
 
+@router.callback_query(AdminBroadcastPagedCallbackData.filter())
 @router.callback_query(AdminBroadcastCallbackData.filter())
 async def handle_admin_broadcast_callback(callback: CallbackQuery, state: FSMContext) -> None:
     message = _callback_message(callback)
@@ -71,7 +76,7 @@ async def handle_admin_broadcast_callback(callback: CallbackQuery, state: FSMCon
         await callback.answer("Сообщение панели недоступно.", show_alert=True)
         return
 
-    callback_data = AdminBroadcastCallbackData.unpack(callback.data)
+    callback_data = _unpack_broadcast_callback(callback.data)
     try:
         notice = await _dispatch_admin_broadcast_callback(
             callback_data=callback_data,
@@ -124,15 +129,21 @@ async def receive_new_broadcast_recipients(message: Message, state: FSMContext) 
     recipient_ids = await _parse_recipient_ids_message(message)
     if recipient_ids is None:
         return
+    page = await _state_page(state)
     broadcast = await _create_broadcast_from_state(message=message, state=state, recipient_ids=recipient_ids)
     if broadcast is None:
         return
-    await _answer_with_broadcast_list(message, prefix=_created_broadcast_text(broadcast, len(recipient_ids)))
+    await _answer_with_broadcast_list(
+        message,
+        prefix=_created_broadcast_text(broadcast, len(recipient_ids)),
+        page=page,
+    )
 
 
 @router.message(AdminBroadcastForm.edited_message)
 async def receive_edited_broadcast_message(message: Message, state: FSMContext) -> None:
     broadcast_id = await _state_broadcast_id(state)
+    page = await _state_page(state)
     if broadcast_id is None:
         await message.answer("Черновик потерян. Откройте уведомление заново.")
         return
@@ -145,10 +156,14 @@ async def receive_edited_broadcast_message(message: Message, state: FSMContext) 
         )
     await state.clear()
     if not updated:
-        await _answer_with_broadcast_list(message, prefix="Отправка уведомления уже началась или оно недоступно.")
+        await _answer_with_broadcast_list(
+            message,
+            prefix="Отправка уведомления уже началась или оно недоступно.",
+            page=page,
+        )
         return
 
-    await _answer_with_broadcast_list(message, prefix="Сообщение уведомления обновлено.")
+    await _answer_with_broadcast_list(message, prefix="Сообщение уведомления обновлено.", page=page)
 
 
 @router.message(AdminBroadcastForm.edited_schedule)
@@ -158,6 +173,7 @@ async def receive_edited_broadcast_schedule(message: Message, state: FSMContext)
         return
 
     broadcast_id = await _state_broadcast_id(state)
+    page = await _state_page(state)
     if broadcast_id is None:
         await message.answer("Черновик потерян. Откройте уведомление заново.")
         return
@@ -170,10 +186,14 @@ async def receive_edited_broadcast_schedule(message: Message, state: FSMContext)
         )
     await state.clear()
     if not updated:
-        await _answer_with_broadcast_list(message, prefix="Отправка уведомления уже началась или оно недоступно.")
+        await _answer_with_broadcast_list(
+            message,
+            prefix="Отправка уведомления уже началась или оно недоступно.",
+            page=page,
+        )
         return
 
-    await _answer_with_broadcast_list(message, prefix="Дата и время уведомления обновлены.")
+    await _answer_with_broadcast_list(message, prefix="Дата и время уведомления обновлены.", page=page)
 
 
 @router.message(AdminBroadcastForm.edited_recipients)
@@ -182,6 +202,7 @@ async def receive_edited_broadcast_recipients(message: Message, state: FSMContex
     if recipient_ids is None:
         return
     broadcast_id = await _state_broadcast_id(state)
+    page = await _state_page(state)
     if broadcast_id is None:
         await message.answer("Черновик потерян. Откройте уведомление заново.")
         return
@@ -192,14 +213,18 @@ async def receive_edited_broadcast_recipients(message: Message, state: FSMContex
         )
     await state.clear()
     if not updated:
-        await _answer_with_broadcast_list(message, prefix="Отправка уведомления уже началась или оно недоступно.")
+        await _answer_with_broadcast_list(
+            message,
+            prefix="Отправка уведомления уже началась или оно недоступно.",
+            page=page,
+        )
         return
-    await _answer_with_broadcast_list(message, prefix="Дополнительные получатели обновлены.")
+    await _answer_with_broadcast_list(message, prefix="Дополнительные получатели обновлены.", page=page)
 
 
 async def _dispatch_admin_broadcast_callback(
     *,
-    callback_data: AdminBroadcastCallbackData,
+    callback_data: AdminBroadcastPagedCallbackData,
     message: Message,
     state: FSMContext,
     viewer_user_id: int,
@@ -207,55 +232,63 @@ async def _dispatch_admin_broadcast_callback(
     match callback_data.action:
         case AdminBroadcastAction.broadcasts:
             await state.clear()
-            return await _show_broadcasts_or_start(message=message, state=state)
+            return await _show_broadcasts_or_start(message=message, state=state, page=callback_data.page)
+        case AdminBroadcastAction.page:
+            await state.clear()
+            await _edit_current_broadcast_list(message, page=callback_data.page)
         case AdminBroadcastAction.new_broadcast:
-            await _start_new_broadcast(message=message, state=state)
+            await _start_new_broadcast(message=message, state=state, page=callback_data.page)
         case AdminBroadcastAction.edit_broadcast:
             await state.clear()
             return await _show_broadcast(
                 message,
                 callback_data.broadcast_id,
                 viewer_user_id=viewer_user_id,
+                page=callback_data.page,
             )
         case AdminBroadcastAction.edit_message:
-            return await _start_edit_message(message, state, callback_data.broadcast_id)
+            return await _start_edit_message(message, state, callback_data.broadcast_id, page=callback_data.page)
         case AdminBroadcastAction.edit_schedule:
-            return await _start_edit_schedule(message, state, callback_data.broadcast_id)
+            return await _start_edit_schedule(message, state, callback_data.broadcast_id, page=callback_data.page)
         case AdminBroadcastAction.edit_recipients:
-            return await _start_edit_recipients(message, state, callback_data.broadcast_id)
+            return await _start_edit_recipients(message, state, callback_data.broadcast_id, page=callback_data.page)
         case AdminBroadcastAction.delete_broadcast:
             await state.clear()
-            return await _show_delete_confirmation(message, callback_data.broadcast_id)
+            return await _show_delete_confirmation(message, callback_data.broadcast_id, page=callback_data.page)
         case AdminBroadcastAction.confirm_delete:
             await state.clear()
-            return await _delete_broadcast(message, callback_data.broadcast_id)
+            return await _delete_broadcast(message, callback_data.broadcast_id, page=callback_data.page)
         case AdminBroadcastAction.cancel_form:
+            page = await _state_page(state)
             await state.clear()
-            await message.edit_text(
-                "<b>Админ-панель</b>\n\nСоздание или редактирование отменено.",
-                reply_markup=create_admin_panel_keyboard(),
+            await _edit_current_broadcast_list(
+                message,
+                page=page,
+                prefix="Создание или редактирование отменено.",
             )
         case AdminBroadcastAction.skip_recipients:
+            page = await _state_page(state)
             broadcast = await _create_broadcast_from_state(message=message, state=state, recipient_ids=set())
             if broadcast is None:
                 return "Черновик потерян. Начните создание уведомления заново."
-            await _edit_current_broadcast_list(message)
+            await _edit_current_broadcast_list(message, page=page)
             return _created_broadcast_text(broadcast, 0, html=False)
     return None
 
 
-async def _show_broadcasts_or_start(*, message: Message, state: FSMContext) -> str | None:
+async def _show_broadcasts_or_start(*, message: Message, state: FSMContext, page: int = 0) -> str | None:
     broadcasts = await get_scheduled_admin_broadcasts()
     if not broadcasts:
-        await _start_new_broadcast(message=message, state=state)
+        await _start_new_broadcast(message=message, state=state, page=page)
         return None
-    await _edit_with_broadcast_list(message, broadcasts)
+    await _edit_with_broadcast_list(message, broadcasts, page=page)
     return None
 
 
-async def _start_new_broadcast(*, message: Message, state: FSMContext) -> None:
+async def _start_new_broadcast(*, message: Message, state: FSMContext, page: int = 0) -> None:
     await state.clear()
     await state.set_state(AdminBroadcastForm.new_message)
+    await state.set_data({"page": page})
     await message.edit_text(
         "<b>Новое уведомление</b>\n\nОтправьте сообщение, которое нужно доставить получателям.",
         reply_markup=create_admin_form_cancel_keyboard(),
@@ -267,10 +300,11 @@ async def _show_broadcast(
     broadcast_id: int,
     *,
     viewer_user_id: int,
+    page: int,
 ) -> str | None:
     broadcast = await _editable_broadcast(broadcast_id)
     if broadcast is None:
-        await _edit_current_broadcast_list(message)
+        await _edit_current_broadcast_list(message, page=page)
         return "Отправка уведомления уже началась или оно недоступно."
     recipient_ids = await get_admin_broadcast_recipient_ids(broadcast.id)
     viewer_timezone_offset_minutes = await get_user_timezone_offset(viewer_user_id)
@@ -280,17 +314,23 @@ async def _show_broadcast(
             extra_recipient_count=len(recipient_ids),
             viewer_timezone_offset_minutes=viewer_timezone_offset_minutes,
         ),
-        reply_markup=create_admin_broadcast_keyboard(broadcast.id),
+        reply_markup=create_admin_broadcast_keyboard(broadcast.id, page=page),
     )
     return None
 
 
-async def _start_edit_message(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
+async def _start_edit_message(
+    message: Message,
+    state: FSMContext,
+    broadcast_id: int,
+    *,
+    page: int,
+) -> str | None:
     if await _editable_broadcast(broadcast_id) is None:
-        await _edit_current_broadcast_list(message)
+        await _edit_current_broadcast_list(message, page=page)
         return "Отправка уведомления уже началась или оно недоступно."
     await state.set_state(AdminBroadcastForm.edited_message)
-    await state.set_data({"broadcast_id": broadcast_id})
+    await state.set_data({"broadcast_id": broadcast_id, "page": page})
     await message.edit_text(
         "Отправьте новое сообщение для уведомления.",
         reply_markup=create_admin_form_cancel_keyboard(),
@@ -298,12 +338,18 @@ async def _start_edit_message(message: Message, state: FSMContext, broadcast_id:
     return None
 
 
-async def _start_edit_schedule(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
+async def _start_edit_schedule(
+    message: Message,
+    state: FSMContext,
+    broadcast_id: int,
+    *,
+    page: int,
+) -> str | None:
     if await _editable_broadcast(broadcast_id) is None:
-        await _edit_current_broadcast_list(message)
+        await _edit_current_broadcast_list(message, page=page)
         return "Отправка уведомления уже началась или оно недоступно."
     await state.set_state(AdminBroadcastForm.edited_schedule)
-    await state.set_data({"broadcast_id": broadcast_id})
+    await state.set_data({"broadcast_id": broadcast_id, "page": page})
     await message.edit_text(
         _schedule_prompt(prefix="Введите новую дату и время."),
         reply_markup=create_admin_form_cancel_keyboard(),
@@ -311,12 +357,18 @@ async def _start_edit_schedule(message: Message, state: FSMContext, broadcast_id
     return None
 
 
-async def _start_edit_recipients(message: Message, state: FSMContext, broadcast_id: int) -> str | None:
+async def _start_edit_recipients(
+    message: Message,
+    state: FSMContext,
+    broadcast_id: int,
+    *,
+    page: int,
+) -> str | None:
     if await _editable_broadcast(broadcast_id) is None:
-        await _edit_current_broadcast_list(message)
+        await _edit_current_broadcast_list(message, page=page)
         return "Отправка уведомления уже началась или оно недоступно."
     await state.set_state(AdminBroadcastForm.edited_recipients)
-    await state.set_data({"broadcast_id": broadcast_id})
+    await state.set_data({"broadcast_id": broadcast_id, "page": page})
     await message.edit_text(
         _recipients_prompt(prefix="Введите новый список дополнительных Telegram user ID."),
         reply_markup=create_admin_form_cancel_keyboard(),
@@ -324,23 +376,23 @@ async def _start_edit_recipients(message: Message, state: FSMContext, broadcast_
     return None
 
 
-async def _show_delete_confirmation(message: Message, broadcast_id: int) -> str | None:
+async def _show_delete_confirmation(message: Message, broadcast_id: int, *, page: int) -> str | None:
     broadcast = await _editable_broadcast(broadcast_id)
     if broadcast is None:
-        await _edit_current_broadcast_list(message)
+        await _edit_current_broadcast_list(message, page=page)
         return "Отправка уведомления уже началась или оно недоступно."
     await message.edit_text(
         "Удалить уведомление на "
         f"<b>{format_admin_broadcast_schedule(broadcast.scheduled_local_at, broadcast.timezone_offset_minutes)}</b>?",
-        reply_markup=create_admin_broadcast_delete_keyboard(broadcast.id),
+        reply_markup=create_admin_broadcast_delete_keyboard(broadcast.id, page=page),
     )
     return None
 
 
-async def _delete_broadcast(message: Message, broadcast_id: int) -> str | None:
+async def _delete_broadcast(message: Message, broadcast_id: int, *, page: int) -> str | None:
     async with transaction():
         deleted = await soft_delete_admin_broadcast(broadcast_id)
-    await _edit_current_broadcast_list(message)
+    await _edit_current_broadcast_list(message, page=page)
     return "Уведомление удалено." if deleted else "Отправка уведомления уже началась или оно недоступно."
 
 
@@ -351,29 +403,42 @@ async def _editable_broadcast(broadcast_id: int) -> AdminBroadcast | None:
     return broadcast
 
 
-async def _edit_current_broadcast_list(message: Message) -> None:
+async def _edit_current_broadcast_list(
+    message: Message,
+    *,
+    page: int = 0,
+    prefix: str | None = None,
+) -> None:
     broadcasts = await get_scheduled_admin_broadcasts()
     if broadcasts:
-        await _edit_with_broadcast_list(message, broadcasts)
+        await _edit_with_broadcast_list(message, broadcasts, page=page, prefix=prefix)
     else:
+        heading = "<b>Запланированных уведомлений нет.</b>"
         await message.edit_text(
-            "<b>Запланированных уведомлений нет.</b>",
+            f"{prefix}\n\n{heading}" if prefix is not None else heading,
             reply_markup=create_admin_panel_keyboard(),
         )
 
 
-async def _edit_with_broadcast_list(message: Message, broadcasts: list[AdminBroadcast]) -> None:
+async def _edit_with_broadcast_list(
+    message: Message,
+    broadcasts: list[AdminBroadcast],
+    *,
+    page: int = 0,
+    prefix: str | None = None,
+) -> None:
+    heading = "<b>Запланированные уведомления</b>\n\nВыберите уведомление или создайте новое."
     await message.edit_text(
-        "<b>Запланированные уведомления</b>\n\nВыберите уведомление или создайте новое.",
-        reply_markup=create_admin_broadcasts_keyboard(broadcasts),
+        f"{prefix}\n\n{heading}" if prefix is not None else heading,
+        reply_markup=create_admin_broadcasts_keyboard(broadcasts, page=page),
     )
 
 
-async def _answer_with_broadcast_list(message: Message, *, prefix: str) -> None:
+async def _answer_with_broadcast_list(message: Message, *, prefix: str, page: int = 0) -> None:
     broadcasts = await get_scheduled_admin_broadcasts()
     await message.answer(
         f"{prefix}\n\n<b>Запланированные уведомления</b>",
-        reply_markup=create_admin_broadcasts_keyboard(broadcasts),
+        reply_markup=create_admin_broadcasts_keyboard(broadcasts, page=page),
     )
 
 
@@ -445,6 +510,21 @@ async def _state_broadcast_id(state: FSMContext) -> int | None:
         await state.clear()
         return None
     return broadcast_id
+
+
+async def _state_page(state: FSMContext) -> int:
+    page = (await state.get_data()).get("page", 0)
+    return page if isinstance(page, int) else 0
+
+
+def _unpack_broadcast_callback(data: str) -> AdminBroadcastPagedCallbackData:
+    if data.startswith("abp:"):
+        return AdminBroadcastPagedCallbackData.unpack(data)
+    legacy = AdminBroadcastCallbackData.unpack(data)
+    return AdminBroadcastPagedCallbackData(
+        action=legacy.action,
+        broadcast_id=legacy.broadcast_id,
+    )
 
 
 def _broadcast_details(
