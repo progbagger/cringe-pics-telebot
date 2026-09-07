@@ -23,6 +23,15 @@ class AdminCategoryAction(StrEnum):
 
 
 class AdminCategoryCallbackData(CallbackData, prefix="admin_category"):
+    """Legacy callback data kept for messages sent before keyboard pagination."""
+
     action: AdminCategoryAction
     category_id: int = 0
     weekday: int = 0
+
+
+class AdminCategoryPagedCallbackData(CallbackData, prefix="acp"):
+    action: AdminCategoryAction
+    category_id: int = 0
+    weekday: int = 0
+    page: int = 0

@@ -1,8 +1,20 @@
-from datetime import time
+from datetime import UTC, datetime, time
 
 import pytest
 from hamcrest import assert_that, equal_to
 
+from cringe_pics_telebot.bot.admin_broadcast_callback_data import (
+    AdminBroadcastAction,
+    AdminBroadcastPagedCallbackData,
+)
+from cringe_pics_telebot.bot.admin_category_callback_data import (
+    AdminCategoryAction,
+    AdminCategoryPagedCallbackData,
+)
+from cringe_pics_telebot.bot.admin_keyboards import (
+    create_admin_broadcasts_keyboard,
+    create_admin_categories_keyboard,
+)
 from cringe_pics_telebot.bot.inline_pagination import paginate_inline_keyboard
 from cringe_pics_telebot.bot.keyboards import create_inline_subscriptions_keyboard
 from cringe_pics_telebot.bot.subscription_callback_data import (
@@ -12,6 +24,11 @@ from cringe_pics_telebot.bot.subscription_callback_data import (
 )
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
+from cringe_pics_telebot.repositories.postgres.entities import (
+    AdminBroadcast,
+    AdminBroadcastStatus,
+    SubscriptionType,
+)
 
 
 @pytest.mark.parametrize(
@@ -102,6 +119,60 @@ def test_subscription_callbacks_fit_telegram_limit_and_legacy_callback_still_unp
     assert_that(SubscriptionPageCallbackData.unpack("subscription_page:3").page, equal_to(3))
 
 
+def test_admin_category_keyboard_sorts_before_paging_and_places_constants_before_navigation() -> None:
+    categories = _categories(9)
+    categories.reverse()
+
+    keyboard = create_admin_categories_keyboard(categories)
+    rows = [[button.text for button in row] for row in keyboard.inline_keyboard]
+
+    assert_that(
+        rows,
+        equal_to(
+            [
+                *[[f"✅ /category-{index:02d} — активна"] for index in range(8)],
+                ["Создать категорию"],
+                ["Назад"],
+                [">"],
+            ]
+        ),
+    )
+
+
+def test_admin_broadcast_keyboard_counts_two_dynamic_rows_per_item() -> None:
+    broadcasts = _broadcasts(5)
+
+    first_page = create_admin_broadcasts_keyboard(broadcasts)
+    last_page = create_admin_broadcasts_keyboard(broadcasts, page=1)
+
+    assert_that([row[0].text for row in first_page.inline_keyboard[:8:2]], equal_to(_broadcast_labels(4)))
+    assert_that(
+        [[button.text for button in row] for row in first_page.inline_keyboard[-3:]],
+        equal_to([["Новое уведомление"], ["Назад"], [">"]]),
+    )
+    assert_that(last_page.inline_keyboard[0][0].text, equal_to(_broadcast_labels(5)[-1]))
+    assert_that(
+        [[button.text for button in row] for row in last_page.inline_keyboard[-3:]],
+        equal_to([["Новое уведомление"], ["Назад"], ["<"]]),
+    )
+
+
+def test_admin_paged_callbacks_fit_telegram_limit() -> None:
+    category_callback = AdminCategoryPagedCallbackData(
+        action=AdminCategoryAction.disable_schedule,
+        category_id=9_223_372_036_854_775_807,
+        page=2_147_483_647,
+    ).pack()
+    broadcast_callback = AdminBroadcastPagedCallbackData(
+        action=AdminBroadcastAction.confirm_delete,
+        broadcast_id=9_223_372_036_854_775_807,
+        page=2_147_483_647,
+    ).pack()
+
+    assert len(category_callback.encode()) <= 64
+    assert len(broadcast_callback.encode()) <= 64
+
+
 def _subscriptions(count: int) -> list[SubscriptionInfo]:
     return [
         SubscriptionInfo(
@@ -113,3 +184,45 @@ def _subscriptions(count: int) -> list[SubscriptionInfo]:
         )
         for index in range(count)
     ]
+
+
+def _categories(count: int) -> list[SubscriptionType]:
+    now = datetime(2026, 9, 6, tzinfo=UTC)
+    return [
+        SubscriptionType(
+            id=index + 1,
+            name=f"/category-{index:02d}",
+            time=time(index),
+            s3_directory_path=f"category-{index:02d}",
+            search_aliases=(),
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+        for index in range(count)
+    ]
+
+
+def _broadcasts(count: int) -> list[AdminBroadcast]:
+    now = datetime(2026, 9, 6, tzinfo=UTC)
+    return [
+        AdminBroadcast(
+            id=index + 1,
+            created_by_user_id=42,
+            source_chat_id=42,
+            source_message_id=index + 1,
+            scheduled_local_at=datetime(2026, 9, 7 + index, 10),
+            timezone_offset_minutes=420,
+            status=AdminBroadcastStatus.scheduled,
+            created_at=now,
+            updated_at=now,
+            started_at=None,
+            completed_at=None,
+            deleted_at=None,
+        )
+        for index in range(count)
+    ]
+
+
+def _broadcast_labels(count: int) -> list[str]:
+    return [f"{7 + index:02d}.09 10:00 · UTC+07:00" for index in range(count)]

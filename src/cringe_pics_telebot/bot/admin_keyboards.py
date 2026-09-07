@@ -6,9 +6,18 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from cringe_pics_telebot.repositories.postgres.entities import AdminBroadcast, SubscriptionType
 from cringe_pics_telebot.services.admin_broadcast_schedules import format_admin_broadcast_schedule
 
-from .admin_broadcast_callback_data import AdminBroadcastAction, AdminBroadcastCallbackData
-from .admin_category_callback_data import AdminCategoryAction, AdminCategoryCallbackData
+from .admin_broadcast_callback_data import (
+    AdminBroadcastAction,
+    AdminBroadcastCallbackData,
+    AdminBroadcastPagedCallbackData,
+)
+from .admin_category_callback_data import (
+    AdminCategoryAction,
+    AdminCategoryCallbackData,
+    AdminCategoryPagedCallbackData,
+)
 from .admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
+from .inline_pagination import paginate_inline_keyboard
 
 
 def create_admin_panel_keyboard() -> InlineKeyboardMarkup:
@@ -40,18 +49,32 @@ def create_admin_media_sync_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def create_admin_categories_keyboard(subscription_types: Iterable[SubscriptionType]) -> InlineKeyboardMarkup:
+def create_admin_categories_keyboard(
+    subscription_types: Iterable[SubscriptionType],
+    *,
+    page: int = 0,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for subscription_type in sorted(subscription_types, key=lambda item: item.name.casefold()):
+    sorted_types = sorted(subscription_types, key=lambda item: item.name.casefold())
+    current_page = paginate_inline_keyboard(sorted_types, page)
+    for subscription_type in current_page.items:
         status = "активна" if subscription_type.is_active else "неактивна"
         icon = "✅" if subscription_type.is_active else "⏸"
         builder.button(
             text=f"{icon} {subscription_type.name} — {status}",
-            callback_data=_category_callback(AdminCategoryAction.category, subscription_type.id),
+            callback_data=_paged_category_callback(
+                AdminCategoryAction.category,
+                subscription_type.id,
+                page=current_page.number,
+            ),
         )
-    builder.button(text="Создать категорию", callback_data=_category_callback(AdminCategoryAction.create))
+    builder.button(
+        text="Создать категорию",
+        callback_data=_paged_category_callback(AdminCategoryAction.create, page=current_page.number),
+    )
     builder.button(text="Назад", callback_data=_panel_callback())
     builder.adjust(1)
+    _add_category_navigation(builder, current_page.previous_number, current_page.next_number)
     return builder.as_markup()
 
 
@@ -103,48 +126,55 @@ def create_admin_category_keyboard(
     has_aliases: bool,
     has_schedule: bool,
     is_active: bool,
+    page: int = 0,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
         text="Деактивировать" if is_active else "Активировать",
-        callback_data=_category_callback(
+        callback_data=_paged_category_callback(
             AdminCategoryAction.deactivate if is_active else AdminCategoryAction.activate,
             category_id,
+            page=page,
         ),
     )
     builder.button(
         text="Изменить время отправки",
-        callback_data=_category_callback(AdminCategoryAction.edit_time, category_id),
+        callback_data=_paged_category_callback(AdminCategoryAction.edit_time, category_id, page=page),
     )
     if has_schedule:
         builder.button(
             text="Изменить дни отправки",
-            callback_data=_category_callback(AdminCategoryAction.edit_weekdays, category_id),
+            callback_data=_paged_category_callback(AdminCategoryAction.edit_weekdays, category_id, page=page),
         )
         builder.button(
             text="Отключить расписание",
-            callback_data=_category_callback(AdminCategoryAction.disable_schedule, category_id),
+            callback_data=_paged_category_callback(AdminCategoryAction.disable_schedule, category_id, page=page),
         )
     builder.button(
         text="Изменить алиасы",
-        callback_data=_category_callback(AdminCategoryAction.edit_aliases, category_id),
+        callback_data=_paged_category_callback(AdminCategoryAction.edit_aliases, category_id, page=page),
     )
     if has_aliases:
         builder.button(
             text="Очистить алиасы",
-            callback_data=_category_callback(AdminCategoryAction.clear_aliases, category_id),
+            callback_data=_paged_category_callback(AdminCategoryAction.clear_aliases, category_id, page=page),
         )
     builder.button(
         text="Назад",
-        callback_data=_category_callback(AdminCategoryAction.categories),
+        callback_data=_paged_category_callback(AdminCategoryAction.categories, page=page),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def create_admin_broadcasts_keyboard(broadcasts: Iterable[AdminBroadcast]) -> InlineKeyboardMarkup:
+def create_admin_broadcasts_keyboard(
+    broadcasts: Iterable[AdminBroadcast],
+    *,
+    page: int = 0,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    for broadcast in broadcasts:
+    current_page = paginate_inline_keyboard(tuple(broadcasts), page, rows_per_item=2)
+    for broadcast in current_page.items:
         builder.row(
             InlineKeyboardButton(
                 text=format_admin_broadcast_schedule(
@@ -152,23 +182,38 @@ def create_admin_broadcasts_keyboard(broadcasts: Iterable[AdminBroadcast]) -> In
                     broadcast.timezone_offset_minutes,
                     short=True,
                 ),
-                callback_data=_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast.id),
+                callback_data=_paged_broadcast_callback(
+                    AdminBroadcastAction.edit_broadcast,
+                    broadcast.id,
+                    page=current_page.number,
+                ),
             )
         )
         builder.row(
             InlineKeyboardButton(
                 text="✏️",
-                callback_data=_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast.id),
+                callback_data=_paged_broadcast_callback(
+                    AdminBroadcastAction.edit_broadcast,
+                    broadcast.id,
+                    page=current_page.number,
+                ),
             ),
             InlineKeyboardButton(
                 text="🗑",
-                callback_data=_broadcast_callback(AdminBroadcastAction.delete_broadcast, broadcast.id),
+                callback_data=_paged_broadcast_callback(
+                    AdminBroadcastAction.delete_broadcast,
+                    broadcast.id,
+                    page=current_page.number,
+                ),
             ),
         )
     builder.row(
         InlineKeyboardButton(
             text="Новое уведомление",
-            callback_data=_broadcast_callback(AdminBroadcastAction.new_broadcast),
+            callback_data=_paged_broadcast_callback(
+                AdminBroadcastAction.new_broadcast,
+                page=current_page.number,
+            ),
         )
     )
     builder.row(
@@ -177,44 +222,45 @@ def create_admin_broadcasts_keyboard(broadcasts: Iterable[AdminBroadcast]) -> In
             callback_data=_panel_callback(),
         )
     )
+    _add_broadcast_navigation(builder, current_page.previous_number, current_page.next_number)
     return builder.as_markup()
 
 
-def create_admin_broadcast_keyboard(broadcast_id: int) -> InlineKeyboardMarkup:
+def create_admin_broadcast_keyboard(broadcast_id: int, *, page: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
         text="Изменить сообщение",
-        callback_data=_broadcast_callback(AdminBroadcastAction.edit_message, broadcast_id),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.edit_message, broadcast_id, page=page),
     )
     builder.button(
         text="Изменить дату и время",
-        callback_data=_broadcast_callback(AdminBroadcastAction.edit_schedule, broadcast_id),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.edit_schedule, broadcast_id, page=page),
     )
     builder.button(
         text="Изменить дополнительные ID",
-        callback_data=_broadcast_callback(AdminBroadcastAction.edit_recipients, broadcast_id),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.edit_recipients, broadcast_id, page=page),
     )
     builder.button(
         text="Удалить",
-        callback_data=_broadcast_callback(AdminBroadcastAction.delete_broadcast, broadcast_id),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.delete_broadcast, broadcast_id, page=page),
     )
     builder.button(
         text="Назад",
-        callback_data=_broadcast_callback(AdminBroadcastAction.broadcasts),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.page, page=page),
     )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def create_admin_broadcast_delete_keyboard(broadcast_id: int) -> InlineKeyboardMarkup:
+def create_admin_broadcast_delete_keyboard(broadcast_id: int, *, page: int = 0) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
         text="Удалить",
-        callback_data=_broadcast_callback(AdminBroadcastAction.confirm_delete, broadcast_id),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.confirm_delete, broadcast_id, page=page),
     )
     builder.button(
         text="Отмена",
-        callback_data=_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast_id),
+        callback_data=_paged_broadcast_callback(AdminBroadcastAction.edit_broadcast, broadcast_id, page=page),
     )
     builder.adjust(1)
     return builder.as_markup()
@@ -258,6 +304,73 @@ def _broadcast_callback(action: AdminBroadcastAction, broadcast_id: int = 0) -> 
 
 def _category_callback(action: AdminCategoryAction, category_id: int = 0, weekday: int = 0) -> str:
     return AdminCategoryCallbackData(action=action, category_id=category_id, weekday=weekday).pack()
+
+
+def _paged_broadcast_callback(action: AdminBroadcastAction, broadcast_id: int = 0, *, page: int = 0) -> str:
+    return AdminBroadcastPagedCallbackData(action=action, broadcast_id=broadcast_id, page=page).pack()
+
+
+def _paged_category_callback(
+    action: AdminCategoryAction,
+    category_id: int = 0,
+    weekday: int = 0,
+    *,
+    page: int = 0,
+) -> str:
+    return AdminCategoryPagedCallbackData(
+        action=action,
+        category_id=category_id,
+        weekday=weekday,
+        page=page,
+    ).pack()
+
+
+def _add_category_navigation(
+    builder: InlineKeyboardBuilder,
+    previous_page: int | None,
+    next_page: int | None,
+) -> None:
+    buttons = []
+    if previous_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_paged_category_callback(AdminCategoryAction.categories, page=previous_page),
+            )
+        )
+    if next_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_paged_category_callback(AdminCategoryAction.categories, page=next_page),
+            )
+        )
+    if buttons:
+        builder.row(*buttons)
+
+
+def _add_broadcast_navigation(
+    builder: InlineKeyboardBuilder,
+    previous_page: int | None,
+    next_page: int | None,
+) -> None:
+    buttons = []
+    if previous_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_paged_broadcast_callback(AdminBroadcastAction.page, page=previous_page),
+            )
+        )
+    if next_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_paged_broadcast_callback(AdminBroadcastAction.page, page=next_page),
+            )
+        )
+    if buttons:
+        builder.row(*buttons)
 
 
 def _admin_panel_callback(action: AdminPanelAction) -> str:
