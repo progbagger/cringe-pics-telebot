@@ -479,6 +479,46 @@ async def test_bot_sends_image_for_subscription_category(
     assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
+async def test_bot_materializes_mp4_and_reuses_cached_video_for_ordinary_delivery(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+) -> None:
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/video", None, "video"),))
+    await fake_yandex_server.configure_directory(
+        "video",
+        images=[{"name": "clip.mp4", "mime_type": "video/mp4"}],
+    )
+    await synchronize_functional_media_catalog()
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+
+    await fake_telegram_server.push_message(text="/video")
+    first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
+
+    assert_that(first_edit["payload"]["media"]["type"], equal_to("video"))
+    assert_that(
+        first_edit["payload"]["media"]["media"],
+        equal_to(f"{fake_yandex_server.base_url}/download/clip.mp4"),
+    )
+    assert_that(
+        await read_functional_category_media_states(),
+        equal_to({"video/clip.mp4": ("ready", "functional-video-file-id")}),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_telegram_server.push_message(text="/video")
+    cached_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
+
+    assert_that(cached_edit["payload"]["media"]["type"], equal_to("video"))
+    assert_that(cached_edit["payload"]["media"]["media"], equal_to("functional-video-file-id"))
+    assert_that(await fake_yandex_server.requests(), empty())
+
+
 async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
@@ -554,23 +594,35 @@ async def test_bot_ordinary_delivery_uses_persistent_non_repeating_cycle(
     assert_that(await fake_yandex_server.requests(), empty())
 
 
+@pytest.mark.parametrize(
+    ("file_name", "mime_type", "telegram_file_id", "input_media_type"),
+    [
+        ("image.png", "image/png", "functional-photo-file-id", "photo"),
+        ("clip.mp4", "video/mp4", "functional-video-file-id", "video"),
+    ],
+)
 async def test_bot_recovers_invalid_catalog_file_id_once(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     seeded_subscription_types: tuple[FunctionalSubscriptionType, ...],
     synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    file_name: str,
+    mime_type: str,
+    telegram_file_id: str,
+    input_media_type: str,
 ) -> None:
-    await fake_yandex_server.configure_directory("day", images=[{"name": "image.png"}])
+    await fake_yandex_server.configure_directory("day", images=[{"name": file_name, "mime_type": mime_type}])
     await synchronize_functional_media_catalog()
     await fake_yandex_server.reset()
 
     await fake_telegram_server.push_message(text="/day")
     first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
+    assert_that(first_edit["payload"]["media"]["type"], equal_to(input_media_type))
     assert_that(first_edit["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
     await fake_telegram_server.reset()
-    await fake_telegram_server.set_invalid_file_ids("functional-photo-file-id")
+    await fake_telegram_server.set_invalid_file_ids(telegram_file_id)
     await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text="/day")
     recovered_edit = await fake_telegram_server.wait_for_request(
@@ -584,8 +636,8 @@ async def test_bot_recovers_invalid_catalog_file_id_once(
         [request["payload"]["media"]["media"] for request in edits],
         equal_to(
             [
-                "functional-photo-file-id",
-                f"{fake_yandex_server.base_url}/download/image.png",
+                telegram_file_id,
+                f"{fake_yandex_server.base_url}/download/{file_name}",
             ]
         ),
     )

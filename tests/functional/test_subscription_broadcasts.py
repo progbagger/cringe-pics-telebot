@@ -67,6 +67,48 @@ async def test_subscription_broadcasts_use_each_users_local_time_without_duplica
     assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
+async def test_subscription_broadcast_materializes_mp4_and_reuses_cached_video(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+) -> None:
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/video", time(10), "video"),))
+    await create_user_subscription(
+        user_id=700,
+        subscription_type_id=1,
+        timezone_offset_minutes=7 * 60,
+    )
+    await fake_yandex_server.configure_directory(
+        "video",
+        images=[{"name": "clip.mp4", "mime_type": "video/mp4"}],
+    )
+    await synchronize_functional_media_catalog()
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 9, 9, 3, tzinfo=UTC)), equal_to(1))
+    first_request = await fake_telegram_server.wait_for_request("sendVideo")
+    assert_that(
+        first_request["payload"]["video"],
+        equal_to(f"{fake_yandex_server.base_url}/download/clip.mp4"),
+    )
+    assert_that(
+        await read_functional_category_media_states(),
+        equal_to({"video/clip.mp4": ("ready", "functional-video-file-id")}),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    assert_that(await run_subscription_broadcasts_at(datetime(2026, 9, 10, 3, tzinfo=UTC)), equal_to(1))
+    second_request = await fake_telegram_server.wait_for_request("sendVideo")
+    assert_that(second_request["payload"]["video"], equal_to("functional-video-file-id"))
+    assert_that(await fake_yandex_server.requests(), empty())
+
+
 async def test_subscription_broadcasts_use_each_users_local_weekday_across_sunday_to_monday(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,

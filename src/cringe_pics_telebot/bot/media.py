@@ -4,6 +4,7 @@ from aiogram import Bot
 from aiogram.types import (
     InputMediaAnimation,
     InputMediaPhoto,
+    InputMediaVideo,
     Message,
 )
 
@@ -25,6 +26,8 @@ async def send_image_to_chat(*, bot: Bot, chat_id: int, image: LinkedMedia | Cac
 
     if _is_animation(image):
         return await bot.send_animation(chat_id=chat_id, animation=media)
+    if _is_video(image):
+        return await bot.send_video(chat_id=chat_id, video=media)
 
     return await bot.send_photo(chat_id=chat_id, photo=media)
 
@@ -35,6 +38,8 @@ def get_message_media_file_ids(message: Message) -> tuple[str, str]:
         media = message.photo[-1]
     elif message.animation is not None:
         media = message.animation
+    elif message.video is not None:
+        media = message.video
     else:
         raise ValueError("Resulted message %s has no media", message.message_id)
 
@@ -45,12 +50,18 @@ def _input_media(
     *,
     image: LinkedMedia | CachedMedia,
     media: str,
-) -> InputMediaAnimation | InputMediaPhoto:
+) -> InputMediaAnimation | InputMediaPhoto | InputMediaVideo:
     if _is_animation(image):
         return InputMediaAnimation(media=media)
+    if _is_video(image):
+        return InputMediaVideo(media=media)
 
     return InputMediaPhoto(media=media)
 
 
 def _is_animation(image: LinkedMedia | CachedMedia) -> bool:
     return "gif" in image.mime_type
+
+
+def _is_video(image: LinkedMedia | CachedMedia) -> bool:
+    return image.mime_type == "video/mp4"
