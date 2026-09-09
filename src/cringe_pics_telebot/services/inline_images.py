@@ -6,6 +6,7 @@ from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
     SubscriptionType,
     TelegramMediaType,
+    find_category_media_by_search_terms,
     get_category_media_by_subscription_types,
 )
 from cringe_pics_telebot.repositories.yandex import get_download_urls
@@ -13,6 +14,7 @@ from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 
 from .inline_metrics import (
     MEDIA_CATALOG_STAGE,
+    MEDIA_SEARCH_STAGE,
     MEDIA_URLS_STAGE,
     RESULTS_PREPARE_STAGE,
     get_inline_query_metrics,
@@ -38,8 +40,14 @@ async def get_inline_images(
     *,
     cursor: InlinePaginationCursor | None,
     seed_factory: SeedFactory | None = None,
+    search_terms: Sequence[str] = (),
 ) -> InlineImagesPage:
-    media = await _get_catalog_media([item.id for item in subscription_types])
+    subscription_type_ids = [item.id for item in subscription_types]
+    media = (
+        await _search_catalog_media(subscription_type_ids, search_terms)
+        if search_terms
+        else await _get_catalog_media(subscription_type_ids)
+    )
     _record_catalog_media_count(media)
     inline_media = _filter_inline_media(media)
     deduplicated_media = _deduplicate_inline_media(inline_media, subscription_types=subscription_types)
@@ -175,6 +183,20 @@ async def _get_catalog_media(subscription_type_ids: list[int]) -> list[CategoryM
     if metrics is not None:
         metrics.counts.postgres_calls += 1
     return await get_category_media_by_subscription_types(subscription_type_ids)
+
+
+@inline_query_stage(MEDIA_SEARCH_STAGE)
+async def _search_catalog_media(
+    subscription_type_ids: list[int],
+    search_terms: Sequence[str],
+) -> list[CategoryMedia]:
+    metrics = get_inline_query_metrics()
+    if metrics is not None:
+        metrics.counts.postgres_calls += 1
+    return await find_category_media_by_search_terms(
+        search_terms,
+        subscription_type_ids=subscription_type_ids,
+    )
 
 
 @inline_query_stage(MEDIA_URLS_STAGE)

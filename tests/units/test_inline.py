@@ -14,7 +14,7 @@ from aiogram.types import (
     InlineQueryResultPhoto,
     InlineQueryResultUnion,
 )
-from hamcrest import assert_that, empty, equal_to, has_length, is_, not_
+from hamcrest import assert_that, empty, equal_to, has_length, not_
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.bot import inline, keyboards
@@ -24,64 +24,8 @@ from cringe_pics_telebot.services.inline_pagination import (
     InlinePaginationCursor,
     encode_inline_pagination_cursor,
 )
+from cringe_pics_telebot.services.inline_search import InlineSearch, InlineSearchMode
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
-
-
-@pytest.mark.parametrize(
-    ("query", "category", "search_aliases", "matches"),
-    [
-        ("day", "/day", (), True),
-        ("  DA ", "/day", (), True),
-        ("/d", "/day", (), True),
-        ("ING", "/evening", (), True),
-        ("  УТР  ", "/morning", ("утро", "утренняя", "с утра"), True),
-        ("/ВЕЧЕРН", "/evening", ("вечер", "  Вечерняя "), True),
-        ("днев", "/day", ("", "   ", "/", "дневная", " ДНЕВНАЯ "), True),
-        ("", "/day", ("день",), False),
-        (" / ", "/day", ("день",), False),
-        ("night", "/day", ("день",), False),
-    ],
-)
-def test_category_matches_query(
-    query: str,
-    category: str,
-    search_aliases: tuple[str, ...],
-    matches: bool,
-) -> None:
-    assert_that(inline.category_matches_query(query, category, search_aliases), is_(matches))
-
-
-@pytest.mark.parametrize("query", ["", "   ", " / "])
-async def test_find_subscription_types_returns_all_categories_for_normalized_empty_query(
-    monkeypatch: MonkeyPatch,
-    query: str,
-) -> None:
-    subscription_types = [
-        _subscription_type(1, "/morning", "morning"),
-        _subscription_type(2, "/day", "day"),
-    ]
-    monkeypatch.setattr(inline, "get_subscription_types", lambda: _async_result(subscription_types))
-
-    assert_that(await inline._find_subscription_types(query), equal_to(subscription_types))
-
-
-async def test_find_subscription_types_returns_every_matching_category(monkeypatch: MonkeyPatch) -> None:
-    subscription_types = [
-        _subscription_type(1, "/morning", "morning", search_aliases=("утро", " общее ", "/ОБЩЕЕ")),
-        _subscription_type(2, "/day", "day"),
-        _subscription_type(3, "/evening", "evening", search_aliases=("вечер", "общее")),
-        _subscription_type(4, "/night", "night"),
-    ]
-
-    async def get_subscription_types() -> list[SubscriptionType]:
-        return subscription_types
-
-    monkeypatch.setattr(inline, "get_subscription_types", get_subscription_types)
-
-    assert_that(
-        await inline._find_subscription_types(" /ОБЩ "),
-        equal_to([subscription_types[0], subscription_types[2]]),
-    )
 
 
 async def test_get_inline_results_combines_categories_without_duplicate_paths(monkeypatch: MonkeyPatch) -> None:
@@ -95,9 +39,11 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
         subscription_types: list[SubscriptionType],
         *,
         cursor: InlinePaginationCursor | None,
+        search_terms: tuple[str, ...],
     ) -> InlineImagesPage:
         assert_that(subscription_types, equal_to([morning, evening]))
         assert_that(cursor, equal_to(expected_cursor))
+        assert_that(search_terms, equal_to(()))
         images: list[tuple[SubscriptionType, CachedMedia | LinkedMedia]] = [
             (
                 morning,
@@ -361,9 +307,9 @@ async def test_answer_inline_query_uses_category_results_for_normalized_empty_qu
     category_results = _inline_results(2)
     query = _FakeInlineQuery(query=query_text)
 
-    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+    async def resolve_search(query: str) -> InlineSearch:
         assert_that(query, equal_to(query_text))
-        return [subscription_type]
+        return InlineSearch(InlineSearchMode.empty, "", (subscription_type,))
 
     async def get_inline_category_results(
         subscription_types: list[SubscriptionType],
@@ -375,10 +321,11 @@ async def test_answer_inline_query_uses_category_results_for_normalized_empty_qu
         subscription_types: list[SubscriptionType],
         *,
         cursor: InlinePaginationCursor | None,
+        search_terms: tuple[str, ...],
     ) -> inline.InlineResultsPage:
         raise AssertionError("ordinary inline results must not be loaded for an empty query")
 
-    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_resolve_inline_search", resolve_search)
     monkeypatch.setattr(inline, "_get_inline_category_results", get_inline_category_results)
     monkeypatch.setattr(inline, "_get_inline_results", fail_get_inline_results)
 
@@ -402,20 +349,22 @@ async def test_answer_inline_query_passes_offset_and_next_offset_and_disables_te
         offset=encode_inline_pagination_cursor(incoming_cursor, "day"),
     )
 
-    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+    async def resolve_search(query: str) -> InlineSearch:
         assert_that(query, equal_to("  DAY "))
-        return [subscription_type]
+        return InlineSearch(InlineSearchMode.category, "day", (subscription_type,))
 
     async def get_inline_results(
         subscription_types: list[SubscriptionType],
         *,
         cursor: InlinePaginationCursor | None,
+        search_terms: tuple[str, ...],
     ) -> inline.InlineResultsPage:
         assert_that(subscription_types, equal_to([subscription_type]))
         assert_that(cursor, equal_to(incoming_cursor))
+        assert_that(search_terms, equal_to(()))
         return inline.InlineResultsPage(results=tuple(results), next_cursor=next_cursor)
 
-    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_resolve_inline_search", resolve_search)
     monkeypatch.setattr(inline, "_get_inline_results", get_inline_results)
 
     await inline.answer_inline_query(cast(InlineQuery, query))
@@ -433,10 +382,10 @@ async def test_answer_inline_query_rejects_invalid_cursor_with_empty_terminal_pa
     subscription_type = _subscription_type(2, "/day", "day")
     query = _FakeInlineQuery(query="day", offset="invalid")
 
-    async def find_subscription_types(query: str) -> list[SubscriptionType]:
-        return [subscription_type]
+    async def resolve_search(query: str) -> InlineSearch:
+        return InlineSearch(InlineSearchMode.category, "day", (subscription_type,))
 
-    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_resolve_inline_search", resolve_search)
 
     with caplog.at_level(logging.INFO):
         await inline.answer_inline_query(cast(InlineQuery, query))
@@ -455,17 +404,19 @@ async def test_answer_inline_query_records_handled_result_error(
     subscription_type = _subscription_type(2, "/day", "day")
     query = _FakeInlineQuery(query="day")
 
-    async def find_subscription_types(query: str) -> list[SubscriptionType]:
-        return [subscription_type]
+    async def resolve_search(query: str) -> InlineSearch:
+        return InlineSearch(InlineSearchMode.category_media, "day cat", (subscription_type,), ("cat",))
 
     async def get_inline_results(
         subscription_types: list[SubscriptionType],
         *,
         cursor: InlinePaginationCursor | None,
+        search_terms: tuple[str, ...],
     ) -> inline.InlineResultsPage:
+        assert_that(search_terms, equal_to(("cat",)))
         raise RuntimeError("catalog unavailable")
 
-    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_resolve_inline_search", resolve_search)
     monkeypatch.setattr(inline, "_get_inline_results", get_inline_results)
 
     with caplog.at_level(logging.INFO):
@@ -483,10 +434,10 @@ async def test_answer_inline_query_records_and_propagates_unhandled_error(
 ) -> None:
     query = _FakeInlineQuery(query="day")
 
-    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+    async def resolve_search(query: str) -> InlineSearch:
         raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_resolve_inline_search", resolve_search)
 
     with caplog.at_level(logging.INFO), pytest.raises(RuntimeError, match="database unavailable"):
         await inline.answer_inline_query(cast(InlineQuery, query))
@@ -502,10 +453,10 @@ async def test_answer_inline_query_records_and_propagates_cancellation(
 ) -> None:
     query = _FakeInlineQuery(query="day")
 
-    async def find_subscription_types(query: str) -> list[SubscriptionType]:
+    async def resolve_search(query: str) -> InlineSearch:
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(inline, "_find_subscription_types", find_subscription_types)
+    monkeypatch.setattr(inline, "_resolve_inline_search", resolve_search)
 
     with caplog.at_level(logging.INFO), pytest.raises(asyncio.CancelledError):
         await inline.answer_inline_query(cast(InlineQuery, query))

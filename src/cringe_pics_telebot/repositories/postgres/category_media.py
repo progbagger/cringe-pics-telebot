@@ -2,18 +2,21 @@ from collections.abc import Collection, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import case, or_, select, update
+from sqlalchemy import case, delete, exists, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Row
+
+from cringe_pics_telebot.entities.search_aliases import SearchAlias
 
 from .connection import get_connection
 from .entities.category_media import (
     CategoryMedia,
+    CategoryMediaSearchMetadata,
     CategoryMediaSource,
     CategoryMediaStatus,
     TelegramMediaType,
 )
-from .tables import category_media
+from .tables import category_media, media_search_aliases, subscription_types
 
 
 async def get_category_media_by_subscription_types(
@@ -49,6 +52,81 @@ async def get_category_media(media_id: int, *, with_for_update: bool = False) ->
     async with get_connection() as conn:
         row = (await conn.execute(query)).one_or_none()
     return _category_media_from_row(row) if row is not None else None
+
+
+async def get_category_media_search_metadata(
+    media_id: int,
+) -> CategoryMediaSearchMetadata | None:
+    items = await _get_category_media_search_metadata(media_id=media_id)
+    return items[0] if items else None
+
+
+async def get_category_media_search_metadata_by_subscription_type(
+    subscription_type_id: int,
+    *,
+    active_only: bool = False,
+) -> list[CategoryMediaSearchMetadata]:
+    return await _get_category_media_search_metadata(
+        subscription_type_id=subscription_type_id,
+        active_only=active_only,
+    )
+
+
+async def replace_media_search_aliases(media_id: int, aliases: Sequence[SearchAlias]) -> None:
+    async with get_connection() as conn:
+        await conn.execute(delete(media_search_aliases).where(media_search_aliases.c.media_id == media_id))
+        if aliases:
+            await conn.execute(
+                insert(media_search_aliases).values(
+                    [
+                        {
+                            "media_id": media_id,
+                            "position": position,
+                            "alias": alias.text,
+                            "normalized_alias": alias.normalized,
+                        }
+                        for position, alias in enumerate(aliases)
+                    ]
+                )
+            )
+
+
+async def find_category_media_by_search_terms(
+    search_terms: Sequence[str],
+    *,
+    subscription_type_ids: Sequence[int] | None = None,
+) -> list[CategoryMedia]:
+    if not search_terms or subscription_type_ids is not None and not subscription_type_ids:
+        return []
+
+    query = (
+        select(category_media)
+        .join(
+            subscription_types,
+            subscription_types.c.id == category_media.c.subscription_type_id,
+        )
+        .where(
+            category_media.c.is_active.is_(True),
+            subscription_types.c.is_active.is_(True),
+        )
+    )
+    if subscription_type_ids is not None:
+        query = query.where(category_media.c.subscription_type_id.in_(subscription_type_ids))
+    for position, search_term in enumerate(search_terms):
+        alias_for_term = media_search_aliases.alias(f"media_search_alias_{position}")
+        query = query.where(
+            exists(
+                select(alias_for_term.c.media_id).where(
+                    alias_for_term.c.media_id == category_media.c.id,
+                    alias_for_term.c.normalized_alias.contains(search_term, autoescape=True),
+                )
+            )
+        )
+    query = query.order_by(category_media.c.subscription_type_id, category_media.c.id)
+
+    async with get_connection() as conn:
+        rows = (await conn.execute(query)).all()
+    return [_category_media_from_row(row) for row in rows]
 
 
 async def upsert_category_media_snapshot(
@@ -193,6 +271,41 @@ async def invalidate_category_media_file_id(
             )
         ).one_or_none()
     return _category_media_from_row(row) if row is not None else None
+
+
+async def _get_category_media_search_metadata(
+    *,
+    media_id: int | None = None,
+    subscription_type_id: int | None = None,
+    active_only: bool = False,
+) -> list[CategoryMediaSearchMetadata]:
+    query = (
+        select(category_media, media_search_aliases.c.alias.label("search_alias"))
+        .outerjoin(media_search_aliases, media_search_aliases.c.media_id == category_media.c.id)
+        .order_by(category_media.c.subscription_type_id, category_media.c.id, media_search_aliases.c.position)
+    )
+    if media_id is not None:
+        query = query.where(category_media.c.id == media_id)
+    if subscription_type_id is not None:
+        query = query.where(category_media.c.subscription_type_id == subscription_type_id)
+    if active_only:
+        query = query.where(category_media.c.is_active.is_(True))
+
+    async with get_connection() as conn:
+        rows = (await conn.execute(query)).all()
+
+    media_by_id: dict[int, tuple[CategoryMedia, list[str]]] = {}
+    for row in rows:
+        if (item := media_by_id.get(row.id)) is None:
+            item = (_category_media_from_row(row), [])
+            media_by_id[row.id] = item
+        _, aliases = item
+        if row.search_alias is not None:
+            aliases.append(row.search_alias)
+    return [
+        CategoryMediaSearchMetadata(media=media, search_aliases=tuple(aliases))
+        for media, aliases in media_by_id.values()
+    ]
 
 
 def _category_media_from_row(row: Row[Any]) -> CategoryMedia:

@@ -188,6 +188,38 @@ category_media = sa.Table(
     ),
 )
 
+
+media_search_aliases = sa.Table(
+    "media_search_aliases",
+    _metadata,
+    sa.Column(
+        "media_id",
+        sa.BIGINT,
+        sa.ForeignKey(category_media.c.id, ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    ),
+    sa.Column("position", sa.INTEGER, primary_key=True, nullable=False),
+    sa.Column("alias", sa.Text, nullable=False),
+    sa.Column("normalized_alias", sa.Text, nullable=False),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.CheckConstraint("position >= 0", name="media_search_aliases_position_nonnegative"),
+    sa.CheckConstraint("btrim(alias) <> ''", name="media_search_aliases_alias_nonempty"),
+    sa.CheckConstraint("btrim(normalized_alias) <> ''", name="media_search_aliases_normalized_alias_nonempty"),
+    sa.UniqueConstraint(
+        "media_id",
+        "normalized_alias",
+        name="media_search_aliases_media_normalized_key",
+    ),
+    sa.Index(
+        "media_search_aliases_normalized_trgm_idx",
+        "normalized_alias",
+        postgresql_using="gin",
+        postgresql_ops={"normalized_alias": "gin_trgm_ops"},
+    ),
+)
+
 user_media_cycle_states = sa.Table(
     "user_media_cycle_states",
     _metadata,

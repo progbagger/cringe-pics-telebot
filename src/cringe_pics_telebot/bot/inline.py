@@ -1,6 +1,5 @@
 import hashlib
 import logging
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 from aiogram import Router
@@ -35,6 +34,11 @@ from cringe_pics_telebot.services.inline_pagination import (
     decode_inline_pagination_cursor,
     encode_inline_pagination_cursor,
 )
+from cringe_pics_telebot.services.inline_search import (
+    InlineSearch,
+    InlineSearchMode,
+    resolve_inline_search,
+)
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import get_subscription_types
 
@@ -64,32 +68,36 @@ router = Router(name="inline")
 
 @router.inline_query()
 async def answer_inline_query(inline_query: InlineQuery) -> None:
-    normalized_query = normalize_category_search_term(inline_query.query)
-    query_is_empty = not bool(normalized_query)
+    query_is_empty = not bool(normalize_category_search_term(inline_query.query))
     with InlineQueryMetrics.start(query_is_empty=query_is_empty) as metrics:
-        subscription_types = await _find_subscription_types(inline_query.query)
-        metrics.counts.matched_categories = len(subscription_types)
+        search = await _resolve_inline_search(inline_query.query)
+        metrics.set_search_mode(search.mode)
+        metrics.counts.matched_categories = len(search.subscription_types)
 
-        if not subscription_types:
+        if not search.subscription_types:
             await _answer_inline_query(
                 inline_query,
                 [],
                 next_cursor=None,
-                normalized_query=normalized_query,
+                normalized_query=search.normalized_query,
             )
             return
 
         next_cursor: InlinePaginationCursor | None = None
         try:
-            if query_is_empty:
-                results = await _get_inline_category_results(subscription_types)
+            if search.mode is InlineSearchMode.empty:
+                results = await _get_inline_category_results(list(search.subscription_types))
             else:
                 cursor = (
-                    decode_inline_pagination_cursor(inline_query.offset, normalized_query)
+                    decode_inline_pagination_cursor(inline_query.offset, search.normalized_query)
                     if inline_query.offset
                     else None
                 )
-                page = await _get_inline_results(subscription_types, cursor=cursor)
+                page = await _get_inline_results(
+                    list(search.subscription_types),
+                    cursor=cursor,
+                    search_terms=search.search_terms,
+                )
                 results = list(page.results)
                 next_cursor = page.next_cursor
             metrics.counts.results_prepared = len(results)
@@ -114,49 +122,30 @@ async def answer_inline_query(inline_query: InlineQuery) -> None:
             inline_query,
             answer_results,
             next_cursor=next_cursor,
-            normalized_query=normalized_query,
+            normalized_query=search.normalized_query,
         )
 
 
 @inline_query_stage(CATEGORIES_LOOKUP_STAGE)
-async def _find_subscription_types(query: str) -> list[SubscriptionType]:
+async def _resolve_inline_search(query: str) -> InlineSearch:
     metrics = get_inline_query_metrics()
     if metrics is not None:
         metrics.counts.postgres_calls += 1
     subscription_types = await get_subscription_types()
-    if not normalize_category_search_term(query):
-        return subscription_types
-
-    return [
-        subscription_type
-        for subscription_type in subscription_types
-        if category_matches_query(
-            query,
-            subscription_type.name,
-            subscription_type.search_aliases,
-        )
-    ]
-
-
-def category_matches_query(query: str, category: str, search_aliases: Sequence[str] = ()) -> bool:
-    normalized_query = normalize_category_search_term(query)
-    if not normalized_query:
-        return False
-
-    normalized_terms = {
-        normalized_term
-        for term in (category, *search_aliases)
-        if (normalized_term := normalize_category_search_term(term))
-    }
-    return any(normalized_query in term for term in normalized_terms)
+    return resolve_inline_search(query, subscription_types)
 
 
 async def _get_inline_results(
     subscription_types: list[SubscriptionType],
     *,
     cursor: InlinePaginationCursor | None,
+    search_terms: tuple[str, ...] = (),
 ) -> InlineResultsPage:
-    images_page = await get_inline_images(subscription_types, cursor=cursor)
+    images_page = await get_inline_images(
+        subscription_types,
+        cursor=cursor,
+        search_terms=search_terms,
+    )
     ordinary_results = _build_inline_results(list(images_page.ordinary_images))
     special_result = (
         _build_random_inline_result(*images_page.special_image) if images_page.special_image is not None else None
