@@ -54,6 +54,7 @@ def test_inline_metrics_emit_correlated_stage_scenario_and_dependency_data(
             CounterMetric("inline.scenarios.mixed.requests"),
             CounterMetric("inline.category_sets.multiple.requests"),
             CounterMetric("inline.catalog_sizes.small.requests"),
+            CounterMetric("inline.search_modes.category.requests"),
             CounterMetric("inline.dependencies.postgres.calls", 2),
             CounterMetric("inline.dependencies.yandex.calls", 2),
             CounterMetric("inline.dependencies.redis.calls", 0),
@@ -92,6 +93,7 @@ def test_inline_metrics_emit_correlated_stage_scenario_and_dependency_data(
                 "event": "inline_query_metrics",
                 "outcome": "partial_error",
                 "scenario": "mixed",
+                "search_mode": "category",
             }
         ),
     )
@@ -127,6 +129,17 @@ def test_inline_metrics_classify_low_cardinality_scenarios(
         assert_that(metrics.scenario, equal_to(scenario))
         assert_that(metrics.category_set, equal_to(category_set))
         assert_that(metrics.catalog_size, equal_to(size))
+
+
+@pytest.mark.parametrize("search_mode", ["global_media", "category_media"])
+def test_inline_metrics_classify_empty_media_search_without_query_cardinality(
+    search_mode: str,
+) -> None:
+    with InlineQueryMetrics.start(query_is_empty=False, clock=lambda: 1) as metrics:
+        metrics.set_search_mode(search_mode)
+        metrics.counts.matched_categories = 3
+
+        assert_that(metrics.scenario, equal_to("no_media_match"))
 
 
 async def test_inline_stage_decorator_times_sync_and_async_functions() -> None:

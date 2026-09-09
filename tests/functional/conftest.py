@@ -24,6 +24,7 @@ from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 from cringe_pics_telebot.services.admin_broadcasts import run_due_admin_broadcasts
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary, synchronize_media_catalog
+from cringe_pics_telebot.services.search_aliases import normalize_search_term
 from cringe_pics_telebot.services.subscription_broadcasts import run_due_subscription_broadcasts
 
 ROOT_DIR = Path(__file__).parents[2]
@@ -1041,6 +1042,42 @@ async def set_functional_category_media_file_ids(
             await connection.close()
 
     return set_file_ids
+
+
+@pytest.fixture
+async def set_functional_media_search_aliases(
+    docker_compose: DependencyPorts,
+) -> Callable[[dict[str, tuple[str, ...]]], Awaitable[None]]:
+    async def set_aliases(aliases_by_path: dict[str, tuple[str, ...]]) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    "SELECT id, source_path FROM category_media WHERE source_path = ANY($1::text[])",
+                    list(aliases_by_path),
+                )
+                media_ids_by_path = {row["source_path"]: row["id"] for row in rows}
+                missing_paths = set(aliases_by_path) - media_ids_by_path.keys()
+                if missing_paths:
+                    raise AssertionError(f"Media not found for aliases: {sorted(missing_paths)}")
+
+                for source_path, aliases in aliases_by_path.items():
+                    media_id = media_ids_by_path[source_path]
+                    await connection.execute("DELETE FROM media_search_aliases WHERE media_id = $1", media_id)
+                    await connection.executemany(
+                        """
+                        INSERT INTO media_search_aliases(media_id, position, alias, normalized_alias)
+                        VALUES ($1, $2, $3, $4)
+                        """,
+                        [
+                            (media_id, position, alias, normalize_search_term(alias))
+                            for position, alias in enumerate(aliases)
+                        ],
+                    )
+        finally:
+            await connection.close()
+
+    return set_aliases
 
 
 @pytest.fixture

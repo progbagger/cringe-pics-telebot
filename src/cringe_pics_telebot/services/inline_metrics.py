@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 CATEGORIES_LOOKUP_STAGE = "categories.lookup"
 MEDIA_CATALOG_STAGE = "media.catalog"
+MEDIA_SEARCH_STAGE = "media.search"
 MEDIA_URLS_STAGE = "media.urls"
 RESULTS_PREPARE_STAGE = "results.prepare"
 TELEGRAM_ANSWER_STAGE = "telegram.answer"
@@ -58,6 +59,7 @@ class InlineQueryMetrics:
     _outcome: str = "success"
     _stage_durations_ms: dict[str, float] = field(default_factory=dict)
     _finished: bool = False
+    _search_mode: str = "category"
 
     @classmethod
     @contextmanager
@@ -76,6 +78,7 @@ class InlineQueryMetrics:
             _sink=sink or get_metrics_sink(),
             _clock=clock,
             _started_at=clock(),
+            _search_mode="empty" if query_is_empty else "category",
         )
         try:
             with _current_inline_metrics.set(metrics):
@@ -102,6 +105,9 @@ class InlineQueryMetrics:
     def set_outcome(self, outcome: str) -> None:
         self._outcome = outcome
 
+    def set_search_mode(self, search_mode: str) -> None:
+        self._search_mode = search_mode
+
     @property
     def outcome(self) -> str:
         return self._outcome
@@ -115,6 +121,7 @@ class InlineQueryMetrics:
         scenario = self.scenario
         category_set = self.category_set
         catalog_size = self.catalog_size
+        search_mode = self._search_mode
         durations_ms = {"total": total_ms, **self._stage_durations_ms}
         self._sink.emit(
             self._metrics(
@@ -122,6 +129,7 @@ class InlineQueryMetrics:
                 scenario=scenario,
                 category_set=category_set,
                 catalog_size=catalog_size,
+                search_mode=search_mode,
             )
         )
         logger.info(
@@ -131,6 +139,7 @@ class InlineQueryMetrics:
                     "correlation_id": self.correlation_id,
                     "outcome": self._outcome,
                     "scenario": scenario,
+                    "search_mode": search_mode,
                     "category_set": category_set,
                     "catalog_size": catalog_size,
                     "durations_ms": {name: round(value, 3) for name, value in durations_ms.items()},
@@ -146,6 +155,8 @@ class InlineQueryMetrics:
     def scenario(self) -> str:
         if self.query_is_empty:
             return "empty_query"
+        if self._search_mode in {"global_media", "category_media"} and self.counts.catalog_media == 0:
+            return "no_media_match"
         if self.counts.matched_categories == 0:
             return "unknown_category"
         if self.counts.catalog_media == 0:
@@ -179,6 +190,7 @@ class InlineQueryMetrics:
         scenario: str,
         category_set: str,
         catalog_size: str,
+        search_mode: str,
     ) -> list[Metric]:
         metrics: list[Metric] = [
             CounterMetric("inline.requests"),
@@ -186,11 +198,13 @@ class InlineQueryMetrics:
             CounterMetric(f"inline.scenarios.{scenario}.requests"),
             CounterMetric(f"inline.category_sets.{category_set}.requests"),
             CounterMetric(f"inline.catalog_sizes.{catalog_size}.requests"),
+            CounterMetric(f"inline.search_modes.{search_mode}.requests"),
             TimingMetric("inline.total", total_ms),
             TimingMetric(f"inline.outcomes.{self._outcome}.total", total_ms),
             TimingMetric(f"inline.scenarios.{scenario}.total", total_ms),
             TimingMetric(f"inline.category_sets.{category_set}.total", total_ms),
             TimingMetric(f"inline.catalog_sizes.{catalog_size}.total", total_ms),
+            TimingMetric(f"inline.search_modes.{search_mode}.total", total_ms),
         ]
         metrics.extend(
             TimingMetric(f"inline.stages.{name}", milliseconds)

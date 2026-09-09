@@ -298,6 +298,41 @@ async def test_get_inline_images_returns_empty_without_url_resolution(
     assert_that(page.next_cursor, equal_to(None))
 
 
+async def test_get_inline_images_uses_search_repository_with_category_scope(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    media = [_media(1, file_id="telegram-match")]
+
+    async def find_media(
+        search_terms: tuple[str, ...],
+        *,
+        subscription_type_ids: list[int],
+    ) -> list[CategoryMedia]:
+        assert_that(search_terms, equal_to(("сонный", "кот")))
+        assert_that(subscription_type_ids, equal_to([2]))
+        return media
+
+    async def fail_get_catalog(category_ids: list[int]) -> list[CategoryMedia]:
+        raise AssertionError("unfiltered catalog must not be loaded for media search")
+
+    monkeypatch.setattr(inline_images, "find_category_media_by_search_terms", find_media)
+    monkeypatch.setattr(inline_images, "get_category_media_by_subscription_types", fail_get_catalog)
+
+    with InlineQueryMetrics.start(query_is_empty=False, clock=lambda: 1) as metrics:
+        page = await inline_images.get_inline_images(
+            [_subscription_type()],
+            cursor=None,
+            search_terms=("сонный", "кот"),
+            seed_factory=lambda: b"seed-001",
+        )
+
+    assert page.special_image is not None
+    assert_that(page.special_image[1], has_properties(path="day/1.png"))
+    assert_that(page.ordinary_images, empty())
+    assert_that(metrics.counts.catalog_media, equal_to(1))
+    assert_that(metrics.counts.postgres_calls, equal_to(1))
+
+
 async def test_get_inline_category_images_selects_one_per_nonempty_category_and_prefers_ready(
     monkeypatch: MonkeyPatch,
 ) -> None:
