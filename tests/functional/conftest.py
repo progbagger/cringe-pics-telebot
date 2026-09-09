@@ -15,7 +15,7 @@ import asyncpg
 import pytest
 import pytest_asyncio
 from aiogram import Bot
-from hamcrest import assert_that, empty, equal_to, greater_than_or_equal_to, is_, none
+from hamcrest import assert_that, contains_string, empty, equal_to, greater_than_or_equal_to, is_, none
 from redis import asyncio as redis
 
 from cringe_pics_telebot.bot.bot import create_bot
@@ -388,6 +388,32 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         env=_bot_env(dependency_ports),
     )
     await _prepare_pre_weekdays_rows(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
+        "0012",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_media_search_aliases_table_absent(dependency_ports)
     await _run_checked(
         "uv",
         "run",
@@ -1186,6 +1212,7 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
             TRUNCATE
                 user_media_cycle_entries,
                 user_media_cycle_states,
+                media_search_aliases,
                 category_media,
                 admin_broadcast_deliveries,
                 admin_broadcast_recipients,
@@ -1374,6 +1401,20 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             equal_to("category_media"),
         )
         assert_that(
+            await connection.fetchval("SELECT to_regclass('media_search_aliases')"),
+            equal_to("media_search_aliases"),
+        )
+        assert_that(
+            await connection.fetchval("SELECT extname FROM pg_extension WHERE extname = 'pg_trgm'"),
+            equal_to("pg_trgm"),
+        )
+        assert_that(
+            await connection.fetchval(
+                "SELECT indexdef FROM pg_indexes WHERE indexname = 'media_search_aliases_normalized_trgm_idx'"
+            ),
+            contains_string("USING gin (normalized_alias gin_trgm_ops)"),
+        )
+        assert_that(
             await connection.fetchval("SELECT to_regclass('user_media_cycle_states')"),
             equal_to("user_media_cycle_states"),
         )
@@ -1413,7 +1454,37 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             ),
             equal_to("video"),
         )
+        media_id = await connection.fetchval(
+            "SELECT id FROM category_media WHERE source_path = 'migration-probe/video.mp4'"
+        )
+        await connection.execute(
+            """
+            INSERT INTO media_search_aliases(media_id, position, alias, normalized_alias)
+            VALUES($1, 0, 'Сонный кот', 'сонный кот')
+            """,
+            media_id,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO media_search_aliases(media_id, position, alias, normalized_alias)
+                VALUES($1, 1, 'СОННЫЙ КОТ', 'сонный кот')
+                """,
+                media_id,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await connection.execute(
+                """
+                INSERT INTO media_search_aliases(media_id, position, alias, normalized_alias)
+                VALUES($1, 1, ' ', ' ')
+                """,
+                media_id,
+            )
         await connection.execute("DELETE FROM category_media WHERE source_path = 'migration-probe/video.mp4'")
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM media_search_aliases WHERE media_id = $1", media_id),
+            equal_to(0),
+        )
         with pytest.raises(asyncpg.CheckViolationError):
             await connection.execute(
                 """
@@ -1462,6 +1533,15 @@ async def _assert_weekdays_column_absent(dependency_ports: DependencyPorts) -> N
         await connection.execute(
             "UPDATE subscription_types SET time = '12:00' WHERE name = '/migration-null-schedule-probe'"
         )
+    finally:
+        await connection.close()
+
+
+async def _assert_media_search_aliases_table_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert_that(await connection.fetchval("SELECT to_regclass('media_search_aliases')"), none())
+        assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), equal_to("category_media"))
     finally:
         await connection.close()
 

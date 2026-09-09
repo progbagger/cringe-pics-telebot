@@ -4,6 +4,7 @@ from .admin_broadcast_delivery import AdminBroadcastDelivery as AdminBroadcastDe
 from .admin_broadcast_delivery import AdminBroadcastDeliveryStatus as AdminBroadcastDeliveryStatus
 from .category_media import CategoryMedia as CategoryMedia
 from .category_media import CategoryMediaReconcileResult as CategoryMediaReconcileResult
+from .category_media import CategoryMediaSearchMetadata as CategoryMediaSearchMetadata
 from .category_media import CategoryMediaSource as CategoryMediaSource
 from .category_media import CategoryMediaStatus as CategoryMediaStatus
 from .category_media import TelegramMediaType as TelegramMediaType

@@ -15,12 +15,18 @@ from .administrators import is_administrator as is_administrator
 from .category_media import (
     deactivate_category_media_missing_from_snapshot as deactivate_category_media_missing_from_snapshot,
 )
+from .category_media import find_category_media_by_search_terms as find_category_media_by_search_terms
 from .category_media import get_category_media as get_category_media
 from .category_media import (
     get_category_media_by_subscription_types as get_category_media_by_subscription_types,
 )
+from .category_media import get_category_media_search_metadata as get_category_media_search_metadata
+from .category_media import (
+    get_category_media_search_metadata_by_subscription_type as get_category_media_search_metadata_by_subscription_type,
+)
 from .category_media import invalidate_category_media_file_id as invalidate_category_media_file_id
 from .category_media import materialize_category_media as materialize_category_media
+from .category_media import replace_media_search_aliases as replace_media_search_aliases
 from .category_media import upsert_category_media_snapshot as upsert_category_media_snapshot
 from .connection import AlreadyConnectedError as AlreadyConnectedError
 from .connection import DbConnectionError as DbConnectionError
@@ -30,6 +36,7 @@ from .connection import get_connection as get_connection
 from .connection import transaction as transaction
 from .entities import CategoryMedia as CategoryMedia
 from .entities import CategoryMediaReconcileResult as CategoryMediaReconcileResult
+from .entities import CategoryMediaSearchMetadata as CategoryMediaSearchMetadata
 from .entities import CategoryMediaSource as CategoryMediaSource
 from .entities import CategoryMediaStatus as CategoryMediaStatus
 from .entities import CreateSubscriptionType as CreateSubscriptionType

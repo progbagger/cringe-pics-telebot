@@ -44,6 +44,12 @@ class CategoryMedia:
 
 
 @dataclass(frozen=True, slots=True)
+class CategoryMediaSearchMetadata:
+    media: CategoryMedia
+    search_aliases: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class CategoryMediaReconcileResult:
     discovered: int
     created: int

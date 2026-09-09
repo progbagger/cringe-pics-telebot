@@ -1,24 +1,16 @@
+from .search_aliases import InvalidSearchAliasesError, normalize_search_term, parse_search_aliases
+
+
 class InvalidCategoryAliasesError(ValueError): ...
 
 
 def normalize_category_search_term(term: str) -> str:
-    return term.strip().removeprefix("/").casefold()
+    return normalize_search_term(term, strip_leading_slash=True)
 
 
 def parse_category_search_aliases(value: str) -> tuple[str, ...]:
-    aliases: list[str] = []
-    normalized_aliases: set[str] = set()
-
-    for line in value.splitlines():
-        alias = line.strip()
-        normalized_alias = normalize_category_search_term(alias)
-        if not normalized_alias or normalized_alias in normalized_aliases:
-            continue
-
-        aliases.append(alias)
-        normalized_aliases.add(normalized_alias)
-
-    if not aliases:
-        raise InvalidCategoryAliasesError
-
-    return tuple(aliases)
+    try:
+        aliases = parse_search_aliases(value, strip_leading_slash=True)
+    except InvalidSearchAliasesError as error:
+        raise InvalidCategoryAliasesError from error
+    return tuple(alias.text for alias in aliases)
