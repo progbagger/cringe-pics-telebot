@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
     SubscriptionType,
+    TelegramMediaType,
     get_category_media_by_subscription_types,
 )
 from cringe_pics_telebot.repositories.yandex import get_download_urls
@@ -40,7 +41,8 @@ async def get_inline_images(
 ) -> InlineImagesPage:
     media = await _get_catalog_media([item.id for item in subscription_types])
     _record_catalog_media_count(media)
-    deduplicated_media = _deduplicate_inline_media(media, subscription_types=subscription_types)
+    inline_media = _filter_inline_media(media)
+    deduplicated_media = _deduplicate_inline_media(inline_media, subscription_types=subscription_types)
     catalog_page = paginate_inline_media(
         deduplicated_media,
         cursor,
@@ -76,7 +78,7 @@ async def get_inline_category_images(
     media = await _get_catalog_media([item.id for item in subscription_types])
     _record_catalog_media_count(media)
     selected_media = _select_inline_category_media(
-        media,
+        _filter_inline_media(media),
         subscription_types=subscription_types,
         limit=limit,
         chooser=chooser,
@@ -88,6 +90,14 @@ def _record_catalog_media_count(media: Sequence[CategoryMedia]) -> None:
     metrics = get_inline_query_metrics()
     if metrics is not None:
         metrics.counts.catalog_media = len(media)
+
+
+def _filter_inline_media(media: Sequence[CategoryMedia]) -> list[CategoryMedia]:
+    return [
+        item
+        for item in media
+        if item.telegram_media_type is not TelegramMediaType.video or item.telegram_file_id is not None
+    ]
 
 
 def _select_inline_category_media(

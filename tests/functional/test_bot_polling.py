@@ -479,7 +479,7 @@ async def test_bot_sends_image_for_subscription_category(
     assert_that([method for method in yandex_methods if method == "download"], empty())
 
 
-async def test_bot_materializes_mp4_and_reuses_cached_video_for_ordinary_delivery(
+async def test_bot_materializes_mp4_for_ordinary_delivery_and_then_exposes_cached_video_inline(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
@@ -496,6 +496,17 @@ async def test_bot_materializes_mp4_and_reuses_cached_video_for_ordinary_deliver
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
 
+    await fake_telegram_server.push_inline_query(query="video", query_id="inline-pending-video")
+    pending_inline = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-pending-video",
+    )
+    assert_that(pending_inline["payload"]["results"], empty())
+    assert_that(pending_inline["payload"].get("next_offset", ""), equal_to(""))
+    assert_that(await fake_yandex_server.requests(), empty())
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text="/video")
     first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
 
@@ -508,6 +519,45 @@ async def test_bot_materializes_mp4_and_reuses_cached_video_for_ordinary_deliver
         await read_functional_category_media_states(),
         equal_to({"video/clip.mp4": ("ready", "functional-video-file-id")}),
     )
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_telegram_server.push_inline_query(query="video", query_id="inline-ready-video")
+    ready_inline = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-ready-video",
+    )
+    assert_that(ready_inline["payload"]["results"], has_length(1))
+    assert_that(
+        ready_inline["payload"]["results"][0],
+        has_entries(
+            type="video",
+            video_file_id="functional-video-file-id",
+            title="🎲 Выбрать случайную картинку",
+            description="Категория /video",
+        ),
+    )
+    assert_that(len(ready_inline["payload"]["results"][0]["id"]), equal_to(64))
+    assert_that(await fake_yandex_server.requests(), empty())
+
+    await fake_telegram_server.reset()
+    await fake_yandex_server.reset()
+    await fake_telegram_server.push_inline_query(query="", query_id="inline-category-video")
+    category_inline = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "inline-category-video",
+    )
+    assert_that(category_inline["payload"]["results"], has_length(1))
+    assert_that(
+        category_inline["payload"]["results"][0],
+        has_entries(
+            type="video",
+            video_file_id="functional-video-file-id",
+            title="🎲 /video",
+            description="Категория /video",
+        ),
+    )
+    assert_that(await fake_yandex_server.requests(), empty())
 
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()

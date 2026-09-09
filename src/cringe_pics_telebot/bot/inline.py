@@ -8,6 +8,7 @@ from aiogram.types import (
     InlineQuery,
     InlineQueryResultCachedGif,
     InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVideo,
     InlineQueryResultGif,
     InlineQueryResultPhoto,
     InlineQueryResultUnion,
@@ -44,7 +45,11 @@ logger = logging.getLogger(__name__)
 RANDOM_INLINE_RESULT_TITLE = "🎲 Выбрать случайную картинку"
 
 type InlineMediaResult = (
-    InlineQueryResultCachedGif | InlineQueryResultCachedPhoto | InlineQueryResultGif | InlineQueryResultPhoto
+    InlineQueryResultCachedGif
+    | InlineQueryResultCachedPhoto
+    | InlineQueryResultCachedVideo
+    | InlineQueryResultGif
+    | InlineQueryResultPhoto
 )
 
 
@@ -247,6 +252,13 @@ def _inline_result(
     if isinstance(image, CachedMedia):
         if _is_animation(image):
             return InlineQueryResultCachedGif(id=result_id, gif_file_id=image.id, title=title)
+        if _is_video(image):
+            return InlineQueryResultCachedVideo(
+                id=result_id,
+                video_file_id=image.id,
+                title=title,
+                description=f"Категория {subscription_type.name}",
+            )
 
         return InlineQueryResultCachedPhoto(
             id=result_id,
@@ -255,6 +267,8 @@ def _inline_result(
             description=f"Категория {subscription_type.name}",
         )
 
+    if _is_video(image):
+        raise ValueError("Pending video cannot be used in inline results without a thumbnail")
     if _is_animation(image):
         return InlineQueryResultGif(
             id=result_id,
@@ -275,3 +289,7 @@ def _inline_result(
 
 def _is_animation(image: CachedMedia | LinkedMedia) -> bool:
     return "gif" in image.mime_type
+
+
+def _is_video(image: CachedMedia | LinkedMedia) -> bool:
+    return image.mime_type == "video/mp4"
