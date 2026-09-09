@@ -127,6 +127,8 @@ class FakeTelegram:
                 result = self._sent_media_message_from_payload(payload, media_key="photo")
             case "sendAnimation":
                 result = self._sent_media_message_from_payload(payload, media_key="animation")
+            case "sendVideo":
+                result = self._sent_media_message_from_payload(payload, media_key="video")
             case "copyMessage":
                 self._next_message_id += 1
                 result = {"message_id": self._next_message_id}
@@ -196,6 +198,14 @@ class FakeTelegram:
                 "height": 1,
                 "duration": 1,
             }
+        elif isinstance(media, dict) and media.get("type") == "video":
+            message["video"] = {
+                "file_id": "functional-video-file-id" if _is_uploaded_media(media_id) else str(media_id),
+                "file_unique_id": "functional-video-file-unique-id",
+                "width": 1,
+                "height": 1,
+                "duration": 1,
+            }
         else:
             message["photo"] = [
                 {
@@ -215,6 +225,14 @@ class FakeTelegram:
             message["animation"] = {
                 "file_id": "functional-animation-file-id" if _is_uploaded_media(media_id) else media_id,
                 "file_unique_id": "functional-animation-file-unique-id",
+                "width": 1,
+                "height": 1,
+                "duration": 1,
+            }
+        elif media_key == "video":
+            message["video"] = {
+                "file_id": "functional-video-file-id" if _is_uploaded_media(media_id) else media_id,
+                "file_unique_id": "functional-video-file-unique-id",
                 "width": 1,
                 "height": 1,
                 "duration": 1,
@@ -261,6 +279,8 @@ def _request_media_id(method: str, payload: dict[str, Any]) -> str | None:
         return str(payload.get("photo"))
     if method == "sendAnimation":
         return str(payload.get("animation"))
+    if method == "sendVideo":
+        return str(payload.get("video"))
     if method == "editMessageMedia" and isinstance(payload.get("media"), dict):
         return str(payload["media"].get("media"))
     return None

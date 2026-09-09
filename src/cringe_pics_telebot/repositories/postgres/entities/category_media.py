@@ -6,6 +6,7 @@ from enum import StrEnum
 class TelegramMediaType(StrEnum):
     photo = "photo"
     animation = "animation"
+    video = "video"
 
 
 class CategoryMediaStatus(StrEnum):

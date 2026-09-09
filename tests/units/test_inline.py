@@ -9,6 +9,7 @@ from aiogram.types import (
     InlineQuery,
     InlineQueryResultCachedGif,
     InlineQueryResultCachedPhoto,
+    InlineQueryResultCachedVideo,
     InlineQueryResultGif,
     InlineQueryResultPhoto,
     InlineQueryResultUnion,
@@ -138,6 +139,16 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
                     url="https://storage.example/evening.png",
                 ),
             ),
+            (
+                evening,
+                CachedMedia(
+                    name="cached-video.mp4",
+                    mime_type="video/mp4",
+                    path="evening/video.mp4",
+                    source_revision="sha256:video",
+                    id="telegram-video",
+                ),
+            ),
         ]
         return InlineImagesPage(special_image=None, ordinary_images=tuple(images), next_cursor=next_cursor)
 
@@ -146,10 +157,14 @@ async def test_get_inline_results_combines_categories_without_duplicate_paths(mo
     page = await inline._get_inline_results([morning, evening], cursor=expected_cursor)
     payloads = [result.model_dump(exclude_none=True) for result in page.results]
 
-    assert_that([payload["title"] for payload in payloads], equal_to(["shared.png", "morning.png", "evening.png"]))
+    assert_that(
+        [payload["title"] for payload in payloads],
+        equal_to(["shared.png", "morning.png", "evening.png", "cached-video.mp4"]),
+    )
     assert_that(payloads[0]["description"], equal_to("Категория /morning"))
-    assert_that(payloads[2]["description"], equal_to("Категория /evening"))
-    assert_that({payload["id"] for payload in payloads}, has_length(3))
+    assert_that([payloads[2]["description"], payloads[3]["description"]], equal_to(["Категория /evening"] * 2))
+    assert_that(payloads[3]["video_file_id"], equal_to("telegram-video"))
+    assert_that({payload["id"] for payload in payloads}, has_length(4))
     assert_that(page.next_cursor, equal_to(next_cursor))
 
 
@@ -159,6 +174,7 @@ def test_build_inline_category_results_preserves_media_types_and_namespaces_cate
         _subscription_type(2, "/day", "day"),
         _subscription_type(3, "/evening", "evening"),
         _subscription_type(4, "/night", "night"),
+        _subscription_type(5, "/video", "video"),
     ]
     images: list[tuple[SubscriptionType, CachedMedia | LinkedMedia]] = [
         (
@@ -201,6 +217,16 @@ def test_build_inline_category_results_preserves_media_types_and_namespaces_cate
                 url="https://storage.example/animation.gif",
             ),
         ),
+        (
+            categories[4],
+            CachedMedia(
+                name="cached-video.mp4",
+                mime_type="video/mp4",
+                path="video/cached-video.mp4",
+                source_revision="sha256:cached-video",
+                id="telegram-video",
+            ),
+        ),
     ]
 
     results = inline._build_inline_category_results(images)
@@ -214,6 +240,7 @@ def test_build_inline_category_results_preserves_media_types_and_namespaces_cate
                 InlineQueryResultPhoto,
                 InlineQueryResultCachedGif,
                 InlineQueryResultGif,
+                InlineQueryResultCachedVideo,
             ]
         ),
     )
@@ -227,6 +254,7 @@ def test_build_inline_category_results_preserves_media_types_and_namespaces_cate
             payloads[1]["photo_url"],
             payloads[2]["gif_file_id"],
             payloads[3]["gif_url"],
+            payloads[4]["video_file_id"],
         ],
         equal_to(
             [
@@ -234,12 +262,13 @@ def test_build_inline_category_results_preserves_media_types_and_namespaces_cate
                 "https://storage.example/photo.png",
                 "telegram-animation",
                 "https://storage.example/animation.gif",
+                "telegram-video",
             ]
         ),
     )
     result_ids = [result.id for result in results]
-    assert_that([len(result_id) for result_id in result_ids], equal_to([64, 64, 64, 64]))
-    assert_that(len(set(result_ids)), equal_to(4))
+    assert_that([len(result_id) for result_id in result_ids], equal_to([64, 64, 64, 64, 64]))
+    assert_that(len(set(result_ids)), equal_to(5))
     assert_that(result_ids[0] == result_ids[1], equal_to(False))
     assert_that(
         set(result_ids).isdisjoint(
@@ -271,6 +300,16 @@ def test_build_inline_category_results_preserves_media_types_and_namespaces_cate
                 id="telegram-animation",
             ),
             InlineQueryResultCachedGif,
+        ),
+        (
+            CachedMedia(
+                name="cached-video.mp4",
+                mime_type="video/mp4",
+                path="cached-video.mp4",
+                source_revision="sha256:cached-video",
+                id="telegram-video",
+            ),
+            InlineQueryResultCachedVideo,
         ),
         (
             LinkedMedia(

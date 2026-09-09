@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_SYNC_INTERVAL = timedelta(hours=12)
 DEFAULT_LEASE_TTL = timedelta(minutes=30)
 MEDIA_SYNC_LEASE_KEY = "media-sync:full-catalog"
+MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES = 20 * 1024 * 1024
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -152,14 +153,35 @@ async def _synchronize_subscription_type(
         ttl=lease_ttl,
     ):
         raise MediaSyncLeaseLost
+    sources = [source for image in images if (source := _category_media_source(image)) is not None]
     return await reconcile_category_media_snapshot(
         subscription_type_id=subscription_type.id,
-        sources=[_category_media_source(image) for image in images],
+        sources=sources,
     )
 
 
-def _category_media_source(image: Image) -> CategoryMediaSource:
-    media_type = TelegramMediaType.animation if image.mime_type == "image/gif" else TelegramMediaType.photo
+def _category_media_source(image: Image) -> CategoryMediaSource | None:
+    if image.mime_type == "image/gif":
+        media_type = TelegramMediaType.animation
+    elif image.mime_type.startswith("image/"):
+        media_type = TelegramMediaType.photo
+    elif image.mime_type == "video/mp4":
+        if image.size is None:
+            logger.warning("Skipped MP4 video with unknown size path=%s", image.path)
+            return None
+        if image.size > MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES:
+            logger.warning(
+                "Skipped MP4 video exceeding Telegram HTTP URL limit path=%s size=%d limit=%d",
+                image.path,
+                image.size,
+                MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES,
+            )
+            return None
+        media_type = TelegramMediaType.video
+    else:
+        logger.warning("Skipped unsupported media path=%s mime_type=%s", image.path, image.mime_type)
+        return None
+
     return CategoryMediaSource(
         source_path=image.path,
         source_revision=image.source_revision,

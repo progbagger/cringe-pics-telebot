@@ -158,6 +158,53 @@ async def test_get_inline_images_prefers_ready_special_and_resolves_only_pending
     assert_that(requested_paths, equal_to(["day/2.png"]))
 
 
+async def test_get_inline_images_filters_pending_video_before_deduplication_and_pagination(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    media = [
+        _media(
+            1,
+            category_id=1,
+            source_path="shared/media",
+            mime_type="video/mp4",
+            media_type=TelegramMediaType.video,
+        ),
+        _media(2, category_id=2, source_path="shared/media"),
+        *[_media(index, file_id=f"telegram-{index}") for index in range(3, 54)],
+    ]
+    requested_paths: list[str] = []
+
+    async def get_urls(paths: Iterable[str]) -> list[str | None]:
+        requested_paths.extend(paths)
+        return [f"https://storage.example/{path}" for path in paths]
+
+    monkeypatch.setattr(
+        inline_images,
+        "get_category_media_by_subscription_types",
+        lambda category_ids: _async_result(media),
+    )
+    monkeypatch.setattr(inline_images, "get_download_urls", get_urls)
+    categories = [
+        _subscription_type(1, name="/video", directory="video"),
+        _subscription_type(2, name="/photo", directory="photo"),
+    ]
+
+    first_page = await inline_images.get_inline_images(categories, cursor=None, seed_factory=lambda: b"seed-001")
+    assert_that(first_page.ordinary_images, has_length(49))
+    assert first_page.next_cursor is not None
+    second_page = await inline_images.get_inline_images(categories, cursor=first_page.next_cursor)
+
+    all_images = [
+        *([first_page.special_image] if first_page.special_image is not None else []),
+        *first_page.ordinary_images,
+        *second_page.ordinary_images,
+    ]
+    assert_that(all_images, has_length(52))
+    assert_that([image.path for _, image in all_images].count("shared/media"), equal_to(1))
+    assert_that(requested_paths, equal_to(["shared/media"]))
+    assert_that(second_page.next_cursor, equal_to(None))
+
+
 async def test_get_inline_images_skips_only_missing_download_url(monkeypatch: MonkeyPatch) -> None:
     media = [_media(1), _media(2)]
     monkeypatch.setattr(
@@ -310,6 +357,53 @@ async def test_get_inline_category_images_selects_one_per_nonempty_category_and_
     )
 
 
+async def test_get_inline_category_images_skips_pending_video_and_keeps_ready_video(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    pending_category = _subscription_type(1, name="/pending-video", directory="pending-video")
+    ready_category = _subscription_type(2, name="/ready-video", directory="ready-video")
+    media = [
+        _media(
+            1,
+            category_id=1,
+            mime_type="video/mp4",
+            media_type=TelegramMediaType.video,
+        ),
+        _media(
+            2,
+            category_id=2,
+            file_id="telegram-video",
+            mime_type="video/mp4",
+            media_type=TelegramMediaType.video,
+        ),
+    ]
+    monkeypatch.setattr(
+        inline_images,
+        "get_category_media_by_subscription_types",
+        lambda category_ids: _async_result(media),
+    )
+
+    results = await inline_images.get_inline_category_images([pending_category, ready_category])
+
+    assert_that(
+        results,
+        equal_to(
+            [
+                (
+                    ready_category,
+                    CachedMedia(
+                        name="2.png",
+                        mime_type="video/mp4",
+                        path="day/2.png",
+                        source_revision="sha256:2",
+                        id="telegram-video",
+                    ),
+                )
+            ]
+        ),
+    )
+
+
 async def test_get_inline_category_images_keeps_overlapping_paths_and_isolates_url_failure(
     monkeypatch: MonkeyPatch,
 ) -> None:
@@ -386,6 +480,8 @@ def _media(
     category_id: int = 2,
     source_path: str | None = None,
     file_id: str | None = None,
+    mime_type: str = "image/png",
+    media_type: TelegramMediaType = TelegramMediaType.photo,
 ) -> CategoryMedia:
     now = datetime(2026, 8, 19, tzinfo=UTC)
     return CategoryMedia(
@@ -394,8 +490,8 @@ def _media(
         source_path=source_path or f"day/{media_id}.png",
         source_revision=f"sha256:{media_id}",
         name=f"{media_id}.png",
-        mime_type="image/png",
-        telegram_media_type=TelegramMediaType.photo,
+        mime_type=mime_type,
+        telegram_media_type=media_type,
         telegram_file_id=file_id,
         telegram_file_unique_id="unique" if file_id is not None else None,
         is_active=True,
