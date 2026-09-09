@@ -7,6 +7,7 @@ from hamcrest import assert_that, empty, equal_to, is_, same_instance
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMediaStatus,
+    TelegramMediaType,
     get_category_media_by_subscription_types,
 )
 from cringe_pics_telebot.repositories.postgres import (
@@ -14,7 +15,12 @@ from cringe_pics_telebot.repositories.postgres import (
 )
 from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
-from cringe_pics_telebot.services.media_sync import MEDIA_SYNC_LEASE_KEY, MediaSyncSummary, synchronize_media_catalog
+from cringe_pics_telebot.services.media_sync import (
+    MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES,
+    MEDIA_SYNC_LEASE_KEY,
+    MediaSyncSummary,
+    synchronize_media_catalog,
+)
 from tests.functional.conftest import (
     BOT_ENV,
     POSTGRES_ENV,
@@ -56,6 +62,70 @@ async def test_sync_includes_inactive_categories(
             if request["method"] == "resources"
         ],
         equal_to(["app:/inactive"]),
+    )
+
+
+async def test_sync_catalogs_supported_mp4_and_skips_other_or_oversized_videos(
+    docker_compose: DependencyPorts,
+    fake_yandex_server: FakeYandexServer,
+) -> None:
+    await fake_yandex_server.configure_directory(
+        "day",
+        images=[
+            {"name": "clip.mp4", "mime_type": "video/mp4", "size": MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES},
+            {"name": "unsupported.webm", "mime_type": "video/webm", "size": 1},
+            {
+                "name": "oversized.mp4",
+                "mime_type": "video/mp4",
+                "size": MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES + 1,
+            },
+        ],
+    )
+    connect_yandex(
+        BOT_ENV["YANDEX_DISK_TOKEN"],
+        api_base_url=f"{fake_yandex_server.base_url}/v1/disk/",
+    )
+    async with (
+        connect_postgres(
+            username=POSTGRES_ENV["POSTGRES_USER"],
+            password=POSTGRES_ENV["POSTGRES_PASSWORD"],
+            database=POSTGRES_ENV["POSTGRES_DB"],
+            port=docker_compose.postgres,
+            host=POSTGRES_ENV["POSTGRES_HOST"],
+        ),
+        connect_redis(
+            username=REDIS_ENV["REDIS_USERNAME"],
+            password=REDIS_ENV["REDIS_PASSWORD"],
+            port=docker_compose.redis,
+            host=REDIS_ENV["REDIS_HOST"],
+        ),
+    ):
+        summary = await synchronize_media_catalog()
+        media = await get_category_media_by_subscription_types([1])
+
+        await fake_yandex_server.configure_directory(
+            "day",
+            images=[
+                {
+                    "name": "clip.mp4",
+                    "mime_type": "video/mp4",
+                    "size": MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES + 1,
+                }
+            ],
+        )
+        changed_summary = await synchronize_media_catalog()
+        all_media = await get_category_media_by_subscription_types([1], active_only=False)
+
+    assert_that(summary.discovered, equal_to(2))
+    assert_that([item.source_path for item in media], equal_to(["day/clip.mp4"]))
+    assert_that(media[0].mime_type, equal_to("video/mp4"))
+    assert_that(media[0].telegram_media_type, same_instance(TelegramMediaType.video))
+    assert_that(media[0].status, same_instance(CategoryMediaStatus.pending))
+    assert_that(changed_summary.deactivated, equal_to(1))
+    assert_that(all_media[0].status, same_instance(CategoryMediaStatus.inactive))
+    assert_that(
+        {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
+        empty(),
     )
 
 

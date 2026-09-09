@@ -1392,6 +1392,46 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             ),
             equal_to(b"v"),
         )
+        assert_that(
+            await connection.fetchval(
+                """
+                INSERT INTO category_media(
+                    subscription_type_id,
+                    source_path,
+                    source_revision,
+                    name,
+                    mime_type,
+                    telegram_media_type,
+                    last_seen_at
+                )
+                SELECT id, 'migration-probe/video.mp4', 'sha256:migration-video',
+                       'video.mp4', 'video/mp4', 'video', now()
+                FROM subscription_types
+                WHERE name = '/migration-probe'
+                RETURNING telegram_media_type
+                """
+            ),
+            equal_to("video"),
+        )
+        await connection.execute("DELETE FROM category_media WHERE source_path = 'migration-probe/video.mp4'")
+        with pytest.raises(asyncpg.CheckViolationError):
+            await connection.execute(
+                """
+                INSERT INTO category_media(
+                    subscription_type_id,
+                    source_path,
+                    source_revision,
+                    name,
+                    mime_type,
+                    telegram_media_type,
+                    last_seen_at
+                )
+                SELECT id, 'migration-probe/file.bin', 'sha256:migration-file', 'file.bin',
+                       'application/octet-stream', 'document', now()
+                FROM subscription_types
+                WHERE name = '/migration-probe'
+                """
+            )
     finally:
         await connection.close()
 

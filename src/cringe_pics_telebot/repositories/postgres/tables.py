@@ -167,7 +167,7 @@ category_media = sa.Table(
     sa.CheckConstraint("source_path <> ''", name="category_media_source_path_nonempty"),
     sa.CheckConstraint("source_revision <> ''", name="category_media_source_revision_nonempty"),
     sa.CheckConstraint(
-        "telegram_media_type IN ('photo', 'animation')",
+        "telegram_media_type IN ('photo', 'animation', 'video')",
         name="category_media_telegram_media_type_values",
     ),
     sa.CheckConstraint(

@@ -78,7 +78,14 @@ async def test_reconcile_materialize_and_replace_revision(docker_compose: Depend
 
         changed = await reconcile_category_media_snapshot(
             subscription_type_id=1,
-            sources=[_source(source.source_path, revision="sha256:second")],
+            sources=[
+                _source(
+                    source.source_path,
+                    revision="sha256:second",
+                    mime_type="video/mp4",
+                    media_type=TelegramMediaType.video,
+                )
+            ],
             seen_at=datetime(2026, 8, 19, 4, tzinfo=UTC),
         )
         assert_that(changed.changed, equal_to(1))
@@ -90,6 +97,11 @@ async def test_reconcile_materialize_and_replace_revision(docker_compose: Depend
                 if item is not None
             ],
             equal_to([(CategoryMediaStatus.pending, None, None, None)]),
+        )
+        assert pending is not None
+        assert_that(
+            (pending.mime_type, pending.telegram_media_type),
+            equal_to(("video/mp4", TelegramMediaType.video)),
         )
 
 
@@ -189,13 +201,19 @@ async def test_reconcile_deduplicates_source_paths(docker_compose: DependencyPor
         assert_that(media.source_revision, equal_to(second.source_revision))
 
 
-def _source(path: str, *, revision: str) -> CategoryMediaSource:
+def _source(
+    path: str,
+    *,
+    revision: str,
+    mime_type: str = "image/png",
+    media_type: TelegramMediaType = TelegramMediaType.photo,
+) -> CategoryMediaSource:
     return CategoryMediaSource(
         source_path=path,
         source_revision=revision,
         name=path.rsplit("/", maxsplit=1)[-1],
-        mime_type="image/png",
-        telegram_media_type=TelegramMediaType.photo,
+        mime_type=mime_type,
+        telegram_media_type=media_type,
     )
 
 

@@ -126,7 +126,7 @@ class YandexS3Client:
                     except KeyError:
                         mime_type = None
 
-                    if mime_type is not None and mime_type.startswith("image"):
+                    if mime_type is not None and mime_type.startswith(("image/", "video/")):
                         modified_at = datetime.fromisoformat(item["modified"])
                         yield Image(
                             name=image_path.split("/", 4)[-1],

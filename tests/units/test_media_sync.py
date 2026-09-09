@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
 
@@ -91,6 +92,49 @@ async def test_lost_lease_does_not_publish_snapshot(monkeypatch: pytest.MonkeyPa
     reconcile.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("mime_type", "size", "expected_media_type"),
+    [
+        ("image/png", None, TelegramMediaType.photo),
+        ("image/jpeg", None, TelegramMediaType.photo),
+        ("image/gif", None, TelegramMediaType.animation),
+        ("video/mp4", media_sync.MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES, TelegramMediaType.video),
+    ],
+)
+def test_category_media_source_classifies_supported_media(
+    mime_type: str,
+    size: int | None,
+    expected_media_type: TelegramMediaType,
+) -> None:
+    source = media_sync._category_media_source(_image("day/media", mime_type=mime_type, size=size))
+
+    assert source is not None
+    assert_that(source.mime_type, equal_to(mime_type))
+    assert_that(source.telegram_media_type, same_instance(expected_media_type))
+
+
+@pytest.mark.parametrize(
+    ("mime_type", "size", "log_fragment"),
+    [
+        ("video/webm", 1, "unsupported media"),
+        ("video/mp4", None, "unknown size"),
+        ("video/mp4", media_sync.MAX_TELEGRAM_VIDEO_URL_SIZE_BYTES + 1, "exceeding Telegram HTTP URL limit"),
+    ],
+)
+def test_category_media_source_skips_unsupported_video_with_diagnostic_log(
+    mime_type: str,
+    size: int | None,
+    log_fragment: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        source = media_sync._category_media_source(_image("day/video", mime_type=mime_type, size=size))
+
+    assert_that(source, equal_to(None))
+    assert log_fragment in caplog.text
+    assert "day/video" in caplog.text
+
+
 @pytest.mark.parametrize("interval", [timedelta(0), timedelta(seconds=-1)])
 async def test_runner_rejects_non_positive_interval(interval: timedelta) -> None:
     with pytest.raises(ValueError, match="positive"):
@@ -111,10 +155,11 @@ def _subscription_type(subscription_type_id: int, name: str, directory: str) -> 
     )
 
 
-def _image(path: str, *, mime_type: str = "image/png") -> Image:
+def _image(path: str, *, mime_type: str = "image/png", size: int | None = None) -> Image:
     return Image(
         name=path.rsplit("/", maxsplit=1)[-1],
         mime_type=mime_type,
         path=path,
         source_revision=f"sha256:{path}",
+        size=size,
     )
