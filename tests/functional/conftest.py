@@ -1081,6 +1081,32 @@ async def set_functional_media_search_aliases(
 
 
 @pytest.fixture
+async def read_functional_media_search_aliases(
+    docker_compose: DependencyPorts,
+) -> Callable[[str], Awaitable[tuple[str, ...] | None]]:
+    async def read(source_path: str) -> tuple[str, ...] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT aliases.alias
+                FROM category_media AS media
+                LEFT JOIN media_search_aliases AS aliases ON aliases.media_id = media.id
+                WHERE media.source_path = $1
+                ORDER BY aliases.position
+                """,
+                source_path,
+            )
+            if not rows:
+                return None
+            return tuple(row["alias"] for row in rows if row["alias"] is not None)
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_functional_category_media_states(
     docker_compose: DependencyPorts,
 ) -> Callable[[], Awaitable[dict[str, tuple[str, str | None]]]]:

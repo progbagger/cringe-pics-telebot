@@ -353,6 +353,7 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
+                "Медиа и алиасы",
                 "Назад",
             ]
         ),
@@ -408,6 +409,7 @@ async def test_admin_manages_category_aliases_used_by_inline_search(
                 "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
+                "Медиа и алиасы",
                 "Назад",
             ]
         ),

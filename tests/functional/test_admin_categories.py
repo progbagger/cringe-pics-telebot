@@ -95,6 +95,7 @@ async def test_admin_creates_inactive_category_with_all_fields(
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
+                "Медиа и алиасы",
                 "Назад",
             ]
         ),
@@ -221,7 +222,16 @@ async def test_admin_creates_and_activates_category_without_schedule(
     assert_that(created["payload"]["text"], contains_string("Дни отправки: каждый день"))
     assert_that(
         _inline_keyboard_button_texts(created["payload"]),
-        equal_to(["Активировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Активировать",
+                "Изменить время отправки",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Медиа и алиасы",
+                "Назад",
+            ]
+        ),
     )
     category = await read_functional_subscription_type("/instant")
     assert category is not None
@@ -249,7 +259,16 @@ async def test_admin_creates_and_activates_category_without_schedule(
     )
     assert_that(
         _inline_keyboard_button_texts(activated["payload"]),
-        equal_to(["Деактивировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Деактивировать",
+                "Изменить время отправки",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Медиа и алиасы",
+                "Назад",
+            ]
+        ),
     )
     active_category = await read_functional_subscription_type("/instant")
     assert active_category is not None
@@ -437,6 +456,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
+                "Медиа и алиасы",
                 "Назад",
             ]
         ),
@@ -464,6 +484,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
+                "Медиа и алиасы",
                 "Назад",
             ]
         ),
@@ -509,6 +530,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
                 "Отключить расписание",
                 "Изменить алиасы",
                 "Очистить алиасы",
+                "Медиа и алиасы",
                 "Назад",
             ]
         ),
@@ -599,7 +621,16 @@ async def test_admin_updates_disables_and_restores_category_schedule(
     )
     assert_that(
         _inline_keyboard_button_texts(disabled["payload"]),
-        equal_to(["Деактивировать", "Изменить время отправки", "Изменить алиасы", "Очистить алиасы", "Назад"]),
+        equal_to(
+            [
+                "Деактивировать",
+                "Изменить время отправки",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Медиа и алиасы",
+                "Назад",
+            ]
+        ),
     )
     without_schedule = await read_functional_subscription_type("/day")
     assert without_schedule is not None

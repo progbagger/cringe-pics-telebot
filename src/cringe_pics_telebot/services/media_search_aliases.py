@@ -24,10 +24,17 @@ def parse_media_search_aliases(value: str) -> tuple[SearchAlias, ...]:
 async def set_media_search_aliases(
     media_id: int,
     aliases: Sequence[SearchAlias],
+    *,
+    subscription_type_id: int | None = None,
+    active_only: bool = False,
 ) -> CategoryMediaSearchMetadata | None:
     async with transaction():
         media = await get_category_media(media_id, with_for_update=True)
         if media is None:
+            return None
+        if subscription_type_id is not None and media.subscription_type_id != subscription_type_id:
+            return None
+        if active_only and not media.is_active:
             return None
         await replace_media_search_aliases(media_id, aliases)
     return CategoryMediaSearchMetadata(

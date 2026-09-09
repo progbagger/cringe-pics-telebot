@@ -6,6 +6,7 @@ from aiogram.enums import ParseMode
 
 from .admin_broadcasts import router as admin_broadcasts_router
 from .admin_categories import router as admin_categories_router
+from .admin_media import router as admin_media_router
 from .admin_panel import router as admin_panel_router
 from .images import router as images_router
 from .inline import router as inline_router
@@ -17,6 +18,7 @@ dp.include_router(inline_router)
 dp.include_router(admin_panel_router)
 dp.include_router(admin_broadcasts_router)
 dp.include_router(admin_categories_router)
+dp.include_router(admin_media_router)
 dp.include_router(images_router)
 
 

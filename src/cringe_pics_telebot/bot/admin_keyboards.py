@@ -3,7 +3,11 @@ from collections.abc import Collection, Iterable
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from cringe_pics_telebot.repositories.postgres.entities import AdminBroadcast, SubscriptionType
+from cringe_pics_telebot.repositories.postgres.entities import (
+    AdminBroadcast,
+    CategoryMediaSearchMetadata,
+    SubscriptionType,
+)
 from cringe_pics_telebot.services.admin_broadcast_schedules import format_admin_broadcast_schedule
 
 from .admin_broadcast_callback_data import (
@@ -16,6 +20,7 @@ from .admin_category_callback_data import (
     AdminCategoryCallbackData,
     AdminCategoryPagedCallbackData,
 )
+from .admin_media_callback_data import AdminMediaAction, AdminMediaCallbackData
 from .admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
 from .inline_pagination import paginate_inline_keyboard
 
@@ -160,10 +165,121 @@ def create_admin_category_keyboard(
             callback_data=_paged_category_callback(AdminCategoryAction.clear_aliases, category_id, page=page),
         )
     builder.button(
+        text="Медиа и алиасы",
+        callback_data=_media_callback(
+            AdminMediaAction.media_list,
+            category_id=category_id,
+            category_page=page,
+        ),
+    )
+    builder.button(
         text="Назад",
         callback_data=_paged_category_callback(AdminCategoryAction.categories, page=page),
     )
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def create_admin_media_list_keyboard(
+    media: Collection[CategoryMediaSearchMetadata],
+    *,
+    category_id: int,
+    category_page: int = 0,
+    media_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    current_page = paginate_inline_keyboard(tuple(media), media_page)
+    for metadata in current_page.items:
+        builder.button(
+            text=metadata.media.name,
+            callback_data=_media_callback(
+                AdminMediaAction.media,
+                category_id=category_id,
+                media_id=metadata.media.id,
+                category_page=category_page,
+                media_page=current_page.number,
+            ),
+        )
+    builder.button(
+        text="Назад",
+        callback_data=_paged_category_callback(
+            AdminCategoryAction.category,
+            category_id,
+            page=category_page,
+        ),
+    )
+    builder.adjust(1)
+    _add_media_navigation(
+        builder,
+        category_id=category_id,
+        category_page=category_page,
+        previous_page=current_page.previous_number,
+        next_page=current_page.next_number,
+    )
+    return builder.as_markup()
+
+
+def create_admin_media_keyboard(
+    *,
+    category_id: int,
+    media_id: int,
+    has_aliases: bool,
+    category_page: int = 0,
+    media_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Изменить алиасы медиа",
+        callback_data=_media_callback(
+            AdminMediaAction.edit_aliases,
+            category_id=category_id,
+            media_id=media_id,
+            category_page=category_page,
+            media_page=media_page,
+        ),
+    )
+    if has_aliases:
+        builder.button(
+            text="Очистить алиасы медиа",
+            callback_data=_media_callback(
+                AdminMediaAction.clear_aliases,
+                category_id=category_id,
+                media_id=media_id,
+                category_page=category_page,
+                media_page=media_page,
+            ),
+        )
+    builder.button(
+        text="Назад",
+        callback_data=_media_callback(
+            AdminMediaAction.media_list,
+            category_id=category_id,
+            category_page=category_page,
+            media_page=media_page,
+        ),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def create_admin_media_form_cancel_keyboard(
+    *,
+    category_id: int,
+    media_id: int,
+    category_page: int = 0,
+    media_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Отмена",
+        callback_data=_media_callback(
+            AdminMediaAction.cancel_form,
+            category_id=category_id,
+            media_id=media_id,
+            category_page=category_page,
+            media_page=media_page,
+        ),
+    )
     return builder.as_markup()
 
 
@@ -325,6 +441,23 @@ def _paged_category_callback(
     ).pack()
 
 
+def _media_callback(
+    action: AdminMediaAction,
+    *,
+    category_id: int,
+    media_id: int = 0,
+    category_page: int = 0,
+    media_page: int = 0,
+) -> str:
+    return AdminMediaCallbackData(
+        action=action,
+        category_id=category_id,
+        media_id=media_id,
+        category_page=category_page,
+        media_page=media_page,
+    ).pack()
+
+
 def _add_category_navigation(
     builder: InlineKeyboardBuilder,
     previous_page: int | None,
@@ -343,6 +476,43 @@ def _add_category_navigation(
             InlineKeyboardButton(
                 text=">",
                 callback_data=_paged_category_callback(AdminCategoryAction.categories, page=next_page),
+            )
+        )
+    if buttons:
+        builder.row(*buttons)
+
+
+def _add_media_navigation(
+    builder: InlineKeyboardBuilder,
+    *,
+    category_id: int,
+    category_page: int,
+    previous_page: int | None,
+    next_page: int | None,
+) -> None:
+    buttons = []
+    if previous_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_media_callback(
+                    AdminMediaAction.media_list,
+                    category_id=category_id,
+                    category_page=category_page,
+                    media_page=previous_page,
+                ),
+            )
+        )
+    if next_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_media_callback(
+                    AdminMediaAction.media_list,
+                    category_id=category_id,
+                    category_page=category_page,
+                    media_page=next_page,
+                ),
             )
         )
     if buttons:
