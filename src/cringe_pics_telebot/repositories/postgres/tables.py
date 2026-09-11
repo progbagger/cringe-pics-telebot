@@ -240,7 +240,7 @@ media_alias_enrichment_jobs = sa.Table(
             values_callable=lambda statuses: [status.value for status in statuses],
         ),
         nullable=False,
-        server_default="pending",
+        server_default=MediaAliasEnrichmentJobStatus.pending.value,
     ),
     sa.Column("attempt_count", sa.Integer, nullable=False, server_default="0"),
     sa.Column("retry_count", sa.Integer, nullable=False, server_default="0"),

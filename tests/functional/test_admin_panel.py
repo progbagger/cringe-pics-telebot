@@ -3,11 +3,12 @@ from asyncio import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, time, timedelta, timezone
 from hashlib import sha256
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from hamcrest import (
     assert_that,
+    contains,
     contains_string,
     empty,
     equal_to,
@@ -17,6 +18,7 @@ from hamcrest import (
     has_length,
     none,
 )
+from hamcrest.core.matcher import Matcher
 
 from cringe_pics_telebot.bot.admin_broadcast_callback_data import (
     AdminBroadcastAction,
@@ -194,41 +196,43 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
         empty(),
     )
+    jobs = await read_functional_media_alias_enrichment_jobs()
     assert_that(
-        await read_functional_media_alias_enrichment_jobs(),
-        equal_to(
-            [
-                {
-                    "source_path": "day/first.png",
-                    "source_revision": f"sha256:{sha256(b'day/first.png').hexdigest()}",
-                    "status": "pending",
-                    "attempt_count": 0,
-                    "retry_count": 0,
-                    "model": "functional-vision-model",
-                    "prompt_sha256": sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
-                    "result_class": None,
-                },
-                {
-                    "source_path": "day/second.gif",
-                    "source_revision": f"sha256:{sha256(b'day/second.gif').hexdigest()}",
-                    "status": "pending",
-                    "attempt_count": 0,
-                    "retry_count": 0,
-                    "model": "functional-vision-model",
-                    "prompt_sha256": sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
-                    "result_class": None,
-                },
-                {
-                    "source_path": "inactive/inactive.png",
-                    "source_revision": f"sha256:{sha256(b'inactive/inactive.png').hexdigest()}",
-                    "status": "pending",
-                    "attempt_count": 0,
-                    "retry_count": 0,
-                    "model": "functional-vision-model",
-                    "prompt_sha256": sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
-                    "result_class": None,
-                },
-            ]
+        jobs,
+        cast(
+            Matcher[list[dict[str, Any]]],
+            contains(
+                has_entries(
+                    source_path="day/first.png",
+                    source_revision=f"sha256:{sha256(b'day/first.png').hexdigest()}",
+                    status="pending",
+                    attempt_count=0,
+                    retry_count=0,
+                    model="functional-vision-model",
+                    prompt_sha256=sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
+                    result_class=None,
+                ),
+                has_entries(
+                    source_path="day/second.gif",
+                    source_revision=f"sha256:{sha256(b'day/second.gif').hexdigest()}",
+                    status="pending",
+                    attempt_count=0,
+                    retry_count=0,
+                    model="functional-vision-model",
+                    prompt_sha256=sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
+                    result_class=None,
+                ),
+                has_entries(
+                    source_path="inactive/inactive.png",
+                    source_revision=f"sha256:{sha256(b'inactive/inactive.png').hexdigest()}",
+                    status="pending",
+                    attempt_count=0,
+                    retry_count=0,
+                    model="functional-vision-model",
+                    prompt_sha256=sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
+                    result_class=None,
+                ),
+            ),
         ),
     )
 
