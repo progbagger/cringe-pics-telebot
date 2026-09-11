@@ -65,27 +65,6 @@ async def test_sync_includes_inactive_categories(
     )
 
 
-async def test_sync_enqueues_aliasless_media_only_when_enrichment_is_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-    fake_yandex_server: FakeYandexServer,
-    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
-) -> None:
-    monkeypatch.setenv("MEDIA_ALIAS_ENRICHMENT_ENABLED", "true")
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
-    monkeypatch.setenv("OLLAMA_MODEL", "gemma3:12b")
-    monkeypatch.setenv("MEDIA_ALIAS_LLM_PROMPT", "Опиши изображение")
-
-    first = await synchronize_functional_media_catalog()
-    repeated = await synchronize_functional_media_catalog()
-
-    assert_that(first.alias_enrichment_queued, equal_to(3))
-    assert_that(repeated.alias_enrichment_queued, equal_to(0))
-    assert_that(
-        {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
-        empty(),
-    )
-
-
 async def test_sync_catalogs_supported_mp4_and_skips_other_or_oversized_videos(
     docker_compose: DependencyPorts,
     fake_yandex_server: FakeYandexServer,

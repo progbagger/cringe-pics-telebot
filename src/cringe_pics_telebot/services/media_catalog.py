@@ -1,18 +1,19 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from ..repositories.postgres.category_media import (
+from cringe_pics_telebot.repositories.postgres.category_media import (
     deactivate_category_media_missing_from_snapshot,
     get_category_media_by_subscription_types,
     upsert_category_media_snapshot,
 )
-from ..repositories.postgres.connection import transaction
-from ..repositories.postgres.entities.category_media import (
+from cringe_pics_telebot.repositories.postgres.connection import transaction
+from cringe_pics_telebot.repositories.postgres.entities.category_media import (
     CategoryMedia,
     CategoryMediaReconcileResult,
     CategoryMediaSource,
 )
-from ..repositories.postgres.media_alias_enrichment import enqueue_media_alias_enrichment_jobs
+from cringe_pics_telebot.repositories.postgres.media_alias_enrichment import enqueue_media_alias_enrichment_jobs
+
 from .media_alias_enrichment_settings import MediaAliasEnrichmentSettings
 
 

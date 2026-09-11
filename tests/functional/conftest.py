@@ -50,6 +50,10 @@ BOT_ENV = {
     **REDIS_ENV,
     "TELEGRAM_BOT_TOKEN": "123456:functional-test-token",
     "YANDEX_DISK_TOKEN": "functional-test-yandex-token",
+    "MEDIA_ALIAS_ENRICHMENT_ENABLED": "true",
+    "OLLAMA_BASE_URL": "http://ollama.invalid",
+    "OLLAMA_MODEL": "functional-vision-model",
+    "MEDIA_ALIAS_LLM_PROMPT": "Опиши изображение для функционального теста",
     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.5",
     "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.5",
 }
@@ -1133,6 +1137,36 @@ async def read_functional_media_search_aliases(
 
 
 @pytest.fixture
+async def read_functional_media_alias_enrichment_jobs(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[list[dict[str, Any]]]]:
+    async def read() -> list[dict[str, Any]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT
+                    media.source_path,
+                    jobs.source_revision,
+                    jobs.status::text,
+                    jobs.attempt_count,
+                    jobs.retry_count,
+                    jobs.model,
+                    jobs.prompt_sha256,
+                    jobs.result_class
+                FROM media_alias_enrichment_jobs AS jobs
+                JOIN category_media AS media ON media.id = jobs.media_id
+                ORDER BY media.source_path
+                """
+            )
+            return [dict(row) for row in rows]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_functional_category_media_states(
     docker_compose: DependencyPorts,
 ) -> Callable[[], Awaitable[dict[str, tuple[str, str | None]]]]:
@@ -1498,6 +1532,21 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             await connection.fetchval("SELECT to_regclass('media_alias_enrichment_jobs')"),
             equal_to("media_alias_enrichment_jobs"),
         )
+        assert_that(
+            [
+                row["enumlabel"]
+                for row in await connection.fetch(
+                    """
+                    SELECT enum.enumlabel
+                    FROM pg_enum AS enum
+                    JOIN pg_type AS type ON type.oid = enum.enumtypid
+                    WHERE type.typname = 'media_alias_enrichment_job_status'
+                    ORDER BY enum.enumsortorder
+                    """
+                )
+            ],
+            equal_to(["pending", "processing", "retry", "succeeded", "failed", "obsolete"]),
+        )
         for index_name in (
             "media_alias_enrichment_jobs_available_idx",
             "media_alias_enrichment_jobs_processing_lease_idx",
@@ -1593,6 +1642,14 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
                 """,
                 media_id,
             )
+        with pytest.raises(asyncpg.InvalidTextRepresentationError):
+            await connection.execute(
+                """
+                INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, status)
+                VALUES($1, 'sha256:invalid-status', 'unknown')
+                """,
+                media_id,
+            )
         with pytest.raises(asyncpg.UniqueViolationError):
             await connection.execute(
                 """
@@ -1683,6 +1740,12 @@ async def _assert_media_alias_enrichment_jobs_table_absent(dependency_ports: Dep
     connection = await _create_postgres_connection(dependency_ports)
     try:
         assert_that(await connection.fetchval("SELECT to_regclass('media_alias_enrichment_jobs')"), none())
+        assert_that(
+            await connection.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'media_alias_enrichment_job_status')"
+            ),
+            is_(False),
+        )
         assert_that(
             await connection.fetchval("SELECT to_regclass('media_search_aliases')"), equal_to("media_search_aliases")
         )

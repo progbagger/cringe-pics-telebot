@@ -2,6 +2,7 @@ import re
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, time, timedelta, timezone
+from hashlib import sha256
 from typing import Any
 
 import pytest
@@ -126,6 +127,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
     fake_yandex_server: FakeYandexServer,
     reset_functional_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
     set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_media_alias_enrichment_jobs: Callable[[], Awaitable[list[dict[str, Any]]]],
 ) -> None:
     await reset_functional_state(
         (
@@ -173,7 +175,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
-        "Поставлено заданий на алиасы: <b>0</b>",
+        "Поставлено заданий на алиасы: <b>3</b>",
     ):
         assert_that(result["payload"]["text"], contains_string(expected_line))
     assert_that(
@@ -191,6 +193,43 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
     assert_that(
         {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
         empty(),
+    )
+    assert_that(
+        await read_functional_media_alias_enrichment_jobs(),
+        equal_to(
+            [
+                {
+                    "source_path": "day/first.png",
+                    "source_revision": f"sha256:{sha256(b'day/first.png').hexdigest()}",
+                    "status": "pending",
+                    "attempt_count": 0,
+                    "retry_count": 0,
+                    "model": "functional-vision-model",
+                    "prompt_sha256": sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
+                    "result_class": None,
+                },
+                {
+                    "source_path": "day/second.gif",
+                    "source_revision": f"sha256:{sha256(b'day/second.gif').hexdigest()}",
+                    "status": "pending",
+                    "attempt_count": 0,
+                    "retry_count": 0,
+                    "model": "functional-vision-model",
+                    "prompt_sha256": sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
+                    "result_class": None,
+                },
+                {
+                    "source_path": "inactive/inactive.png",
+                    "source_revision": f"sha256:{sha256(b'inactive/inactive.png').hexdigest()}",
+                    "status": "pending",
+                    "attempt_count": 0,
+                    "retry_count": 0,
+                    "model": "functional-vision-model",
+                    "prompt_sha256": sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
+                    "result_class": None,
+                },
+            ]
+        ),
     )
 
     await fake_telegram_server.push_callback_query(
@@ -284,7 +323,7 @@ async def test_admin_media_sync_shows_partial_result_and_allows_retry(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
-        "Поставлено заданий на алиасы: <b>0</b>",
+        "Поставлено заданий на алиасы: <b>1</b>",
     ):
         assert_that(partial_result["payload"]["text"], contains_string(expected_line))
 
@@ -300,6 +339,7 @@ async def test_admin_media_sync_shows_partial_result_and_allows_retry(
     assert_that(retried_result["payload"]["text"], contains_string("Обработано категорий: <b>2</b>"))
     assert_that(retried_result["payload"]["text"], contains_string("Категорий с ошибками: <b>0</b>"))
     assert_that(retried_result["payload"]["text"], contains_string("Создано записей: <b>1</b>"))
+    assert_that(retried_result["payload"]["text"], contains_string("Поставлено заданий на алиасы: <b>1</b>"))
 
 
 async def test_admin_manages_category_aliases_used_by_inline_search(

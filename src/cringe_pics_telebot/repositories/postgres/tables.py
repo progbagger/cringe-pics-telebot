@@ -1,6 +1,7 @@
 import sqlalchemy as sa
 
 from ._metadata import _metadata
+from .entities.media_alias_enrichment import MediaAliasEnrichmentJobStatus
 
 
 def _time_column(name: str) -> sa.Column:
@@ -231,7 +232,16 @@ media_alias_enrichment_jobs = sa.Table(
         nullable=False,
     ),
     sa.Column("source_revision", sa.Text, nullable=False),
-    sa.Column("status", sa.Text, nullable=False, server_default="pending"),
+    sa.Column(
+        "status",
+        sa.Enum(
+            MediaAliasEnrichmentJobStatus,
+            name="media_alias_enrichment_job_status",
+            values_callable=lambda statuses: [status.value for status in statuses],
+        ),
+        nullable=False,
+        server_default="pending",
+    ),
     sa.Column("attempt_count", sa.Integer, nullable=False, server_default="0"),
     sa.Column("retry_count", sa.Integer, nullable=False, server_default="0"),
     sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -245,10 +255,6 @@ media_alias_enrichment_jobs = sa.Table(
     sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint("btrim(source_revision) <> ''", name="media_alias_enrichment_jobs_revision_nonempty"),
-    sa.CheckConstraint(
-        "status IN ('pending', 'processing', 'retry', 'succeeded', 'failed', 'obsolete')",
-        name="media_alias_enrichment_jobs_status_values",
-    ),
     sa.CheckConstraint(
         "attempt_count >= 0 AND retry_count >= 0",
         name="media_alias_enrichment_jobs_attempt_counts_nonnegative",

@@ -8,6 +8,7 @@ Create Date: 2026-09-12
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -18,12 +19,23 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    status = postgresql.ENUM(
+        "pending",
+        "processing",
+        "retry",
+        "succeeded",
+        "failed",
+        "obsolete",
+        name="media_alias_enrichment_job_status",
+        create_type=False,
+    )
+    status.create(op.get_bind())
     op.create_table(
         "media_alias_enrichment_jobs",
         sa.Column("id", sa.BIGINT(), autoincrement=True, nullable=False),
         sa.Column("media_id", sa.BIGINT(), nullable=False),
         sa.Column("source_revision", sa.Text(), nullable=False),
-        sa.Column("status", sa.Text(), server_default="pending", nullable=False),
+        sa.Column("status", status, server_default="pending", nullable=False),
         sa.Column("attempt_count", sa.Integer(), server_default="0", nullable=False),
         sa.Column("retry_count", sa.Integer(), server_default="0", nullable=False),
         sa.Column("available_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
@@ -37,10 +49,6 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint("btrim(source_revision) <> ''", name="media_alias_enrichment_jobs_revision_nonempty"),
-        sa.CheckConstraint(
-            "status IN ('pending', 'processing', 'retry', 'succeeded', 'failed', 'obsolete')",
-            name="media_alias_enrichment_jobs_status_values",
-        ),
         sa.CheckConstraint(
             "attempt_count >= 0 AND retry_count >= 0",
             name="media_alias_enrichment_jobs_attempt_counts_nonnegative",
@@ -92,3 +100,4 @@ def downgrade() -> None:
     op.drop_index("media_alias_enrichment_jobs_processing_lease_idx", table_name="media_alias_enrichment_jobs")
     op.drop_index("media_alias_enrichment_jobs_available_idx", table_name="media_alias_enrichment_jobs")
     op.drop_table("media_alias_enrichment_jobs")
+    postgresql.ENUM(name="media_alias_enrichment_job_status").drop(op.get_bind())
