@@ -21,6 +21,7 @@ from cringe_pics_telebot.services.media_sync import MediaSyncSummary
                 changed=1,
                 reactivated=1,
                 deactivated=1,
+                alias_enrichment_queued=2,
             ),
             "<b>Синхронизация медиа завершена</b>\n\n"
             "Обработано категорий: <b>2</b>\n"
@@ -29,7 +30,8 @@ from cringe_pics_telebot.services.media_sync import MediaSyncSummary
             "Создано записей: <b>2</b>\n"
             "Изменено записей: <b>1</b>\n"
             "Повторно активировано медиа: <b>1</b>\n"
-            "Деактивировано отсутствующее медиа: <b>1</b>",
+            "Деактивировано отсутствующее медиа: <b>1</b>\n"
+            "Поставлено заданий на алиасы: <b>2</b>",
         ),
         (
             MediaSyncSummary(acquired=True, categories=1, failed=1, discovered=2, created=1),
@@ -40,7 +42,8 @@ from cringe_pics_telebot.services.media_sync import MediaSyncSummary
             "Создано записей: <b>1</b>\n"
             "Изменено записей: <b>0</b>\n"
             "Повторно активировано медиа: <b>0</b>\n"
-            "Деактивировано отсутствующее медиа: <b>0</b>",
+            "Деактивировано отсутствующее медиа: <b>0</b>\n"
+            "Поставлено заданий на алиасы: <b>0</b>",
         ),
         (
             MediaSyncSummary(acquired=False),

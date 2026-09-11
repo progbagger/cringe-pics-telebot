@@ -86,7 +86,8 @@ def _media_sync_summary_text(summary: MediaSyncSummary) -> str:
         f"Создано записей: <b>{summary.created}</b>\n"
         f"Изменено записей: <b>{summary.changed}</b>\n"
         f"Повторно активировано медиа: <b>{summary.reactivated}</b>\n"
-        f"Деактивировано отсутствующее медиа: <b>{summary.deactivated}</b>"
+        f"Деактивировано отсутствующее медиа: <b>{summary.deactivated}</b>\n"
+        f"Поставлено заданий на алиасы: <b>{summary.alias_enrichment_queued}</b>"
     )
 
 

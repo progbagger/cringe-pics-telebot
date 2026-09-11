@@ -411,6 +411,32 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         "migration",
         "alembic",
         "downgrade",
+        "0013",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_media_alias_enrichment_jobs_table_absent(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
         "0012",
         env=_bot_env(dependency_ports),
     )
@@ -1275,6 +1301,7 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
             TRUNCATE
                 user_media_cycle_entries,
                 user_media_cycle_states,
+                media_alias_enrichment_jobs,
                 media_search_aliases,
                 category_media,
                 admin_broadcast_deliveries,
@@ -1468,6 +1495,19 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             equal_to("media_search_aliases"),
         )
         assert_that(
+            await connection.fetchval("SELECT to_regclass('media_alias_enrichment_jobs')"),
+            equal_to("media_alias_enrichment_jobs"),
+        )
+        for index_name in (
+            "media_alias_enrichment_jobs_available_idx",
+            "media_alias_enrichment_jobs_processing_lease_idx",
+            "media_alias_enrichment_jobs_status_idx",
+        ):
+            assert_that(
+                await connection.fetchval("SELECT to_regclass($1)", index_name),
+                equal_to(index_name),
+            )
+        assert_that(
             await connection.fetchval("SELECT extname FROM pg_extension WHERE extname = 'pg_trgm'"),
             equal_to("pg_trgm"),
         )
@@ -1527,6 +1567,32 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             """,
             media_id,
         )
+        prompt_sha256 = "a" * 64
+        await connection.execute(
+            """
+            INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, model, prompt_sha256)
+            VALUES($1, 'sha256:migration-video', 'gemma3:12b', $2)
+            """,
+            media_id,
+            prompt_sha256,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, model, prompt_sha256)
+                VALUES($1, 'sha256:migration-video', 'gemma3:12b', $2)
+                """,
+                media_id,
+                prompt_sha256,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await connection.execute(
+                """
+                INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, status)
+                VALUES($1, 'sha256:invalid-job', 'processing')
+                """,
+                media_id,
+            )
         with pytest.raises(asyncpg.UniqueViolationError):
             await connection.execute(
                 """
@@ -1546,6 +1612,10 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         await connection.execute("DELETE FROM category_media WHERE source_path = 'migration-probe/video.mp4'")
         assert_that(
             await connection.fetchval("SELECT count(*) FROM media_search_aliases WHERE media_id = $1", media_id),
+            equal_to(0),
+        )
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM media_alias_enrichment_jobs WHERE media_id = $1", media_id),
             equal_to(0),
         )
         with pytest.raises(asyncpg.CheckViolationError):
@@ -1605,6 +1675,17 @@ async def _assert_media_search_aliases_table_absent(dependency_ports: Dependency
     try:
         assert_that(await connection.fetchval("SELECT to_regclass('media_search_aliases')"), none())
         assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), equal_to("category_media"))
+    finally:
+        await connection.close()
+
+
+async def _assert_media_alias_enrichment_jobs_table_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert_that(await connection.fetchval("SELECT to_regclass('media_alias_enrichment_jobs')"), none())
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('media_search_aliases')"), equal_to("media_search_aliases")
+        )
     finally:
         await connection.close()
 

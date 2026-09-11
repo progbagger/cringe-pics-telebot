@@ -12,6 +12,8 @@ from ..repositories.postgres.entities.category_media import (
     CategoryMediaReconcileResult,
     CategoryMediaSource,
 )
+from ..repositories.postgres.media_alias_enrichment import enqueue_media_alias_enrichment_jobs
+from .media_alias_enrichment_settings import MediaAliasEnrichmentSettings
 
 
 async def reconcile_category_media_snapshot(
@@ -19,6 +21,7 @@ async def reconcile_category_media_snapshot(
     subscription_type_id: int,
     sources: Sequence[CategoryMediaSource],
     seen_at: datetime | None = None,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
 ) -> CategoryMediaReconcileResult:
     sources_by_path = {source.source_path: source for source in sources}
     unique_sources = tuple(sources_by_path.values())
@@ -41,6 +44,18 @@ async def reconcile_category_media_snapshot(
             source_paths=source_paths,
             seen_at=now,
         )
+        alias_enrichment_queued = 0
+        if alias_enrichment_settings is not None and alias_enrichment_settings.enabled:
+            model = alias_enrichment_settings.ollama_model
+            prompt_sha256 = alias_enrichment_settings.prompt_sha256
+            if model is None or prompt_sha256 is None:
+                raise ValueError("Enabled media alias enrichment settings require a model and prompt")
+            alias_enrichment_queued = await enqueue_media_alias_enrichment_jobs(
+                subscription_type_id=subscription_type_id,
+                model=model,
+                prompt_sha256=prompt_sha256,
+                enqueued_at=now,
+            )
 
     existing_by_path = {media.source_path: media for media in existing}
     created = sum(source.source_path not in existing_by_path for source in unique_sources)
@@ -67,6 +82,7 @@ async def reconcile_category_media_snapshot(
         reactivated=reactivated,
         deactivated=deactivated,
         unchanged=unchanged,
+        alias_enrichment_queued=alias_enrichment_queued,
     )
 
 

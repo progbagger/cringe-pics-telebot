@@ -220,6 +220,74 @@ media_search_aliases = sa.Table(
     ),
 )
 
+media_alias_enrichment_jobs = sa.Table(
+    "media_alias_enrichment_jobs",
+    _metadata,
+    sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=True),
+    sa.Column(
+        "media_id",
+        sa.BIGINT,
+        sa.ForeignKey(category_media.c.id, ondelete="CASCADE"),
+        nullable=False,
+    ),
+    sa.Column("source_revision", sa.Text, nullable=False),
+    sa.Column("status", sa.Text, nullable=False, server_default="pending"),
+    sa.Column("attempt_count", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("retry_count", sa.Integer, nullable=False, server_default="0"),
+    sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("lease_token", sa.Text, nullable=True),
+    sa.Column("leased_until", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("model", sa.Text, nullable=True),
+    sa.Column("prompt_sha256", sa.String(64), nullable=True),
+    sa.Column("result_class", sa.String(64), nullable=True),
+    sa.Column("last_error", sa.String(500), nullable=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+    sa.CheckConstraint("btrim(source_revision) <> ''", name="media_alias_enrichment_jobs_revision_nonempty"),
+    sa.CheckConstraint(
+        "status IN ('pending', 'processing', 'retry', 'succeeded', 'failed', 'obsolete')",
+        name="media_alias_enrichment_jobs_status_values",
+    ),
+    sa.CheckConstraint(
+        "attempt_count >= 0 AND retry_count >= 0",
+        name="media_alias_enrichment_jobs_attempt_counts_nonnegative",
+    ),
+    sa.CheckConstraint(
+        "(status = 'processing' AND lease_token IS NOT NULL AND leased_until IS NOT NULL) OR "
+        "(status <> 'processing' AND lease_token IS NULL AND leased_until IS NULL)",
+        name="media_alias_enrichment_jobs_lease_consistent",
+    ),
+    sa.CheckConstraint(
+        "(status IN ('succeeded', 'failed', 'obsolete') AND finished_at IS NOT NULL) OR "
+        "(status NOT IN ('succeeded', 'failed', 'obsolete') AND finished_at IS NULL)",
+        name="media_alias_enrichment_jobs_finished_consistent",
+    ),
+    sa.CheckConstraint("model IS NULL OR btrim(model) <> ''", name="media_alias_enrichment_jobs_model_nonempty"),
+    sa.CheckConstraint(
+        "prompt_sha256 IS NULL OR prompt_sha256 ~ '^[0-9a-f]{64}$'",
+        name="media_alias_enrichment_jobs_prompt_sha256_format",
+    ),
+    sa.UniqueConstraint(
+        "media_id",
+        "source_revision",
+        name="media_alias_enrichment_jobs_media_revision_key",
+    ),
+    sa.Index(
+        "media_alias_enrichment_jobs_available_idx",
+        "available_at",
+        "id",
+        postgresql_where=sa.text("status IN ('pending', 'retry')"),
+    ),
+    sa.Index(
+        "media_alias_enrichment_jobs_processing_lease_idx",
+        "leased_until",
+        "id",
+        postgresql_where=sa.text("status = 'processing'"),
+    ),
+    sa.Index("media_alias_enrichment_jobs_status_idx", "status", "id"),
+)
+
 user_media_cycle_states = sa.Table(
     "user_media_cycle_states",
     _metadata,

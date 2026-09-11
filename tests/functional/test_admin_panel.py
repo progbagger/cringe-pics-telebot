@@ -173,6 +173,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
+        "Поставлено заданий на алиасы: <b>0</b>",
     ):
         assert_that(result["payload"]["text"], contains_string(expected_line))
     assert_that(
@@ -283,6 +284,7 @@ async def test_admin_media_sync_shows_partial_result_and_allows_retry(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
+        "Поставлено заданий на алиасы: <b>0</b>",
     ):
         assert_that(partial_result["payload"]["text"], contains_string(expected_line))
 

@@ -40,10 +40,18 @@ from .entities import CategoryMediaSearchMetadata as CategoryMediaSearchMetadata
 from .entities import CategoryMediaSource as CategoryMediaSource
 from .entities import CategoryMediaStatus as CategoryMediaStatus
 from .entities import CreateSubscriptionType as CreateSubscriptionType
+from .entities import MediaAliasEnrichmentJob as MediaAliasEnrichmentJob
+from .entities import MediaAliasEnrichmentJobStatus as MediaAliasEnrichmentJobStatus
 from .entities import Subscription as Subscription
 from .entities import SubscriptionType as SubscriptionType
 from .entities import TelegramMediaType as TelegramMediaType
 from .entities import User as User
+from .media_alias_enrichment import claim_media_alias_enrichment_jobs as claim_media_alias_enrichment_jobs
+from .media_alias_enrichment import enqueue_media_alias_enrichment_jobs as enqueue_media_alias_enrichment_jobs
+from .media_alias_enrichment import get_media_alias_enrichment_jobs as get_media_alias_enrichment_jobs
+from .media_alias_enrichment import (
+    refresh_media_alias_enrichment_job_lease as refresh_media_alias_enrichment_job_lease,
+)
 from .media_cycles import UserMediaCycleEntries as UserMediaCycleEntries
 from .media_cycles import confirm_user_media_cycle_reservation as confirm_user_media_cycle_reservation
 from .media_cycles import create_user_media_cycle_reservation as create_user_media_cycle_reservation
