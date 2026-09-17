@@ -1,10 +1,13 @@
 import asyncio
+import base64
 import logging
 import os
 import socket
 import sys
 from asyncio import subprocess
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
@@ -26,6 +29,7 @@ from cringe_pics_telebot.services.admin_broadcasts import run_due_admin_broadcas
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary, synchronize_media_catalog
 from cringe_pics_telebot.services.search_aliases import normalize_search_term
 from cringe_pics_telebot.services.subscription_broadcasts import run_due_subscription_broadcasts
+from tests.functional.enrichment_support import EnrichmentBot, EnrichmentDatabase, FakeOllamaServer
 
 ROOT_DIR = Path(__file__).parents[2]
 FUNCTIONAL_DIR = ROOT_DIR / "tests" / "functional"
@@ -50,10 +54,7 @@ BOT_ENV = {
     **REDIS_ENV,
     "TELEGRAM_BOT_TOKEN": "123456:functional-test-token",
     "YANDEX_DISK_TOKEN": "functional-test-yandex-token",
-    "MEDIA_ALIAS_ENRICHMENT_ENABLED": "true",
-    "OLLAMA_BASE_URL": "http://ollama.invalid",
-    "OLLAMA_MODEL": "functional-vision-model",
-    "MEDIA_ALIAS_LLM_PROMPT": "Опиши изображение для функционального теста",
+    "MEDIA_ALIAS_ENRICHMENT_ENABLED": "false",
     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.5",
     "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.5",
 }
@@ -281,6 +282,44 @@ class FakeYandexServer:
             response.raise_for_status()
             body = await response.json()
             return body["result"]
+
+    async def configure_download(
+        self,
+        name: str,
+        content: bytes,
+        *,
+        content_type: str = "image/png",
+        status: int = 200,
+        block: bool = False,
+    ) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/download",
+                json={
+                    "name": name,
+                    "content": base64.b64encode(content).decode("ascii"),
+                    "content_type": content_type,
+                    "status": status,
+                    "block": block,
+                },
+            ) as response,
+        ):
+            response.raise_for_status()
+
+    async def wait_for_download(self, name: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.base_url}/test/wait-download", params={"name": name}) as response,
+        ):
+            response.raise_for_status()
+
+    async def release_download(self, name: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/release-download", json={"name": name}) as response,
+        ):
+            response.raise_for_status()
 
     async def configure_directory(
         self,
@@ -611,6 +650,175 @@ async def fake_statsd_server() -> AsyncIterator[FakeStatsDServer]:
         yield server
     finally:
         await _terminate_process(process)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def fake_ollama_server() -> AsyncIterator[FakeOllamaServer]:
+    port = _get_unused_tcp_port()
+    process = await subprocess.create_subprocess_exec(
+        sys.executable,
+        str(FUNCTIONAL_DIR / "fake_ollama.py"),
+        "--port",
+        str(port),
+        cwd=ROOT_DIR,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    server = FakeOllamaServer(base_url=f"http://127.0.0.1:{port}")
+    try:
+        await _wait_until_ready(lambda: _http_ready(f"{server.base_url}/healthz"), "fake Ollama")
+        yield server
+    finally:
+        await _terminate_process(process)
+
+
+@pytest.fixture
+async def enrichment_database(docker_compose: DependencyPorts) -> AsyncIterator[EnrichmentDatabase]:
+    connection = await _create_postgres_connection(docker_compose)
+    changed = asyncio.Event()
+
+    def notify(connection: asyncpg.Connection, pid: int, channel: str, payload: str) -> None:
+        changed.set()
+
+    await connection.add_listener("functional_enrichment_changed", notify)
+    # Test-only notification trigger: waits observe commits instead of guessing a delay.
+    await connection.execute("""
+        CREATE FUNCTION functional_notify_enrichment() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            PERFORM pg_notify('functional_enrichment_changed', NEW.id::text);
+            RETURN NEW;
+        END $$;
+        CREATE TRIGGER functional_enrichment_changed AFTER INSERT OR UPDATE ON media_alias_enrichment_jobs
+        FOR EACH ROW EXECUTE FUNCTION functional_notify_enrichment();
+    """)
+    try:
+        yield EnrichmentDatabase(connection=connection, changed=changed)
+    finally:
+        await connection.execute("""
+            DROP TRIGGER functional_enrichment_changed ON media_alias_enrichment_jobs;
+            DROP FUNCTION functional_notify_enrichment();
+        """)
+        await connection.close()
+
+
+@pytest.fixture
+async def start_enrichment_bot(
+    docker_compose: DependencyPorts,
+    enrichment_database: EnrichmentDatabase,
+    fake_yandex_server: FakeYandexServer,
+    fake_ollama_server: FakeOllamaServer,
+    fake_statsd_server: FakeStatsDServer,
+    reset_dependency_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> Callable[..., AbstractAsyncContextManager[EnrichmentBot]]:
+    await reset_dependency_state(())
+    await fake_ollama_server.reset()
+
+    @asynccontextmanager
+    async def start(
+        *,
+        overrides: dict[str, str] | None = None,
+        wait_ready: bool = True,
+    ) -> AsyncIterator[EnrichmentBot]:
+        port = _get_unused_tcp_port()
+        telegram_process = await subprocess.create_subprocess_exec(
+            sys.executable,
+            str(FUNCTIONAL_DIR / "fake_telegram.py"),
+            "--port",
+            str(port),
+            cwd=ROOT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        telegram = FakeTelegramServer(base_url=f"http://127.0.0.1:{port}", process=telegram_process)
+        env = (
+            _bot_env(docker_compose)
+            | {
+                "TELEGRAM_API_BASE_URL": telegram.base_url,
+                "YANDEX_DISK_API_BASE_URL": f"{fake_yandex_server.base_url}/v1/disk/",
+                "MEDIA_ALIAS_ENRICHMENT_ENABLED": "true",
+                "OLLAMA_BASE_URL": fake_ollama_server.base_url,
+                "OLLAMA_MODEL": "functional-vision-model",
+                "OLLAMA_API_KEY": "functional-ollama-key",
+                "MEDIA_ALIAS_LLM_PROMPT": "Private functional prompt that must not appear in logs",
+                "MEDIA_ALIAS_ENRICHMENT_POLL_INTERVAL_SECONDS": "0.05",
+                "MEDIA_ALIAS_ENRICHMENT_LEASE_TTL_SECONDS": "30",
+                "MEDIA_ALIAS_ENRICHMENT_LEASE_REFRESH_SECONDS": "0.1",
+                "MEDIA_ALIAS_ENRICHMENT_MAX_ATTEMPTS": "2",
+                "MEDIA_ALIAS_ENRICHMENT_RETRY_BASE_SECONDS": "30",
+                "MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS": "60",
+                "STATSD_HOST": fake_statsd_server.udp_host,
+                "STATSD_PORT": str(fake_statsd_server.udp_port),
+                "STATSD_PREFIX": "functional",
+            }
+            | (overrides or {})
+        )
+        try:
+            await _wait_until_ready(lambda: _http_ready(f"{telegram.base_url}/healthz"), "enrichment Telegram")
+            process = await subprocess.create_subprocess_exec(
+                str(Path(sys.executable).with_name("bot")),
+                cwd=ROOT_DIR,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            logs: deque[str] = deque(maxlen=1000)
+            log_changed = asyncio.Event()
+
+            async def drain_logs() -> None:
+                assert process.stdout is not None
+                async for line in process.stdout:
+                    logs.append(line.decode("utf-8", errors="replace"))
+                    log_changed.set()
+
+            async def wait_for_log(fragment: str) -> None:
+                async with asyncio.timeout(10):
+                    while True:
+                        log_changed.clear()
+                        if any(fragment in line for line in logs):
+                            return
+                        await log_changed.wait()
+
+            reader = asyncio.create_task(drain_logs())
+
+            async def stop() -> None:
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5)
+                    except TimeoutError:
+                        process.kill()
+                        await process.wait()
+                await reader
+
+            try:
+                if wait_ready:
+                    await telegram.wait_for_request("getMe")
+                    await wait_for_log("Finished media catalog sync")
+                yield EnrichmentBot(
+                    process=process,
+                    telegram=telegram,
+                    logs=logs,
+                    stop=stop,
+                    wait_for_log=wait_for_log,
+                )
+            finally:
+                await stop()
+        finally:
+            # The bot was already shut down gracefully; this owned fake may still
+            # have a server-side long-poll waiting for another Telegram update.
+            if telegram_process.returncode is None:
+                telegram_process.kill()
+            await telegram_process.wait()
+
+    return start
+
+
+@pytest.fixture
+async def enrichment_bot(
+    start_enrichment_bot: Callable[..., AbstractAsyncContextManager[EnrichmentBot]],
+) -> AsyncIterator[EnrichmentBot]:
+    async with start_enrichment_bot() as bot:
+        yield bot
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

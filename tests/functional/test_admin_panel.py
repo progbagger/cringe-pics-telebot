@@ -2,13 +2,11 @@ import re
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, time, timedelta, timezone
-from hashlib import sha256
 from typing import Any
 
 import pytest
 from hamcrest import (
     assert_that,
-    contains_exactly,
     contains_string,
     empty,
     equal_to,
@@ -176,7 +174,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
-        "Поставлено заданий на алиасы: <b>3</b>",
+        "Поставлено заданий на алиасы: <b>0</b>",
     ):
         assert_that(result["payload"]["text"], contains_string(expected_line))
     assert_that(
@@ -195,42 +193,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
         empty(),
     )
-    jobs = await read_functional_media_alias_enrichment_jobs()
-    assert_that(
-        jobs,
-        contains_exactly(
-            has_entries(
-                source_path="day/first.png",
-                source_revision=f"sha256:{sha256(b'day/first.png').hexdigest()}",
-                status="pending",
-                attempt_count=0,
-                retry_count=0,
-                model="functional-vision-model",
-                prompt_sha256=sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
-                result_class=None,
-            ),
-            has_entries(
-                source_path="day/second.gif",
-                source_revision=f"sha256:{sha256(b'day/second.gif').hexdigest()}",
-                status="pending",
-                attempt_count=0,
-                retry_count=0,
-                model="functional-vision-model",
-                prompt_sha256=sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
-                result_class=None,
-            ),
-            has_entries(
-                source_path="inactive/inactive.png",
-                source_revision=f"sha256:{sha256(b'inactive/inactive.png').hexdigest()}",
-                status="pending",
-                attempt_count=0,
-                retry_count=0,
-                model="functional-vision-model",
-                prompt_sha256=sha256("Опиши изображение для функционального теста".encode()).hexdigest(),
-                result_class=None,
-            ),
-        ),
-    )
+    assert_that(await read_functional_media_alias_enrichment_jobs(), empty())
 
     await fake_telegram_server.push_callback_query(
         data=_admin_panel_callback(AdminPanelAction.panel),
@@ -323,7 +286,7 @@ async def test_admin_media_sync_shows_partial_result_and_allows_retry(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
-        "Поставлено заданий на алиасы: <b>1</b>",
+        "Поставлено заданий на алиасы: <b>0</b>",
     ):
         assert_that(partial_result["payload"]["text"], contains_string(expected_line))
 
@@ -339,7 +302,7 @@ async def test_admin_media_sync_shows_partial_result_and_allows_retry(
     assert_that(retried_result["payload"]["text"], contains_string("Обработано категорий: <b>2</b>"))
     assert_that(retried_result["payload"]["text"], contains_string("Категорий с ошибками: <b>0</b>"))
     assert_that(retried_result["payload"]["text"], contains_string("Создано записей: <b>1</b>"))
-    assert_that(retried_result["payload"]["text"], contains_string("Поставлено заданий на алиасы: <b>1</b>"))
+    assert_that(retried_result["payload"]["text"], contains_string("Поставлено заданий на алиасы: <b>0</b>"))
 
 
 async def test_admin_manages_category_aliases_used_by_inline_search(

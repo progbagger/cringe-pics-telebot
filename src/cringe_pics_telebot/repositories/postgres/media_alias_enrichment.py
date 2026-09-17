@@ -6,7 +6,11 @@ from sqlalchemy import Row, case, exists, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from .connection import get_connection
-from .entities.media_alias_enrichment import MediaAliasEnrichmentJob, MediaAliasEnrichmentJobStatus
+from .entities.media_alias_enrichment import (
+    MediaAliasEnrichmentJob,
+    MediaAliasEnrichmentJobStatus,
+    MediaAliasEnrichmentQueueCounts,
+)
 from .tables import category_media, media_alias_enrichment_jobs, media_search_aliases
 
 _UNFINISHED_STATUSES = (
@@ -27,8 +31,14 @@ async def enqueue_media_alias_enrichment_jobs(
     model: str,
     prompt_sha256: str,
     enqueued_at: datetime | None = None,
+    media_ids: Sequence[int] | None = None,
 ) -> int:
+    if media_ids is not None and not media_ids:
+        return 0
     now = enqueued_at or datetime.now(UTC)
+    media_filter = category_media.c.subscription_type_id == subscription_type_id
+    if media_ids is not None:
+        media_filter &= category_media.c.id.in_(media_ids)
     aliases_exist = exists(
         select(media_search_aliases.c.media_id).where(media_search_aliases.c.media_id == category_media.c.id)
     )
@@ -36,7 +46,7 @@ async def enqueue_media_alias_enrichment_jobs(
         await conn.execute(
             update(media_alias_enrichment_jobs)
             .where(media_alias_enrichment_jobs.c.media_id == category_media.c.id)
-            .where(category_media.c.subscription_type_id == subscription_type_id)
+            .where(media_filter)
             .where(media_alias_enrichment_jobs.c.status.in_(_UNFINISHED_STATUSES))
             .where(
                 or_(
@@ -73,7 +83,7 @@ async def enqueue_media_alias_enrichment_jobs(
             literal(now),
             literal(now),
         ).where(
-            category_media.c.subscription_type_id == subscription_type_id,
+            media_filter,
             category_media.c.is_active.is_(True),
             ~aliases_exist,
         )
@@ -198,10 +208,96 @@ async def refresh_media_alias_enrichment_job_lease(
             .where(media_alias_enrichment_jobs.c.id == job_id)
             .where(media_alias_enrichment_jobs.c.status == MediaAliasEnrichmentJobStatus.processing)
             .where(media_alias_enrichment_jobs.c.lease_token == lease_token)
+            .where(media_alias_enrichment_jobs.c.leased_until > now)
             .values(leased_until=leased_until, updated_at=now)
             .returning(media_alias_enrichment_jobs.c.id)
         )
     return result.one_or_none() is not None
+
+
+async def get_media_alias_enrichment_job(
+    job_id: int,
+    *,
+    with_for_update: bool = False,
+) -> MediaAliasEnrichmentJob | None:
+    query = select(media_alias_enrichment_jobs).where(media_alias_enrichment_jobs.c.id == job_id)
+    if with_for_update:
+        query = query.with_for_update()
+    async with get_connection() as conn:
+        row = (await conn.execute(query)).one_or_none()
+    return _job_from_row(row) if row is not None else None
+
+
+async def finish_media_alias_enrichment_job(
+    *,
+    job_id: int,
+    lease_token: str,
+    status: MediaAliasEnrichmentJobStatus,
+    result_class: str,
+    finished_at: datetime,
+    available_at: datetime | None = None,
+    last_error: str | None = None,
+) -> bool:
+    if status not in (
+        MediaAliasEnrichmentJobStatus.retry,
+        MediaAliasEnrichmentJobStatus.succeeded,
+        MediaAliasEnrichmentJobStatus.failed,
+        MediaAliasEnrichmentJobStatus.obsolete,
+    ):
+        raise ValueError("Enrichment completion must be retry or a terminal status")
+    async with get_connection() as conn:
+        result = await conn.execute(
+            update(media_alias_enrichment_jobs)
+            .where(media_alias_enrichment_jobs.c.id == job_id)
+            .where(media_alias_enrichment_jobs.c.status == MediaAliasEnrichmentJobStatus.processing)
+            .where(media_alias_enrichment_jobs.c.lease_token == lease_token)
+            .where(media_alias_enrichment_jobs.c.leased_until > finished_at)
+            .values(
+                status=status,
+                lease_token=None,
+                leased_until=None,
+                available_at=available_at or finished_at,
+                result_class=result_class,
+                last_error=last_error,
+                updated_at=finished_at,
+                finished_at=None if status == MediaAliasEnrichmentJobStatus.retry else finished_at,
+            )
+            .returning(media_alias_enrichment_jobs.c.id)
+        )
+    return result.one_or_none() is not None
+
+
+async def get_media_alias_enrichment_queue_counts(*, now: datetime) -> MediaAliasEnrichmentQueueCounts:
+    jobs = media_alias_enrichment_jobs.c
+    available = (
+        select(func.count())
+        .where(
+            jobs.status.in_((MediaAliasEnrichmentJobStatus.pending, MediaAliasEnrichmentJobStatus.retry)),
+            jobs.available_at <= now,
+        )
+        .scalar_subquery()
+    )
+    expired = (
+        select(func.count())
+        .where(jobs.status == MediaAliasEnrichmentJobStatus.processing, jobs.leased_until <= now)
+        .scalar_subquery()
+    )
+    failed = select(func.count()).where(jobs.status == MediaAliasEnrichmentJobStatus.failed).scalar_subquery()
+    async with get_connection() as conn:
+        row = (
+            await conn.execute(
+                select(
+                    available.label("available"),
+                    expired.label("expired_processing"),
+                    failed.label("failed"),
+                )
+            )
+        ).one()
+    return MediaAliasEnrichmentQueueCounts(
+        available=row.available,
+        expired_processing=row.expired_processing,
+        failed=row.failed,
+    )
 
 
 async def get_media_alias_enrichment_jobs(

@@ -30,3 +30,10 @@ class MediaAliasEnrichmentJob:
     created_at: datetime
     updated_at: datetime
     finished_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class MediaAliasEnrichmentQueueCounts:
+    available: int
+    expired_processing: int
+    failed: int
