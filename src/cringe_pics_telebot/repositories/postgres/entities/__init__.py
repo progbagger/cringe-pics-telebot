@@ -8,6 +8,8 @@ from .category_media import CategoryMediaSearchMetadata as CategoryMediaSearchMe
 from .category_media import CategoryMediaSource as CategoryMediaSource
 from .category_media import CategoryMediaStatus as CategoryMediaStatus
 from .category_media import TelegramMediaType as TelegramMediaType
+from .media_alias_enrichment import MediaAliasEnrichmentJob as MediaAliasEnrichmentJob
+from .media_alias_enrichment import MediaAliasEnrichmentJobStatus as MediaAliasEnrichmentJobStatus
 from .subscription import CreateSubscription as CreateSubscription
 from .subscription import Subscription as Subscription
 from .subscription_type import CreateSubscriptionType as CreateSubscriptionType

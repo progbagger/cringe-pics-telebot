@@ -9,7 +9,9 @@ dependencies = [
   "aiogram>=3.30.0",
   "aiohttp>=3.14.3",
   "asyncpg>=0.31.0",
+  "av>=16.0.1",
   "click>=8.4.2",
+  "pillow>=12.0.0",
   "redis[hiredis]>=8.1.0",
   "serpyco-rs>=1.21.0",
   "sqlalchemy[asyncio]>=2.1.0b3",
@@ -50,3 +52,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "statsd"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disable_error_code = ["arg-type", "misc"]

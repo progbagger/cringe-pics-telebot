@@ -1,9 +1,11 @@
+import asyncio
 import hashlib
 import json
 import logging
 from collections.abc import AsyncGenerator
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import count
 from typing import Any
 
@@ -33,6 +35,15 @@ class Image:
     """Время последнего изменения файла"""
 
 
+@dataclass(frozen=True, slots=True)
+class DownloadedFile:
+    content: bytes
+    content_type: str | None
+
+
+class YandexDownloadTooLargeError(ValueError): ...
+
+
 class YandexS3Client:
     """Клиент для загрузки файлов с Яндекс.Диска"""
 
@@ -54,16 +65,22 @@ class YandexS3Client:
         self.fetch_size = fetch_size
 
     async def __aenter__(self) -> YandexS3Client:
-        self._session = aiohttp.ClientSession(
-            raise_for_status=True,
-            headers={"Authorization": f"OAuth {self._token}"},
-            middlewares=[aiohttp_logging_middleware_factory(_logger)],
-        )
-        await self._session.__aenter__()
+        async with AsyncExitStack() as stack:
+            self._session = await stack.enter_async_context(
+                aiohttp.ClientSession(
+                    raise_for_status=True,
+                    headers={"Authorization": f"OAuth {self._token}"},
+                    middlewares=[aiohttp_logging_middleware_factory(_logger)],
+                )
+            )
+            self._exit_stack = stack.pop_all()
+
+        self._download_session: aiohttp.ClientSession | None = None
+
         return self
 
     async def __aexit__(self, *args: Any, **kwargs: Any) -> None:
-        await self._session.__aexit__(*args, **kwargs)
+        await self._exit_stack.__aexit__(*args, **kwargs)
 
     @classmethod
     def _create_url(cls, path: str, *, base_url: str | None = None) -> str:
@@ -161,6 +178,44 @@ class YandexS3Client:
             params={"path": self._get_path_with_app(path), "fields": "href"},
         ) as response:
             return (await response.json())["href"]
+
+    async def download_file(
+        self,
+        *,
+        path: str,
+        max_bytes: int,
+        timeout: timedelta,
+    ) -> DownloadedFile:
+        if max_bytes <= 0:
+            raise ValueError("Yandex download byte limit must be positive")
+        if timeout.total_seconds() <= 0:
+            raise ValueError("Yandex download timeout must be positive")
+
+        async with asyncio.timeout(timeout.total_seconds()):
+            url = await self.get_download_url(path)
+            if self._download_session is None:
+                self._download_session = await self._exit_stack.enter_async_context(
+                    aiohttp.ClientSession(raise_for_status=True)
+                )
+
+            async with self._download_session.get(url) as response:
+                if response.content_length is not None and response.content_length > max_bytes:
+                    raise YandexDownloadTooLargeError(
+                        f"Yandex download exceeds byte limit: {response.content_length} > {max_bytes}"
+                    )
+
+                content = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    if len(content) + len(chunk) > max_bytes:
+                        raise YandexDownloadTooLargeError(
+                            f"Yandex download exceeds byte limit while streaming: > {max_bytes}"
+                        )
+                    content.extend(chunk)
+
+                return DownloadedFile(
+                    content=bytes(content),
+                    content_type=response.headers.get("Content-Type"),
+                )
 
 
 def resource_revision(resource: dict[str, Any]) -> str:

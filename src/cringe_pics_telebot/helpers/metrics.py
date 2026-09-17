@@ -104,13 +104,34 @@ class StatsDMetricsSink:
 class Stopwatch:
     _clock: Clock
     _started_at: float
+    _metric_name: str | None = None
+    _finished_at: float | None = None
 
     @classmethod
-    def start(cls, *, clock: Clock = time.monotonic) -> Stopwatch:
-        return cls(_clock=clock, _started_at=clock())
+    def start(cls, *, metric_name: str | None = None, clock: Clock = time.monotonic) -> Stopwatch:
+        return cls(_clock=clock, _started_at=clock(), _metric_name=metric_name)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._finished_at = self._clock()
+
+        if self._metric_name is not None:
+            try:
+                get_metrics_sink().emit((TimingMetric(self._metric_name, self.elapsed_milliseconds()),))
+            except Exception:
+                # Observability must not mask the measured operation's failure or cancellation.
+                logger.error("Failed to emit stopwatch timing metric metric=%s", self._metric_name)
 
     def elapsed_milliseconds(self) -> float:
-        return (self._clock() - self._started_at) * 1_000
+        finished_at = self._finished_at if self._finished_at is not None else self._clock()
+        return (finished_at - self._started_at) * 1_000
 
 
 _metrics_sink: MetricsSink = NullMetricsSink()

@@ -1,10 +1,11 @@
 import asyncio
 import logging
 from collections.abc import AsyncGenerator, Iterable
+from datetime import timedelta
 from typing import cast
 
 from cringe_pics_telebot.repositories.yandex.connection import get_connection
-from cringe_pics_telebot.repositories.yandex.yandex import Image
+from cringe_pics_telebot.repositories.yandex.yandex import DownloadedFile, Image
 
 logger = logging.getLogger(__name__)
 
@@ -33,3 +34,8 @@ async def get_download_urls(paths: Iterable[str]) -> list[str | None]:
             logger.error("Failed to get download URL for %s", path, exc_info=result)
 
     return [None if isinstance(result, BaseException) else cast(str, result) for result in results]
+
+
+async def download_file(*, path: str, max_bytes: int, timeout: timedelta) -> DownloadedFile:
+    async with get_connection() as conn:
+        return await conn.download_file(path=path, max_bytes=max_bytes, timeout=timeout)

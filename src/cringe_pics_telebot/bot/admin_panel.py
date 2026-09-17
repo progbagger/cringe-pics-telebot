@@ -6,6 +6,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 
+from cringe_pics_telebot.services.media_alias_enrichment_settings import MediaAliasEnrichmentSettings
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary, synchronize_media_catalog
 
 from .admin_access import IsAdministrator
@@ -32,7 +33,12 @@ async def show_admin_panel(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(AdminPanelCallbackData.filter())
-async def handle_admin_panel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+async def handle_admin_panel_callback(
+    callback: CallbackQuery,
+    state: FSMContext,
+    *,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
+) -> None:
     message = _callback_message(callback)
     if message is None or callback.data is None:
         await callback.answer("Сообщение панели недоступно.", show_alert=True)
@@ -50,13 +56,17 @@ async def handle_admin_panel_callback(callback: CallbackQuery, state: FSMContext
         case AdminPanelAction.synchronize_media:
             await callback.answer()
             await state.clear()
-            await _synchronize_media(message)
+            await _synchronize_media(message, alias_enrichment_settings=alias_enrichment_settings)
 
 
-async def _synchronize_media(message: Message) -> None:
+async def _synchronize_media(
+    message: Message,
+    *,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
+) -> None:
     await message.edit_text("<b>Синхронизация медиа началась</b>\n\nЭто может занять некоторое время.")
     try:
-        summary = await synchronize_media_catalog()
+        summary = await synchronize_media_catalog(alias_enrichment_settings=alias_enrichment_settings)
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -86,7 +96,8 @@ def _media_sync_summary_text(summary: MediaSyncSummary) -> str:
         f"Создано записей: <b>{summary.created}</b>\n"
         f"Изменено записей: <b>{summary.changed}</b>\n"
         f"Повторно активировано медиа: <b>{summary.reactivated}</b>\n"
-        f"Деактивировано отсутствующее медиа: <b>{summary.deactivated}</b>"
+        f"Деактивировано отсутствующее медиа: <b>{summary.deactivated}</b>\n"
+        f"Поставлено заданий на алиасы: <b>{summary.alias_enrichment_queued}</b>"
     )
 
 

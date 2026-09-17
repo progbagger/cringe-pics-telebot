@@ -57,3 +57,4 @@ class CategoryMediaReconcileResult:
     reactivated: int
     deactivated: int
     unchanged: int
+    alias_enrichment_queued: int = 0

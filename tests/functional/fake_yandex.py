@@ -1,4 +1,6 @@
 import argparse
+import asyncio
+import base64
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
@@ -17,6 +19,9 @@ class FakeYandex:
         self._requests: list[dict[str, Any]] = []
         self._directory_overrides: dict[str, list[dict[str, Any]]] = {}
         self._failed_directories: set[str] = set()
+        self._downloads: dict[str, dict[str, Any]] = {}
+        self._download_barriers: dict[str, asyncio.Event] = {}
+        self._download_condition = asyncio.Condition()
 
     async def healthcheck(self, request: web.Request) -> web.Response:
         return web.json_response({"ok": True})
@@ -25,9 +30,13 @@ class FakeYandex:
         return web.json_response({"ok": True, "result": self._requests})
 
     async def reset(self, request: web.Request) -> web.Response:
+        for barrier in self._download_barriers.values():
+            barrier.set()
+        self._download_barriers.clear()
         self._requests.clear()
         self._directory_overrides.clear()
         self._failed_directories.clear()
+        self._downloads.clear()
         return web.json_response({"ok": True})
 
     async def configure_directory(self, request: web.Request) -> web.Response:
@@ -39,6 +48,32 @@ class FakeYandex:
         else:
             self._failed_directories.discard(directory)
             self._directory_overrides[directory] = list(payload.get("images", []))
+        return web.json_response({"ok": True})
+
+    async def configure_download(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        name = str(payload["name"])
+        self._downloads[name] = payload
+        barrier = self._download_barriers.setdefault(name, asyncio.Event())
+        if payload.get("block", False):
+            barrier.clear()
+        else:
+            barrier.set()
+
+        return web.json_response({"ok": True})
+
+    async def release_download(self, request: web.Request) -> web.Response:
+        name = (await request.json())["name"]
+        self._download_barriers[name].set()
+        return web.json_response({"ok": True})
+
+    async def wait_for_download(self, request: web.Request) -> web.Response:
+        name = request.query["name"]
+        async with asyncio.timeout(10), self._download_condition:
+            await self._download_condition.wait_for(
+                lambda: any(item["method"] == "download" and item["path"] == name for item in self._requests)
+            )
+
         return web.json_response({"ok": True})
 
     async def resources(self, request: web.Request) -> web.Response:
@@ -81,8 +116,27 @@ class FakeYandex:
         return web.json_response({"href": f"{request.scheme}://{request.host}/download/{image_name}"})
 
     async def download_file(self, request: web.Request) -> web.Response:
-        self._requests.append({"method": "download", "path": request.match_info["path"]})
-        return web.Response(body=IMAGE_BYTES, content_type="image/png")
+        name = request.match_info["path"]
+        self._requests.append(
+            {
+                "method": "download",
+                "path": name,
+                "authorization": request.headers.get("Authorization"),
+            }
+        )
+
+        async with self._download_condition:
+            self._download_condition.notify_all()
+        configured = self._downloads.get(name, {})
+        if barrier := self._download_barriers.get(name):
+            await barrier.wait()
+
+        body = base64.b64decode(configured["content"]) if "content" in configured else IMAGE_BYTES
+        return web.Response(
+            body=body,
+            content_type=configured.get("content_type", "image/png"),
+            status=configured.get("status", 200),
+        )
 
 
 def create_app() -> web.Application:
@@ -92,6 +146,9 @@ def create_app() -> web.Application:
     app.router.add_get("/test/requests", fake.list_requests)
     app.router.add_post("/test/reset", fake.reset)
     app.router.add_post("/test/directory", fake.configure_directory)
+    app.router.add_post("/test/download", fake.configure_download)
+    app.router.add_post("/test/release-download", fake.release_download)
+    app.router.add_get("/test/wait-download", fake.wait_for_download)
     app.router.add_get("/v1/disk/resources", fake.resources)
     app.router.add_get("/v1/disk/resources/download", fake.download_resource)
     app.router.add_get("/download/{path:.*}", fake.download_file)

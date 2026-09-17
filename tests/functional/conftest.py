@@ -1,10 +1,13 @@
 import asyncio
+import base64
 import logging
 import os
 import socket
 import sys
 from asyncio import subprocess
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
@@ -26,6 +29,7 @@ from cringe_pics_telebot.services.admin_broadcasts import run_due_admin_broadcas
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary, synchronize_media_catalog
 from cringe_pics_telebot.services.search_aliases import normalize_search_term
 from cringe_pics_telebot.services.subscription_broadcasts import run_due_subscription_broadcasts
+from tests.functional.enrichment_support import EnrichmentBot, EnrichmentDatabase, FakeOllamaServer
 
 ROOT_DIR = Path(__file__).parents[2]
 FUNCTIONAL_DIR = ROOT_DIR / "tests" / "functional"
@@ -50,6 +54,7 @@ BOT_ENV = {
     **REDIS_ENV,
     "TELEGRAM_BOT_TOKEN": "123456:functional-test-token",
     "YANDEX_DISK_TOKEN": "functional-test-yandex-token",
+    "MEDIA_ALIAS_ENRICHMENT_ENABLED": "false",
     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.5",
     "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.5",
 }
@@ -278,6 +283,44 @@ class FakeYandexServer:
             body = await response.json()
             return body["result"]
 
+    async def configure_download(
+        self,
+        *,
+        name: str,
+        content: bytes,
+        content_type: str = "image/png",
+        status: int = 200,
+        block: bool = False,
+    ) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/download",
+                json={
+                    "name": name,
+                    "content": base64.b64encode(content).decode("ascii"),
+                    "content_type": content_type,
+                    "status": status,
+                    "block": block,
+                },
+            ) as response,
+        ):
+            response.raise_for_status()
+
+    async def wait_for_download(self, name: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.base_url}/test/wait-download", params={"name": name}) as response,
+        ):
+            response.raise_for_status()
+
+    async def release_download(self, name: str) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.base_url}/test/release-download", json={"name": name}) as response,
+        ):
+            response.raise_for_status()
+
     async def configure_directory(
         self,
         directory: str,
@@ -389,6 +432,32 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         env=_bot_env(dependency_ports),
     )
     await _prepare_pre_weekdays_rows(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
+        "0013",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_media_alias_enrichment_jobs_table_absent(dependency_ports)
     await _run_checked(
         "uv",
         "run",
@@ -581,6 +650,195 @@ async def fake_statsd_server() -> AsyncIterator[FakeStatsDServer]:
         yield server
     finally:
         await _terminate_process(process)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def fake_ollama_server() -> AsyncIterator[FakeOllamaServer]:
+    port = _get_unused_tcp_port()
+    process = await subprocess.create_subprocess_exec(
+        sys.executable,
+        str(FUNCTIONAL_DIR / "fake_ollama.py"),
+        "--port",
+        str(port),
+        cwd=ROOT_DIR,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    server = FakeOllamaServer(base_url=f"http://127.0.0.1:{port}")
+    try:
+        await _wait_until_ready(lambda: _http_ready(f"{server.base_url}/healthz"), "fake Ollama")
+        yield server
+    finally:
+        await _terminate_process(process)
+
+
+@pytest.fixture
+async def enrichment_database(docker_compose: DependencyPorts) -> AsyncIterator[EnrichmentDatabase]:
+    connection = await _create_postgres_connection(docker_compose)
+    changed = asyncio.Event()
+
+    def notify(connection: asyncpg.Connection, pid: int, channel: str, payload: str) -> None:
+        changed.set()
+
+    await connection.add_listener("functional_enrichment_changed", notify)
+
+    # Test-only notification trigger: waits observe commits instead of guessing a delay.
+    await connection.execute("""
+        CREATE FUNCTION functional_notify_enrichment() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            PERFORM pg_notify('functional_enrichment_changed', NEW.id::text);
+            RETURN NEW;
+        END $$;
+        CREATE TRIGGER functional_enrichment_changed AFTER INSERT OR UPDATE ON media_alias_enrichment_jobs
+        FOR EACH ROW EXECUTE FUNCTION functional_notify_enrichment();
+    """)
+
+    try:
+        yield EnrichmentDatabase(connection=connection, changed=changed)
+    finally:
+        await connection.execute("""
+            DROP TRIGGER functional_enrichment_changed ON media_alias_enrichment_jobs;
+            DROP FUNCTION functional_notify_enrichment();
+        """)
+        await connection.close()
+
+
+@pytest.fixture
+async def start_enrichment_bot(
+    *,
+    docker_compose: DependencyPorts,
+    enrichment_database: EnrichmentDatabase,
+    fake_yandex_server: FakeYandexServer,
+    fake_ollama_server: FakeOllamaServer,
+    fake_statsd_server: FakeStatsDServer,
+    reset_dependency_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> Callable[..., AbstractAsyncContextManager[EnrichmentBot]]:
+    await reset_dependency_state(())
+    await fake_ollama_server.reset()
+
+    @asynccontextmanager
+    async def start(
+        *,
+        overrides: dict[str, str] | None = None,
+        wait_ready: bool = True,
+        subscription_now: datetime | None = None,
+    ) -> AsyncIterator[EnrichmentBot]:
+        port = _get_unused_tcp_port()
+        telegram_process = await subprocess.create_subprocess_exec(
+            sys.executable,
+            str(FUNCTIONAL_DIR / "fake_telegram.py"),
+            "--port",
+            str(port),
+            cwd=ROOT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        telegram = FakeTelegramServer(base_url=f"http://127.0.0.1:{port}", process=telegram_process)
+
+        env = (
+            _bot_env(docker_compose)
+            | {
+                "TELEGRAM_API_BASE_URL": telegram.base_url,
+                "YANDEX_DISK_API_BASE_URL": f"{fake_yandex_server.base_url}/v1/disk/",
+                "MEDIA_ALIAS_ENRICHMENT_ENABLED": "true",
+                "OLLAMA_BASE_URL": fake_ollama_server.base_url,
+                "OLLAMA_MODEL": "functional-vision-model",
+                "OLLAMA_API_KEY": "functional-ollama-key",
+                "MEDIA_ALIAS_LLM_PROMPT": "Private functional prompt that must not appear in logs",
+                "MEDIA_ALIAS_LLM_PROMPT_FILE": "",
+                "MEDIA_ALIAS_ENRICHMENT_POLL_INTERVAL_SECONDS": "0.05",
+                "MEDIA_ALIAS_ENRICHMENT_LEASE_TTL_SECONDS": "30",
+                "MEDIA_ALIAS_ENRICHMENT_LEASE_REFRESH_SECONDS": "0.1",
+                "MEDIA_ALIAS_ENRICHMENT_MAX_ATTEMPTS": "2",
+                "MEDIA_ALIAS_ENRICHMENT_RETRY_BASE_SECONDS": "30",
+                "MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS": "60",
+                "STATSD_HOST": fake_statsd_server.udp_host,
+                "STATSD_PORT": str(fake_statsd_server.udp_port),
+                "STATSD_PREFIX": "functional",
+            }
+            | (overrides or {})
+        )
+
+        try:
+            await _wait_until_ready(lambda: _http_ready(f"{telegram.base_url}/healthz"), "enrichment Telegram")
+            command = [str(Path(sys.executable).with_name("bot"))]
+            if subscription_now is not None:
+                command = [
+                    sys.executable,
+                    str(FUNCTIONAL_DIR / "enrichment_clock_runner.py"),
+                    "--now",
+                    subscription_now.isoformat(),
+                ]
+
+            process = await subprocess.create_subprocess_exec(
+                *command,
+                cwd=ROOT_DIR,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+
+            logs: deque[str] = deque(maxlen=1000)
+            log_changed = asyncio.Event()
+
+            async def drain_logs() -> None:
+                assert process.stdout is not None
+                async for line in process.stdout:
+                    logs.append(line.decode("utf-8", errors="replace"))
+                    log_changed.set()
+
+            async def wait_for_log(fragment: str) -> None:
+                async with asyncio.timeout(10):
+                    while True:
+                        log_changed.clear()
+                        if any(fragment in line for line in logs):
+                            return
+
+                        await log_changed.wait()
+
+            reader = asyncio.create_task(drain_logs())
+
+            async def stop() -> None:
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5)
+                    except TimeoutError:
+                        process.kill()
+                        await process.wait()
+
+                await reader
+
+            try:
+                if wait_ready:
+                    await telegram.wait_for_request("getMe")
+                    await wait_for_log("Finished media catalog sync")
+
+                yield EnrichmentBot(
+                    process=process,
+                    telegram=telegram,
+                    logs=logs,
+                    stop=stop,
+                    wait_for_log=wait_for_log,
+                )
+            finally:
+                await stop()
+        finally:
+            # The bot was already shut down gracefully; this owned fake may still
+            # have a server-side long-poll waiting for another Telegram update.
+            if telegram_process.returncode is None:
+                telegram_process.kill()
+            await telegram_process.wait()
+
+    return start
+
+
+@pytest.fixture
+async def enrichment_bot(
+    start_enrichment_bot: Callable[..., AbstractAsyncContextManager[EnrichmentBot]],
+) -> AsyncIterator[EnrichmentBot]:
+    async with start_enrichment_bot() as bot:
+        yield bot
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
@@ -1107,6 +1365,36 @@ async def read_functional_media_search_aliases(
 
 
 @pytest.fixture
+async def read_functional_media_alias_enrichment_jobs(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[list[dict[str, Any]]]]:
+    async def read() -> list[dict[str, Any]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT
+                    media.source_path,
+                    jobs.source_revision,
+                    jobs.status::text,
+                    jobs.attempt_count,
+                    jobs.retry_count,
+                    jobs.model,
+                    jobs.prompt_sha256,
+                    jobs.result_class
+                FROM media_alias_enrichment_jobs AS jobs
+                JOIN category_media AS media ON media.id = jobs.media_id
+                ORDER BY media.source_path
+                """
+            )
+            return [dict(row) for row in rows]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
 async def read_functional_category_media_states(
     docker_compose: DependencyPorts,
 ) -> Callable[[], Awaitable[dict[str, tuple[str, str | None]]]]:
@@ -1275,6 +1563,7 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
             TRUNCATE
                 user_media_cycle_entries,
                 user_media_cycle_states,
+                media_alias_enrichment_jobs,
                 media_search_aliases,
                 category_media,
                 admin_broadcast_deliveries,
@@ -1468,6 +1757,34 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             equal_to("media_search_aliases"),
         )
         assert_that(
+            await connection.fetchval("SELECT to_regclass('media_alias_enrichment_jobs')"),
+            equal_to("media_alias_enrichment_jobs"),
+        )
+        assert_that(
+            [
+                row["enumlabel"]
+                for row in await connection.fetch(
+                    """
+                    SELECT enum.enumlabel
+                    FROM pg_enum AS enum
+                    JOIN pg_type AS type ON type.oid = enum.enumtypid
+                    WHERE type.typname = 'media_alias_enrichment_job_status'
+                    ORDER BY enum.enumsortorder
+                    """
+                )
+            ],
+            equal_to(["pending", "processing", "retry", "succeeded", "failed", "obsolete"]),
+        )
+        for index_name in (
+            "media_alias_enrichment_jobs_available_idx",
+            "media_alias_enrichment_jobs_processing_lease_idx",
+            "media_alias_enrichment_jobs_status_idx",
+        ):
+            assert_that(
+                await connection.fetchval("SELECT to_regclass($1)", index_name),
+                equal_to(index_name),
+            )
+        assert_that(
             await connection.fetchval("SELECT extname FROM pg_extension WHERE extname = 'pg_trgm'"),
             equal_to("pg_trgm"),
         )
@@ -1527,6 +1844,40 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             """,
             media_id,
         )
+        prompt_sha256 = "a" * 64
+        await connection.execute(
+            """
+            INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, model, prompt_sha256)
+            VALUES($1, 'sha256:migration-video', 'gemma3:12b', $2)
+            """,
+            media_id,
+            prompt_sha256,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, model, prompt_sha256)
+                VALUES($1, 'sha256:migration-video', 'gemma3:12b', $2)
+                """,
+                media_id,
+                prompt_sha256,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await connection.execute(
+                """
+                INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, status)
+                VALUES($1, 'sha256:invalid-job', 'processing')
+                """,
+                media_id,
+            )
+        with pytest.raises(asyncpg.InvalidTextRepresentationError):
+            await connection.execute(
+                """
+                INSERT INTO media_alias_enrichment_jobs(media_id, source_revision, status)
+                VALUES($1, 'sha256:invalid-status', 'unknown')
+                """,
+                media_id,
+            )
         with pytest.raises(asyncpg.UniqueViolationError):
             await connection.execute(
                 """
@@ -1546,6 +1897,10 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         await connection.execute("DELETE FROM category_media WHERE source_path = 'migration-probe/video.mp4'")
         assert_that(
             await connection.fetchval("SELECT count(*) FROM media_search_aliases WHERE media_id = $1", media_id),
+            equal_to(0),
+        )
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM media_alias_enrichment_jobs WHERE media_id = $1", media_id),
             equal_to(0),
         )
         with pytest.raises(asyncpg.CheckViolationError):
@@ -1605,6 +1960,23 @@ async def _assert_media_search_aliases_table_absent(dependency_ports: Dependency
     try:
         assert_that(await connection.fetchval("SELECT to_regclass('media_search_aliases')"), none())
         assert_that(await connection.fetchval("SELECT to_regclass('category_media')"), equal_to("category_media"))
+    finally:
+        await connection.close()
+
+
+async def _assert_media_alias_enrichment_jobs_table_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert_that(await connection.fetchval("SELECT to_regclass('media_alias_enrichment_jobs')"), none())
+        assert_that(
+            await connection.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'media_alias_enrichment_job_status')"
+            ),
+            is_(False),
+        )
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('media_search_aliases')"), equal_to("media_search_aliases")
+        )
     finally:
         await connection.close()
 

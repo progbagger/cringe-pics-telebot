@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from time import monotonic
 
+from cringe_pics_telebot.helpers.metrics import CounterMetric, get_metrics_sink
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMediaReconcileResult,
@@ -15,6 +16,10 @@ from cringe_pics_telebot.repositories.postgres import (
     get_all_subscription_types,
 )
 from cringe_pics_telebot.repositories.yandex import Image, list_dir
+from cringe_pics_telebot.services.media_alias_enrichment_settings import (
+    MediaAliasEnrichmentSettings,
+    load_media_alias_enrichment_settings,
+)
 from cringe_pics_telebot.services.media_catalog import reconcile_category_media_snapshot
 
 logger = logging.getLogger(__name__)
@@ -37,17 +42,19 @@ class MediaSyncSummary:
     changed: int = 0
     reactivated: int = 0
     deactivated: int = 0
+    alias_enrichment_queued: int = 0
 
 
 async def run_media_sync(
     *,
     interval: timedelta = DEFAULT_SYNC_INTERVAL,
     sleep: Sleep = asyncio.sleep,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
 ) -> None:
     _validate_interval(interval)
     while True:
         try:
-            await synchronize_media_catalog()
+            await synchronize_media_catalog(alias_enrichment_settings=alias_enrichment_settings)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -55,8 +62,15 @@ async def run_media_sync(
         await sleep(interval.total_seconds())
 
 
-async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL) -> MediaSyncSummary:
+async def synchronize_media_catalog(
+    *,
+    lease_ttl: timedelta = DEFAULT_LEASE_TTL,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
+) -> MediaSyncSummary:
     _validate_interval(lease_ttl)
+    if alias_enrichment_settings is None:
+        alias_enrichment_settings = await load_media_alias_enrichment_settings()
+
     lease_token = secrets.token_urlsafe(24)
     acquired = await cache.set_if_absent(
         key=MEDIA_SYNC_LEASE_KEY,
@@ -79,6 +93,7 @@ async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL)
                     subscription_type,
                     lease_token=lease_token,
                     lease_ttl=lease_ttl,
+                    alias_enrichment_settings=alias_enrichment_settings,
                 )
             except asyncio.CancelledError:
                 raise
@@ -97,7 +112,7 @@ async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL)
                 summaries.append(summary)
                 logger.info(
                     "Synchronized media category id=%d name=%s discovered=%d created=%d changed=%d "
-                    "reactivated=%d deactivated=%d",
+                    "reactivated=%d deactivated=%d alias_enrichment_queued=%d",
                     subscription_type.id,
                     subscription_type.name,
                     summary.discovered,
@@ -105,7 +120,12 @@ async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL)
                     summary.changed,
                     summary.reactivated,
                     summary.deactivated,
+                    summary.alias_enrichment_queued,
                 )
+                if summary.alias_enrichment_queued:
+                    get_metrics_sink().emit(
+                        [CounterMetric("media_alias_enrichment.queued", summary.alias_enrichment_queued)]
+                    )
 
         result = MediaSyncSummary(
             acquired=True,
@@ -116,10 +136,11 @@ async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL)
             changed=sum(summary.changed for summary in summaries),
             reactivated=sum(summary.reactivated for summary in summaries),
             deactivated=sum(summary.deactivated for summary in summaries),
+            alias_enrichment_queued=sum(summary.alias_enrichment_queued for summary in summaries),
         )
         logger.info(
             "Finished media catalog sync duration_seconds=%.3f categories=%d failed=%d discovered=%d "
-            "created=%d changed=%d reactivated=%d deactivated=%d",
+            "created=%d changed=%d reactivated=%d deactivated=%d alias_enrichment_queued=%d",
             monotonic() - started_at,
             result.categories,
             result.failed,
@@ -128,6 +149,7 @@ async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL)
             result.changed,
             result.reactivated,
             result.deactivated,
+            result.alias_enrichment_queued,
         )
         return result
     finally:
@@ -144,6 +166,7 @@ async def _synchronize_subscription_type(
     *,
     lease_token: str,
     lease_ttl: timedelta,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings,
 ) -> CategoryMediaReconcileResult:
     images = [image async for image in list_dir(subscription_type.s3_directory_path)]
     if not await cache.refresh_if_value(
@@ -157,6 +180,7 @@ async def _synchronize_subscription_type(
     return await reconcile_category_media_snapshot(
         subscription_type_id=subscription_type.id,
         sources=sources,
+        alias_enrichment_settings=alias_enrichment_settings,
     )
 
 

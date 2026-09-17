@@ -26,7 +26,7 @@ async def test_runner_synchronizes_immediately_then_waits(monkeypatch: pytest.Mo
     with pytest.raises(asyncio.CancelledError):
         await media_sync.run_media_sync(sleep=cancel_during_sleep)
 
-    synchronize.assert_awaited_once_with()
+    synchronize.assert_awaited_once_with(alias_enrichment_settings=None)
 
 
 async def test_synchronization_isolates_category_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,6 +51,7 @@ async def test_synchronization_isolates_category_failures(monkeypatch: pytest.Mo
             reactivated=0,
             deactivated=0,
             unchanged=0,
+            alias_enrichment_queued=2,
         )
     )
     monkeypatch.setattr(media_sync, "reconcile_category_media_snapshot", reconcile)
@@ -60,7 +61,7 @@ async def test_synchronization_isolates_category_failures(monkeypatch: pytest.Mo
     assert_that(result.acquired, is_(True))
     assert_that(result.categories, equal_to(1))
     assert_that(result.failed, equal_to(1))
-    assert_that(result, has_properties(discovered=1, created=1))
+    assert_that(result, has_properties(discovered=1, created=1, alias_enrichment_queued=2))
     assert_that(reconcile.await_args_list, has_length(1))
     source = reconcile.await_args_list[0].kwargs["sources"][0]
     assert_that(source.telegram_media_type, same_instance(TelegramMediaType.animation))
