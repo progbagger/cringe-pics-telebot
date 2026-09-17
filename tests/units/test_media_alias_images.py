@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from io import BytesIO
 from threading import Event
 
@@ -178,6 +179,7 @@ async def test_photo_applies_exif_orientation() -> None:
     ("source", "mime_type", "max_frame_pixels", "max_image_bytes", "error_type"),
     [
         (b"not-an-image", "image/png", 10_000, 10_000, MediaAliasDecodeError),
+        (_image_bytes("PNG"), "image/gif", 10_000, 10_000, MediaAliasDecodeError),
         (b"not-a-video", "video/mp4", 10_000, 10_000, MediaAliasDecodeError),
         (b"anything", "application/octet-stream", 10_000, 10_000, UnsupportedMediaAliasTypeError),
         (_image_bytes("PNG", size=(20, 20)), "image/png", 399, 10_000, MediaAliasFrameTooLargeError),
@@ -203,14 +205,22 @@ async def test_invalid_or_oversized_media_is_rejected(
         )
 
 
-async def test_cancellation_waits_for_started_preparation_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancellation_waits_for_started_preparation_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     loop = asyncio.get_running_loop()
     started = asyncio.Event()
     release = Event()
+    cancellation_logs: asyncio.Queue[logging.LogRecord] = asyncio.Queue()
+
+    class CancellationLogHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            cancellation_logs.put_nowait(record)
 
     def prepare(*args: object) -> bytes:
         loop.call_soon_threadsafe(started.set)
-        release.wait(timeout=1)
+        release.wait(timeout=5)
         return b"prepared"
 
     monkeypatch.setattr(media_alias_images, "_prepare_media_alias_image", prepare)
@@ -225,13 +235,22 @@ async def test_cancellation_waits_for_started_preparation_cleanup(monkeypatch: p
     )
     await asyncio.wait_for(started.wait(), timeout=1)
 
-    task.cancel()
-    await asyncio.sleep(0)
-    assert_that(task.done(), equal_to(False))
-    task.cancel()
-    await asyncio.sleep(0)
-    assert_that(task.done(), equal_to(False))
-    release.set()
+    handler = CancellationLogHandler()
+    media_alias_images.logger.addHandler(handler)
+    caplog.set_level(logging.INFO, logger=media_alias_images.__name__)
+    try:
+        task.cancel()
+        record = await asyncio.wait_for(cancellation_logs.get(), timeout=1)
+        assert "waiting for decoder thread cleanup" in record.getMessage()
+        assert task.done() is False
+        task.cancel()
+        record = await asyncio.wait_for(cancellation_logs.get(), timeout=1)
+        assert "Repeated cancellation" in record.getMessage()
+        assert task.done() is False
+    finally:
+        release.set()
+        media_alias_images.logger.removeHandler(handler)
 
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert "decoder thread cleanup completed" in caplog.text

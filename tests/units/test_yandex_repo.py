@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 from aiohttp import ClientPayloadError
-from hamcrest import assert_that, empty, equal_to, has_length, is_, starts_with
+from hamcrest import assert_that, contains_exactly, empty, equal_to, has_length, starts_with
 from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.yandex import repo, yandex
@@ -51,7 +51,7 @@ async def test_get_download_urls_fetches_concurrently_and_preserves_input_order(
 
     urls_task = asyncio.create_task(repo.get_download_urls(paths))
     await asyncio.wait_for(client.all_started.wait(), timeout=1)
-    assert_that(urls_task.done(), is_(False))
+    assert urls_task.done() is False
 
     for path in reversed(paths):
         client.complete(path)
@@ -74,7 +74,7 @@ async def test_get_download_urls_returns_none_for_failed_lookup_after_batch_fini
     await asyncio.wait_for(client.all_started.wait(), timeout=1)
     client.complete("day/broken.png")
     await asyncio.wait_for(client.completed("day/broken.png"), timeout=1)
-    assert_that(urls_task.done(), is_(False))
+    assert urls_task.done() is False
 
     client.complete("day/good.png")
     assert_that(await urls_task, equal_to(["https://storage.example/day/good.png", None]))
@@ -107,13 +107,15 @@ async def test_download_file_uses_fresh_url_without_oauth_and_streams_content(mo
             timeout=timedelta(seconds=1),
         )
 
-    assert_that(result.content, equal_to(b"firstsecond"))
-    assert_that(result.content_type, equal_to("image/png"))
+    assert result.content == b"firstsecond"
+    assert result.content_type == "image/png"
     assert_that(sessions[0].headers, equal_to({"Authorization": "OAuth secret"}))
     assert_that(sessions[1].headers, empty())
-    assert_that(sessions[1].requests, equal_to(["https://download.example/media"]))
-    assert_that([session.exited for session in sessions], equal_to([True, True]))
-    assert_that([api_response.exited, download_response.exited], equal_to([True, True]))
+    assert_that(sessions[1].requests, contains_exactly("https://download.example/media"))
+    for session in sessions:
+        assert session.exited is True
+    assert api_response.exited is True
+    assert download_response.exited is True
 
 
 async def test_each_download_looks_up_a_new_url(monkeypatch: MonkeyPatch) -> None:
@@ -129,9 +131,12 @@ async def test_each_download_looks_up_a_new_url(monkeypatch: MonkeyPatch) -> Non
         first = await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
         second = await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
 
-    assert_that([first.content, second.content], equal_to([b"first", b"second"]))
+    assert first.content == b"first"
+    assert second.content == b"second"
     assert_that(sessions[0].requests, has_length(2))
-    assert_that(sessions[1].requests, equal_to(["https://download.example/first", "https://download.example/second"]))
+    assert_that(
+        sessions[1].requests, contains_exactly("https://download.example/first", "https://download.example/second")
+    )
 
 
 @pytest.mark.parametrize(
@@ -157,7 +162,7 @@ async def test_download_file_rejects_declared_or_streamed_oversize(
         with pytest.raises(YandexDownloadTooLargeError, match="byte limit"):
             await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
 
-    assert_that(download_response.exited, is_(True))
+    assert download_response.exited is True
 
 
 async def test_download_file_timeout_closes_active_response(monkeypatch: MonkeyPatch) -> None:
@@ -172,7 +177,7 @@ async def test_download_file_timeout_closes_active_response(monkeypatch: MonkeyP
         with pytest.raises(TimeoutError):
             await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(milliseconds=1))
 
-    assert_that(download_response.exited, is_(True))
+    assert download_response.exited is True
 
 
 async def test_download_file_cancellation_closes_active_response(monkeypatch: MonkeyPatch) -> None:
@@ -190,7 +195,7 @@ async def test_download_file_cancellation_closes_active_response(monkeypatch: Mo
         with pytest.raises(asyncio.CancelledError):
             await task
 
-    assert_that(download_response.exited, is_(True))
+    assert download_response.exited is True
 
 
 async def test_download_transport_error_closes_active_response(monkeypatch: MonkeyPatch) -> None:
@@ -205,7 +210,7 @@ async def test_download_transport_error_closes_active_response(monkeypatch: Monk
         with pytest.raises(ClientPayloadError):
             await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
 
-    assert_that(download_response.exited, is_(True))
+    assert download_response.exited is True
 
 
 class _ControlledYandexClient:

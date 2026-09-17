@@ -1,13 +1,17 @@
 import asyncio
+import logging
 from contextlib import suppress
 from fractions import Fraction
 from io import BytesIO
 
 import av
 from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL.GifImagePlugin import GifImageFile
 
+logger = logging.getLogger(__name__)
 _JPEG_QUALITIES = (90, 80, 70, 60, 50, 40, 30)
 _RESIZE_FACTOR = 0.75
+_CANCELLATION_LOG_INTERVAL_SECONDS = 5
 
 
 class MediaAliasImagePreparationError(ValueError): ...
@@ -53,15 +57,26 @@ async def prepare_media_alias_image(
     try:
         return await asyncio.shield(preparation)
     except asyncio.CancelledError:
+        cleanup_started_at = asyncio.get_running_loop().time()
+        logger.warning("Media alias image preparation cancelled; waiting for decoder thread cleanup")
+        # Cancelling to_thread does not stop the decoder or close its resources.
         while not preparation.done():
             try:
-                await asyncio.shield(preparation)
+                done, _ = await asyncio.wait({preparation}, timeout=_CANCELLATION_LOG_INTERVAL_SECONDS)
             except asyncio.CancelledError:
+                logger.warning("Repeated cancellation while waiting for media alias decoder thread cleanup")
                 continue
-            except Exception:
-                break
+            if not done:
+                logger.warning(
+                    "Still waiting for media alias decoder thread cleanup after %.1f seconds",
+                    asyncio.get_running_loop().time() - cleanup_started_at,
+                )
         with suppress(Exception):
             preparation.result()
+        logger.info(
+            "Media alias decoder thread cleanup completed after %.1f seconds",
+            asyncio.get_running_loop().time() - cleanup_started_at,
+        )
         raise
 
 
@@ -103,7 +118,9 @@ def _decode_pillow_frame(source: bytes, *, middle_frame: bool, max_frame_pixels:
         with BytesIO(source) as buffer, Image.open(buffer) as opened:
             _validate_frame_dimensions(opened.width, opened.height, max_frame_pixels=max_frame_pixels)
             if middle_frame:
-                opened.seek(getattr(opened, "n_frames", 1) // 2)
+                if not isinstance(opened, GifImageFile):
+                    raise MediaAliasDecodeError("Media source declared as GIF is not a GIF image")
+                opened.seek(opened.n_frames // 2)
                 _validate_frame_dimensions(opened.width, opened.height, max_frame_pixels=max_frame_pixels)
                 return opened.convert("RGB")
 
