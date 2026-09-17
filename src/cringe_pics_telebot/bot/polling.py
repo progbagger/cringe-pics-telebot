@@ -78,7 +78,7 @@ async def _connect_redis() -> AsyncGenerator:
 
 
 async def start_polling(*, subscription_broadcast_now: TimeProvider | None = None) -> None:
-    enrichment_settings = load_media_alias_enrichment_settings()
+    enrichment_settings = await load_media_alias_enrichment_settings()
     connectors = (_connect_postgres, _create_yandex_client, _connect_redis)
     async with AsyncExitStack() as stack:
         stack.enter_context(configured_metrics())
@@ -132,7 +132,12 @@ async def start_polling(*, subscription_broadcast_now: TimeProvider | None = Non
                     interval=timedelta(seconds=admin_broadcast_interval),
                 )
             ),
-            asyncio.create_task(run_media_sync(interval=timedelta(seconds=media_sync_interval))),
+            asyncio.create_task(
+                run_media_sync(
+                    interval=timedelta(seconds=media_sync_interval),
+                    alias_enrichment_settings=enrichment_settings,
+                )
+            ),
         ]
         if ollama is not None:
             background_tasks.append(
@@ -140,7 +145,7 @@ async def start_polling(*, subscription_broadcast_now: TimeProvider | None = Non
             )
 
         try:
-            await dp.start_polling(bot)
+            await dp.start_polling(bot, alias_enrichment_settings=enrichment_settings)
         finally:
             for background_task in background_tasks:
                 background_task.cancel()

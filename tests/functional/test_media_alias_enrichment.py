@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import os
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import av
@@ -14,6 +16,7 @@ from PIL import Image
 from redis import asyncio as redis
 
 from cringe_pics_telebot.bot.admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
+from cringe_pics_telebot.services.media_alias_enrichment_settings import MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES
 from cringe_pics_telebot.services.media_sync import MEDIA_SYNC_LEASE_KEY
 from tests.functional.conftest import (
     REDIS_ENV,
@@ -543,7 +546,8 @@ async def test_disabled_feature_ignores_ollama_config_and_does_not_create_worker
             "MEDIA_ALIAS_ENRICHMENT_ENABLED": "false",
             "OLLAMA_BASE_URL": "invalid",
             "OLLAMA_MODEL": "",
-            "MEDIA_ALIAS_LLM_PROMPT": "",
+            "MEDIA_ALIAS_LLM_PROMPT": "Ignored private prompt",
+            "MEDIA_ALIAS_LLM_PROMPT_FILE": "/missing/prompt.md",
         }
     ) as bot:
         await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/test", None, "test"),))
@@ -583,6 +587,197 @@ async def test_invalid_enabled_config_fails_before_connecting_external_services(
         logs = "".join(bot.logs)
         assert "Connecting to the database" not in logs
         assert "ValueError" in logs
+
+
+@pytest.mark.parametrize(
+    ("content", "expected_prompt", "relative_path"),
+    [
+        ("  Приватный prompt\nPrivate prompt\n".encode(), "Приватный prompt\nPrivate prompt", False),
+        ("\ufeffПриватный prompt".encode(), "Приватный prompt", False),
+        ("Приватный prompt\r\nPrivate prompt".encode(), "Приватный prompt\r\nPrivate prompt", True),
+        (
+            "Приватный prompt\n```text\nPrivate prompt\n```".encode(),
+            "Приватный prompt\n```text\nPrivate prompt\n```",
+            False,
+        ),
+        (b"x" * MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES, "x" * MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES, False),
+    ],
+    ids=["plain", "bom", "plain-relative-crlf", "verbatim", "size-limit"],
+)
+async def test_prompt_file_reaches_ollama_and_job_hash_without_leaking_into_logs(
+    *,
+    content: bytes,
+    expected_prompt: str,
+    relative_path: bool,
+    tmp_path: Path,
+    start_enrichment_bot: Callable[..., AbstractAsyncContextManager[EnrichmentBot]],
+    enrichment_database: EnrichmentDatabase,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    fake_yandex_server: FakeYandexServer,
+    fake_ollama_server: FakeOllamaServer,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_bytes(content)
+    path = os.path.relpath(prompt_file, Path.cwd()) if relative_path else str(prompt_file)
+
+    async with start_enrichment_bot(
+        overrides={"MEDIA_ALIAS_LLM_PROMPT": "  ", "MEDIA_ALIAS_LLM_PROMPT_FILE": path}
+    ) as bot:
+        await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/test", None, "test"),))
+        await set_functional_administrator(user_id=42)
+        await fake_yandex_server.configure_directory("test", images=[{"name": "image.png"}])
+        await fake_yandex_server.configure_download(name="image.png", content=_media_bytes("image/png"))
+
+        await _synchronize(bot)
+        jobs = await enrichment_database.wait_for_jobs(lambda jobs: len(jobs) == 1 and jobs[0]["status"] == "succeeded")
+
+        assert jobs[0]["prompt_sha256"] == sha256(expected_prompt.encode()).hexdigest()
+        requests = await fake_ollama_server.requests(wait_for=1)
+        assert requests[0]["payload"]["messages"][0]["content"] == expected_prompt
+        await bot.stop()
+        logs = "".join(bot.logs)
+        assert expected_prompt not in logs
+        assert "functional-ollama-key" not in logs
+
+
+async def test_manual_and_background_sync_keep_startup_prompt_until_restart(
+    *,
+    tmp_path: Path,
+    start_enrichment_bot: Callable[..., AbstractAsyncContextManager[EnrichmentBot]],
+    enrichment_database: EnrichmentDatabase,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    fake_yandex_server: FakeYandexServer,
+    fake_ollama_server: FakeOllamaServer,
+) -> None:
+    original_prompt = "Приватный startup prompt"
+    new_prompt = "Приватный replacement prompt"
+    prompt_file = tmp_path / "prompt.md"
+    prompt_file.write_text(original_prompt, encoding="utf-8")
+    overrides = {
+        "MEDIA_ALIAS_LLM_PROMPT": "",
+        "MEDIA_ALIAS_LLM_PROMPT_FILE": str(prompt_file),
+        "MEDIA_SYNC_INTERVAL_SECONDS": "0.1",
+    }
+
+    async with start_enrichment_bot(overrides=overrides) as bot:
+        prompt_file.unlink()
+        await set_functional_administrator(user_id=42)
+        await bot.telegram.push_callback_query(
+            data=AdminPanelCallbackData(action=AdminPanelAction.synchronize_media).pack(),
+            message_id=100,
+        )
+        result = await bot.telegram.wait_for_request(
+            "editMessageText",
+            predicate=lambda request: (
+                request["payload"].get("message_id") == 100
+                and "Это может занять" not in request["payload"].get("text", "")
+            ),
+        )
+        assert "Синхронизация медиа завершена" in result["payload"]["text"] or (
+            "Синхронизация медиа уже выполняется" in result["payload"]["text"]
+        )
+
+        await fake_yandex_server.configure_download(name="first.png", content=_media_bytes("image/png"))
+        await fake_yandex_server.configure_directory("test", images=[{"name": "first.png"}])
+        await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/test", None, "test"),))
+        await enrichment_database.wait_for_jobs(lambda jobs: len(jobs) == 1 and jobs[0]["status"] == "succeeded")
+
+        prompt_file.write_text(new_prompt, encoding="utf-8")
+        await fake_yandex_server.configure_download(name="second.png", content=_media_bytes("image/png"))
+        await fake_yandex_server.configure_directory("test", images=[{"name": "first.png"}, {"name": "second.png"}])
+        jobs = await enrichment_database.wait_for_jobs(
+            lambda jobs: len(jobs) == 2 and all(job["status"] == "succeeded" for job in jobs)
+        )
+        assert_that(
+            jobs, contains_exactly(*[has_entries(prompt_sha256=sha256(original_prompt.encode()).hexdigest())] * 2)
+        )
+
+    await fake_yandex_server.configure_download(name="third.png", content=_media_bytes("image/png"))
+    await fake_yandex_server.configure_directory(
+        "test", images=[{"name": "first.png"}, {"name": "second.png"}, {"name": "third.png"}]
+    )
+    async with start_enrichment_bot(overrides=overrides) as bot:
+        jobs = await enrichment_database.wait_for_jobs(
+            lambda jobs: len(jobs) == 3 and all(job["status"] == "succeeded" for job in jobs)
+        )
+        assert jobs[2]["prompt_sha256"] == sha256(new_prompt.encode()).hexdigest()
+        requests = await fake_ollama_server.requests(wait_for=3)
+        assert_that(
+            [request["payload"]["messages"][0]["content"] for request in requests],
+            contains_exactly(original_prompt, original_prompt, new_prompt),
+        )
+        await bot.stop()
+        logs = "".join(bot.logs)
+        assert original_prompt not in logs
+        assert new_prompt not in logs
+
+
+@pytest.mark.parametrize(
+    ("file_kind", "content", "direct_prompt", "diagnostic"),
+    [
+        ("missing", b"", "", "existing regular file"),
+        ("regular", b"", "", "non-empty prompt"),
+        ("regular", b" \n\t", "", "non-empty prompt"),
+        ("regular", b"Private secret fragment\xff", "", "UTF-8 text"),
+        ("regular", b"x" * (MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES + 1), "", "64 KiB limit"),
+        ("directory", b"", "", "existing regular file"),
+        ("fifo", b"", "", "regular file"),
+        ("unreadable", b"Private secret fragment", "", "PermissionError"),
+        ("regular", b"Private secret fragment", "Private direct secret", "Set only one"),
+    ],
+    ids=[
+        "missing",
+        "empty",
+        "blank",
+        "encoding",
+        "oversize",
+        "directory",
+        "fifo",
+        "unreadable",
+        "conflict",
+    ],
+)
+async def test_invalid_prompt_file_fails_before_external_clients_without_leaking_content(
+    *,
+    file_kind: str,
+    content: bytes,
+    direct_prompt: str,
+    diagnostic: str,
+    tmp_path: Path,
+    start_enrichment_bot: Callable[..., AbstractAsyncContextManager[EnrichmentBot]],
+    fake_ollama_server: FakeOllamaServer,
+    fake_yandex_server: FakeYandexServer,
+) -> None:
+    prompt_file = tmp_path / "prompt.md"
+    if file_kind == "directory":
+        prompt_file.mkdir()
+    elif file_kind == "fifo":
+        os.mkfifo(prompt_file)
+    elif file_kind != "missing":
+        prompt_file.write_bytes(content)
+        if file_kind == "unreadable":
+            prompt_file.chmod(0)
+
+    try:
+        async with start_enrichment_bot(
+            overrides={"MEDIA_ALIAS_LLM_PROMPT": direct_prompt, "MEDIA_ALIAS_LLM_PROMPT_FILE": str(prompt_file)},
+            wait_ready=False,
+        ) as bot:
+            assert await asyncio.wait_for(bot.process.wait(), timeout=10) != 0
+            await bot.stop()
+            assert_that(await bot.telegram.requests(), empty())
+            assert_that(await fake_ollama_server.requests(), empty())
+            assert_that(await fake_yandex_server.requests(), empty())
+            logs = "".join(bot.logs)
+            assert diagnostic in logs
+            assert "Connecting to the database" not in logs
+            assert "Private secret fragment" not in logs
+            assert "Private direct secret" not in logs
+    finally:
+        if file_kind == "unreadable":
+            prompt_file.chmod(0o600)
 
 
 async def test_shutdown_during_download_returns_job_to_retry_without_ollama_request(

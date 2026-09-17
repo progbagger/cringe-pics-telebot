@@ -26,7 +26,7 @@ async def test_runner_synchronizes_immediately_then_waits(monkeypatch: pytest.Mo
     with pytest.raises(asyncio.CancelledError):
         await media_sync.run_media_sync(sleep=cancel_during_sleep)
 
-    synchronize.assert_awaited_once_with()
+    synchronize.assert_awaited_once_with(alias_enrichment_settings=None)
 
 
 async def test_synchronization_isolates_category_failures(monkeypatch: pytest.MonkeyPatch) -> None:

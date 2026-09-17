@@ -49,11 +49,12 @@ async def run_media_sync(
     *,
     interval: timedelta = DEFAULT_SYNC_INTERVAL,
     sleep: Sleep = asyncio.sleep,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
 ) -> None:
     _validate_interval(interval)
     while True:
         try:
-            await synchronize_media_catalog()
+            await synchronize_media_catalog(alias_enrichment_settings=alias_enrichment_settings)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -61,9 +62,15 @@ async def run_media_sync(
         await sleep(interval.total_seconds())
 
 
-async def synchronize_media_catalog(*, lease_ttl: timedelta = DEFAULT_LEASE_TTL) -> MediaSyncSummary:
+async def synchronize_media_catalog(
+    *,
+    lease_ttl: timedelta = DEFAULT_LEASE_TTL,
+    alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
+) -> MediaSyncSummary:
     _validate_interval(lease_ttl)
-    alias_enrichment_settings = load_media_alias_enrichment_settings()
+    if alias_enrichment_settings is None:
+        alias_enrichment_settings = await load_media_alias_enrichment_settings()
+
     lease_token = secrets.token_urlsafe(24)
     acquired = await cache.set_if_absent(
         key=MEDIA_SYNC_LEASE_KEY,

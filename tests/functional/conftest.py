@@ -745,6 +745,7 @@ async def start_enrichment_bot(
                 "OLLAMA_MODEL": "functional-vision-model",
                 "OLLAMA_API_KEY": "functional-ollama-key",
                 "MEDIA_ALIAS_LLM_PROMPT": "Private functional prompt that must not appear in logs",
+                "MEDIA_ALIAS_LLM_PROMPT_FILE": "",
                 "MEDIA_ALIAS_ENRICHMENT_POLL_INTERVAL_SECONDS": "0.05",
                 "MEDIA_ALIAS_ENRICHMENT_LEASE_TTL_SECONDS": "30",
                 "MEDIA_ALIAS_ENRICHMENT_LEASE_REFRESH_SECONDS": "0.1",

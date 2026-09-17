@@ -1,9 +1,11 @@
+import asyncio
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import timedelta
 from hashlib import sha256
 from math import isfinite
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 DEFAULT_OLLAMA_REQUEST_TIMEOUT = timedelta(seconds=120)
@@ -19,6 +21,7 @@ DEFAULT_MEDIA_ALIAS_ENRICHMENT_MAX_SOURCE_BYTES = 20 * 1024 * 1024
 DEFAULT_MEDIA_ALIAS_ENRICHMENT_MAX_FRAME_PIXELS = 40_000_000
 DEFAULT_MEDIA_ALIAS_ENRICHMENT_MAX_IMAGE_EDGE_PIXELS = 1280
 DEFAULT_MEDIA_ALIAS_ENRICHMENT_MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +50,7 @@ class MediaAliasEnrichmentSettings:
         return sha256(self.prompt.encode()).hexdigest() if self.prompt is not None else None
 
 
-def load_media_alias_enrichment_settings(
+async def load_media_alias_enrichment_settings(
     environ: Mapping[str, str] | None = None,
 ) -> MediaAliasEnrichmentSettings:
     environ = os.environ if environ is None else environ
@@ -57,7 +60,7 @@ def load_media_alias_enrichment_settings(
 
     base_url = _required(environ=environ, name="OLLAMA_BASE_URL")
     model = _required(environ=environ, name="OLLAMA_MODEL")
-    prompt = _required(environ=environ, name="MEDIA_ALIAS_LLM_PROMPT")
+    prompt = await _load_prompt(environ)
     settings = MediaAliasEnrichmentSettings(
         enabled=True,
         ollama_base_url=_normalize_base_url(base_url),
@@ -92,6 +95,43 @@ def load_media_alias_enrichment_settings(
         raise ValueError("MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS must be greater than or equal to retry base")
 
     return settings
+
+
+async def _load_prompt(environ: Mapping[str, str]) -> str:
+    prompt = environ.get("MEDIA_ALIAS_LLM_PROMPT", "").strip()
+    prompt_file = environ.get("MEDIA_ALIAS_LLM_PROMPT_FILE", "").strip()
+    if prompt and prompt_file:
+        raise ValueError("Set only one of MEDIA_ALIAS_LLM_PROMPT or MEDIA_ALIAS_LLM_PROMPT_FILE")
+    if prompt:
+        return prompt
+    if not prompt_file:
+        raise ValueError("MEDIA_ALIAS_LLM_PROMPT or MEDIA_ALIAS_LLM_PROMPT_FILE is required when enrichment is enabled")
+
+    return await asyncio.to_thread(_read_prompt_file, prompt_file)
+
+
+def _read_prompt_file(path: str) -> str:
+    try:
+        if not Path(path).is_file():
+            raise ValueError("MEDIA_ALIAS_LLM_PROMPT_FILE must point to an existing regular file")
+
+        with open(path, "rb") as source:
+            content = source.read(MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES + 1)
+    except OSError as error:
+        raise ValueError(f"Cannot read MEDIA_ALIAS_LLM_PROMPT_FILE: {type(error).__name__}") from None
+
+    if len(content) > MAX_MEDIA_ALIAS_LLM_PROMPT_FILE_BYTES:
+        raise ValueError("MEDIA_ALIAS_LLM_PROMPT_FILE exceeds the 64 KiB limit")
+
+    try:
+        prompt = content.decode("utf-8-sig").strip()
+    except UnicodeDecodeError:
+        raise ValueError("MEDIA_ALIAS_LLM_PROMPT_FILE must contain UTF-8 text") from None
+
+    if not prompt:
+        raise ValueError("MEDIA_ALIAS_LLM_PROMPT_FILE must contain a non-empty prompt")
+
+    return prompt
 
 
 def _parse_bool(value: str) -> bool:
