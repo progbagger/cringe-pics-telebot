@@ -40,16 +40,19 @@ class FakeOllama:
     async def chat(self, request: web.Request) -> web.StreamResponse:
         self.requests.append({"path": request.path, "headers": dict(request.headers), "payload": await request.json()})
         self.started.set()
+
         if self.blocked:
             await self.released.wait()
         if self.disconnect and request.transport is not None:
             request.transport.close()
+
         if self.chunked:
             response = web.StreamResponse(status=self.status, headers={"Content-Type": "application/json"})
             await response.prepare(request)
             await response.write(self.body)
             await response.write_eof()
             return response
+
         return web.Response(body=self.body, status=self.status, content_type="application/json")
 
 
@@ -67,13 +70,13 @@ async def fake_ollama() -> AsyncIterator[FakeOllama]:
 
 
 @pytest.mark.parametrize("api_key", [None, "", "secret-token"])
-async def test_native_chat_contract_and_optional_bearer(fake_ollama: FakeOllama, api_key: str | None) -> None:
+async def test_native_chat_contract_and_optional_bearer(*, fake_ollama: FakeOllama, api_key: str | None) -> None:
     async with OllamaClient(
-        f"{fake_ollama.base_url}/",
+        base_url=f"{fake_ollama.base_url}/",
         request_timeout=timedelta(seconds=1),
         api_key=api_key,
     ) as client:
-        result = await client.generate_aliases(b"jpeg-image", model="vision-model", prompt="Опиши изображение")
+        result = await client.generate_aliases(image=b"jpeg-image", model="vision-model", prompt="Опиши изображение")
 
     assert_that(result, equal_to(("Сонный кот", "Кофе")))
     assert_that(fake_ollama.requests, has_length(1))
@@ -111,20 +114,21 @@ async def test_native_chat_contract_and_optional_bearer(fake_ollama: FakeOllama,
 
 
 @pytest.mark.parametrize("status", [302, 400, 401, 429, 500, 503])
-async def test_http_error_retains_status_and_redacts_request_content(fake_ollama: FakeOllama, status: int) -> None:
+async def test_http_error_retains_status_and_redacts_request_content(*, fake_ollama: FakeOllama, status: int) -> None:
     fake_ollama.status = status
     prompt = "private-prompt"
     image = b"private-image"
     fake_ollama.body = json.dumps(
         {"error": f"secret-token\n{prompt} {base64.b64encode(image).decode()}\x00\x1b " + "x" * 500}
     ).encode()
+
     async with OllamaClient(
-        fake_ollama.base_url,
+        base_url=fake_ollama.base_url,
         request_timeout=timedelta(seconds=1),
         api_key="secret-token",
     ) as client:
         with pytest.raises(OllamaHTTPError) as raised:
-            await client.generate_aliases(image, model="vision-model", prompt=prompt)
+            await client.generate_aliases(image=image, model="vision-model", prompt=prompt)
 
     assert raised.value.status == status
     assert len(raised.value.error_message) <= MAX_OLLAMA_ERROR_LENGTH
@@ -135,12 +139,14 @@ async def test_http_error_retains_status_and_redacts_request_content(fake_ollama
 
 
 @pytest.mark.parametrize("body", [b"not-json", b'{"error": 42}', b"x" * (MAX_OLLAMA_RESPONSE_BYTES + 1)])
-async def test_unstructured_or_oversized_http_error_does_not_expose_body(fake_ollama: FakeOllama, body: bytes) -> None:
+async def test_unstructured_or_oversized_http_error_does_not_expose_body(
+    *, fake_ollama: FakeOllama, body: bytes
+) -> None:
     fake_ollama.status = 500
     fake_ollama.body = body
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
         with pytest.raises(OllamaHTTPError) as raised:
-            await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+            await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")
 
     assert raised.value.error_message == "No safe structured error was provided"
 
@@ -165,65 +171,68 @@ async def test_unstructured_or_oversized_http_error_does_not_expose_body(fake_ol
         _response(["x" * 101]),
     ],
 )
-async def test_malformed_or_invalid_structured_output_is_rejected(fake_ollama: FakeOllama, body: bytes) -> None:
+async def test_malformed_or_invalid_structured_output_is_rejected(*, fake_ollama: FakeOllama, body: bytes) -> None:
     fake_ollama.body = body
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
         with pytest.raises(InvalidOllamaResponseError):
-            await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+            await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")
 
 
 @pytest.mark.parametrize("chunked", [False, True])
-async def test_declared_and_streamed_response_size_is_bounded(fake_ollama: FakeOllama, chunked: bool) -> None:
+async def test_declared_and_streamed_response_size_is_bounded(*, fake_ollama: FakeOllama, chunked: bool) -> None:
     fake_ollama.chunked = chunked
     fake_ollama.body = b"x" * (MAX_OLLAMA_RESPONSE_BYTES + 1)
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
         with pytest.raises(InvalidOllamaResponseError, match="byte limit"):
-            await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+            await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")
 
 
 async def test_schema_boundaries_are_accepted_without_repository_normalization(fake_ollama: FakeOllama) -> None:
     aliases = [" /Кот "] + ["x" * 100] * 19
     fake_ollama.body = _response(aliases)
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
-        result = await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
+        result = await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")
 
     assert_that(result, contains_exactly(*aliases))
 
 
 async def test_timeout_is_typed_and_session_remains_usable(fake_ollama: FakeOllama) -> None:
     fake_ollama.blocked = True
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(milliseconds=20)) as client:
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(milliseconds=20)) as client:
         with pytest.raises(OllamaTimeoutError):
-            await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+            await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")
+
         fake_ollama.released.set()
         fake_ollama.blocked = False
         assert_that(
-            await client.generate_aliases(b"image", model="vision-model", prompt="prompt"),
+            await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt"),
             equal_to(("Сонный кот", "Кофе")),
         )
 
 
 async def test_transport_failure_is_typed(fake_ollama: FakeOllama) -> None:
     fake_ollama.disconnect = True
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
         with pytest.raises(OllamaTransportError):
-            await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+            await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")
 
 
 async def test_cancellation_propagates_from_inflight_request(fake_ollama: FakeOllama) -> None:
     fake_ollama.blocked = True
-    async with OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
-        task = asyncio.create_task(client.generate_aliases(b"image", model="vision-model", prompt="prompt"))
+    async with OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1)) as client:
+        task = asyncio.create_task(client.generate_aliases(image=b"image", model="vision-model", prompt="prompt"))
         await asyncio.wait_for(fake_ollama.started.wait(), timeout=1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
         fake_ollama.released.set()
 
 
 async def test_closed_client_rejects_calls_without_creating_session(fake_ollama: FakeOllama) -> None:
-    client = OllamaClient(fake_ollama.base_url, request_timeout=timedelta(seconds=1))
+    client = OllamaClient(base_url=fake_ollama.base_url, request_timeout=timedelta(seconds=1))
     async with client:
         pass
+
     with pytest.raises(RuntimeError, match="not connected"):
-        await client.generate_aliases(b"image", model="vision-model", prompt="prompt")
+        await client.generate_aliases(image=b"image", model="vision-model", prompt="prompt")

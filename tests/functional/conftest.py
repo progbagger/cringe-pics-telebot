@@ -285,9 +285,9 @@ class FakeYandexServer:
 
     async def configure_download(
         self,
+        *,
         name: str,
         content: bytes,
-        *,
         content_type: str = "image/png",
         status: int = 200,
         block: bool = False,
@@ -681,6 +681,7 @@ async def enrichment_database(docker_compose: DependencyPorts) -> AsyncIterator[
         changed.set()
 
     await connection.add_listener("functional_enrichment_changed", notify)
+
     # Test-only notification trigger: waits observe commits instead of guessing a delay.
     await connection.execute("""
         CREATE FUNCTION functional_notify_enrichment() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -691,6 +692,7 @@ async def enrichment_database(docker_compose: DependencyPorts) -> AsyncIterator[
         CREATE TRIGGER functional_enrichment_changed AFTER INSERT OR UPDATE ON media_alias_enrichment_jobs
         FOR EACH ROW EXECUTE FUNCTION functional_notify_enrichment();
     """)
+
     try:
         yield EnrichmentDatabase(connection=connection, changed=changed)
     finally:
@@ -703,6 +705,7 @@ async def enrichment_database(docker_compose: DependencyPorts) -> AsyncIterator[
 
 @pytest.fixture
 async def start_enrichment_bot(
+    *,
     docker_compose: DependencyPorts,
     enrichment_database: EnrichmentDatabase,
     fake_yandex_server: FakeYandexServer,
@@ -718,6 +721,7 @@ async def start_enrichment_bot(
         *,
         overrides: dict[str, str] | None = None,
         wait_ready: bool = True,
+        subscription_now: datetime | None = None,
     ) -> AsyncIterator[EnrichmentBot]:
         port = _get_unused_tcp_port()
         telegram_process = await subprocess.create_subprocess_exec(
@@ -730,6 +734,7 @@ async def start_enrichment_bot(
             stderr=subprocess.DEVNULL,
         )
         telegram = FakeTelegramServer(base_url=f"http://127.0.0.1:{port}", process=telegram_process)
+
         env = (
             _bot_env(docker_compose)
             | {
@@ -752,15 +757,26 @@ async def start_enrichment_bot(
             }
             | (overrides or {})
         )
+
         try:
             await _wait_until_ready(lambda: _http_ready(f"{telegram.base_url}/healthz"), "enrichment Telegram")
+            command = [str(Path(sys.executable).with_name("bot"))]
+            if subscription_now is not None:
+                command = [
+                    sys.executable,
+                    str(FUNCTIONAL_DIR / "enrichment_clock_runner.py"),
+                    "--now",
+                    subscription_now.isoformat(),
+                ]
+
             process = await subprocess.create_subprocess_exec(
-                str(Path(sys.executable).with_name("bot")),
+                *command,
                 cwd=ROOT_DIR,
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
+
             logs: deque[str] = deque(maxlen=1000)
             log_changed = asyncio.Event()
 
@@ -776,6 +792,7 @@ async def start_enrichment_bot(
                         log_changed.clear()
                         if any(fragment in line for line in logs):
                             return
+
                         await log_changed.wait()
 
             reader = asyncio.create_task(drain_logs())
@@ -788,12 +805,14 @@ async def start_enrichment_bot(
                     except TimeoutError:
                         process.kill()
                         await process.wait()
+
                 await reader
 
             try:
                 if wait_ready:
                     await telegram.wait_for_request("getMe")
                     await wait_for_log("Finished media catalog sync")
+
                 yield EnrichmentBot(
                     process=process,
                     telegram=telegram,

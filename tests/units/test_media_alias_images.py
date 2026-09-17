@@ -28,6 +28,7 @@ def _image_bytes(
     image = Image.new("RGB", size, color)
     image.save(target, format=image_format)
     image.close()
+
     return target.getvalue()
 
 
@@ -43,6 +44,7 @@ def _gif_bytes() -> bytes:
     finally:
         for frame in frames:
             frame.close()
+
     return target.getvalue()
 
 
@@ -53,6 +55,7 @@ def _mp4_bytes() -> bytes:
         stream.width = 16
         stream.height = 16
         stream.pix_fmt = "yuv420p"
+
         for color in ((220, 20, 20), (20, 220, 20), (20, 20, 220), (220, 220, 20), (220, 20, 220)):
             image = Image.new("RGB", (16, 16), color)
             try:
@@ -61,8 +64,10 @@ def _mp4_bytes() -> bytes:
                     container.mux(packet)
             finally:
                 image.close()
+
         for packet in stream.encode():
             container.mux(packet)
+
     return target.getvalue()
 
 
@@ -75,9 +80,9 @@ def _mp4_bytes() -> bytes:
         ("video/mp4", _mp4_bytes()),
     ],
 )
-async def test_supported_media_is_prepared_as_bounded_rgb_jpeg(mime_type: str, source: bytes) -> None:
+async def test_supported_media_is_prepared_as_bounded_rgb_jpeg(*, mime_type: str, source: bytes) -> None:
     result = await prepare_media_alias_image(
-        source,
+        source=source,
         mime_type=mime_type,
         max_frame_pixels=10_000,
         max_image_edge_pixels=12,
@@ -93,7 +98,7 @@ async def test_supported_media_is_prepared_as_bounded_rgb_jpeg(mime_type: str, s
 
 async def test_gif_uses_middle_frame() -> None:
     result = await prepare_media_alias_image(
-        _gif_bytes(),
+        source=_gif_bytes(),
         mime_type="image/gif",
         max_frame_pixels=10_000,
         max_image_edge_pixels=32,
@@ -108,7 +113,7 @@ async def test_gif_uses_middle_frame() -> None:
 
 async def test_mp4_uses_frame_around_middle() -> None:
     result = await prepare_media_alias_image(
-        _mp4_bytes(),
+        source=_mp4_bytes(),
         mime_type="video/mp4",
         max_frame_pixels=10_000,
         max_image_edge_pixels=32,
@@ -124,12 +129,13 @@ async def test_mp4_uses_frame_around_middle() -> None:
 async def test_mp4_without_usable_middle_falls_back_to_first_decodable_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(media_alias_images, "_decode_video_frame_at_middle", lambda *args, **kwargs: None)
     result = await prepare_media_alias_image(
-        _mp4_bytes(),
+        source=_mp4_bytes(),
         mime_type="video/mp4",
         max_frame_pixels=10_000,
         max_image_edge_pixels=32,
         max_image_bytes=10_000,
     )
+
     with Image.open(BytesIO(result)) as image:
         red, green, blue = image.getpixel((8, 8))
     assert_that(red, greater_than(green))
@@ -143,13 +149,15 @@ async def test_prepared_byte_limit_reduces_quality_and_dimensions() -> None:
     ):
         image.save(encoded, format="PNG")
         source = encoded.getvalue()
+
     result = await prepare_media_alias_image(
-        source,
+        source=source,
         mime_type="image/png",
         max_frame_pixels=10_000,
         max_image_edge_pixels=128,
         max_image_bytes=400,
     )
+
     assert len(result) <= 400
     with Image.open(BytesIO(result)) as image:
         assert image.width < 128
@@ -164,7 +172,7 @@ async def test_photo_applies_exif_orientation() -> None:
     image.close()
 
     result = await prepare_media_alias_image(
-        source.getvalue(),
+        source=source.getvalue(),
         mime_type="image/jpeg",
         max_frame_pixels=10_000,
         max_image_edge_pixels=32,
@@ -189,6 +197,7 @@ async def test_photo_applies_exif_orientation() -> None:
     ],
 )
 async def test_invalid_or_oversized_media_is_rejected(
+    *,
     source: bytes,
     mime_type: str,
     max_frame_pixels: int,
@@ -197,7 +206,7 @@ async def test_invalid_or_oversized_media_is_rejected(
 ) -> None:
     with pytest.raises(error_type):
         await prepare_media_alias_image(
-            source,
+            source=source,
             mime_type=mime_type,
             max_frame_pixels=max_frame_pixels,
             max_image_edge_pixels=32,
@@ -206,6 +215,7 @@ async def test_invalid_or_oversized_media_is_rejected(
 
 
 async def test_cancellation_waits_for_started_preparation_cleanup(
+    *,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -218,7 +228,7 @@ async def test_cancellation_waits_for_started_preparation_cleanup(
         def emit(self, record: logging.LogRecord) -> None:
             cancellation_logs.put_nowait(record)
 
-    def prepare(*args: object) -> bytes:
+    def prepare(**kwargs: object) -> bytes:
         loop.call_soon_threadsafe(started.set)
         release.wait(timeout=5)
         return b"prepared"
@@ -226,7 +236,7 @@ async def test_cancellation_waits_for_started_preparation_cleanup(
     monkeypatch.setattr(media_alias_images, "_prepare_media_alias_image", prepare)
     task = asyncio.create_task(
         prepare_media_alias_image(
-            b"source",
+            source=b"source",
             mime_type="image/png",
             max_frame_pixels=1,
             max_image_edge_pixels=1,
@@ -243,6 +253,7 @@ async def test_cancellation_waits_for_started_preparation_cleanup(
         record = await asyncio.wait_for(cancellation_logs.get(), timeout=1)
         assert "waiting for decoder thread cleanup" in record.getMessage()
         assert task.done() is False
+
         task.cancel()
         record = await asyncio.wait_for(cancellation_logs.get(), timeout=1)
         assert "Repeated cancellation" in record.getMessage()
@@ -253,4 +264,5 @@ async def test_cancellation_waits_for_started_preparation_cleanup(
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
     assert "decoder thread cleanup completed" in caplog.text

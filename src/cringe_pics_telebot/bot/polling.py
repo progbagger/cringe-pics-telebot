@@ -16,7 +16,11 @@ from cringe_pics_telebot.services.admin_broadcasts import run_admin_broadcasts
 from cringe_pics_telebot.services.media_alias_enrichment import run_media_alias_enrichment
 from cringe_pics_telebot.services.media_alias_enrichment_settings import load_media_alias_enrichment_settings
 from cringe_pics_telebot.services.media_sync import DEFAULT_SYNC_INTERVAL, run_media_sync
-from cringe_pics_telebot.services.subscription_broadcasts import DEFAULT_CHECK_INTERVAL, run_subscription_broadcasts
+from cringe_pics_telebot.services.subscription_broadcasts import (
+    DEFAULT_CHECK_INTERVAL,
+    TimeProvider,
+    run_subscription_broadcasts,
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -73,7 +77,7 @@ async def _connect_redis() -> AsyncGenerator:
         yield
 
 
-async def start_polling() -> None:
+async def start_polling(*, subscription_broadcast_now: TimeProvider | None = None) -> None:
     enrichment_settings = load_media_alias_enrichment_settings()
     connectors = (_connect_postgres, _create_yandex_client, _connect_redis)
     async with AsyncExitStack() as stack:
@@ -102,21 +106,24 @@ async def start_polling() -> None:
         media_sync_interval = float(
             os.environ.get("MEDIA_SYNC_INTERVAL_SECONDS", DEFAULT_SYNC_INTERVAL.total_seconds())
         )
+
         ollama: OllamaClient | None = None
         if enrichment_settings.enabled:
             assert enrichment_settings.ollama_base_url is not None
             ollama = await stack.enter_async_context(
                 OllamaClient(
-                    enrichment_settings.ollama_base_url,
+                    base_url=enrichment_settings.ollama_base_url,
                     request_timeout=enrichment_settings.ollama_request_timeout,
                     api_key=enrichment_settings.ollama_api_key,
                 )
             )
+
         background_tasks = [
             asyncio.create_task(
                 run_subscription_broadcasts(
                     bot,
                     interval=timedelta(seconds=subscription_broadcast_interval),
+                    now=subscription_broadcast_now,
                 )
             ),
             asyncio.create_task(
@@ -128,7 +135,10 @@ async def start_polling() -> None:
             asyncio.create_task(run_media_sync(interval=timedelta(seconds=media_sync_interval))),
         ]
         if ollama is not None:
-            background_tasks.append(asyncio.create_task(run_media_alias_enrichment(ollama, enrichment_settings)))
+            background_tasks.append(
+                asyncio.create_task(run_media_alias_enrichment(ollama=ollama, settings=enrichment_settings))
+            )
+
         try:
             await dp.start_polling(bot)
         finally:

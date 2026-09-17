@@ -87,7 +87,7 @@ def test_enabled_settings_require_ollama_values(missing: str) -> None:
         ("MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS", "29", "greater than or equal"),
     ],
 )
-def test_invalid_settings_are_rejected(name: str, value: str, message: str) -> None:
+def test_invalid_settings_are_rejected(*, name: str, value: str, message: str) -> None:
     environ = {
         "MEDIA_ALIAS_ENRICHMENT_ENABLED": "true",
         "OLLAMA_BASE_URL": "http://ollama:11434",

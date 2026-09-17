@@ -98,11 +98,13 @@ async def test_download_file_uses_fresh_url_without_oauth_and_streams_content(mo
         content_length=11,
         headers={"Content-Type": "image/png"},
     )
-    sessions = _install_fake_sessions(monkeypatch, (api_response,), (download_response,))
+    sessions = _install_fake_sessions(
+        monkeypatch=monkeypatch, api_responses=(api_response,), download_responses=(download_response,)
+    )
 
     async with YandexS3Client("secret", api_base_url="https://api.example/") as client:
         result = await client.download_file(
-            "day/image.png",
+            path="day/image.png",
             max_bytes=11,
             timeout=timedelta(seconds=1),
         )
@@ -120,16 +122,16 @@ async def test_download_file_uses_fresh_url_without_oauth_and_streams_content(mo
 
 async def test_each_download_looks_up_a_new_url(monkeypatch: MonkeyPatch) -> None:
     sessions = _install_fake_sessions(
-        monkeypatch,
-        (
+        monkeypatch=monkeypatch,
+        api_responses=(
             _FakeResponse(json_value={"href": "https://download.example/first"}),
             _FakeResponse(json_value={"href": "https://download.example/second"}),
         ),
-        (_FakeResponse(chunks=(b"first",)), _FakeResponse(chunks=(b"second",))),
+        download_responses=(_FakeResponse(chunks=(b"first",)), _FakeResponse(chunks=(b"second",))),
     )
     async with YandexS3Client("secret") as client:
-        first = await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
-        second = await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
+        first = await client.download_file(path="day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
+        second = await client.download_file(path="day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
 
     assert first.content == b"first"
     assert second.content == b"second"
@@ -147,20 +149,21 @@ async def test_each_download_looks_up_a_new_url(monkeypatch: MonkeyPatch) -> Non
     ],
 )
 async def test_download_file_rejects_declared_or_streamed_oversize(
+    *,
     monkeypatch: MonkeyPatch,
     chunks: tuple[bytes, ...],
     content_length: int | None,
 ) -> None:
     download_response = _FakeResponse(chunks=chunks, content_length=content_length)
     _install_fake_sessions(
-        monkeypatch,
-        (_FakeResponse(json_value={"href": "https://download.example/media"}),),
-        (download_response,),
+        monkeypatch=monkeypatch,
+        api_responses=(_FakeResponse(json_value={"href": "https://download.example/media"}),),
+        download_responses=(download_response,),
     )
 
     async with YandexS3Client("secret") as client:
         with pytest.raises(YandexDownloadTooLargeError, match="byte limit"):
-            await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
+            await client.download_file(path="day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
 
     assert download_response.exited is True
 
@@ -168,14 +171,14 @@ async def test_download_file_rejects_declared_or_streamed_oversize(
 async def test_download_file_timeout_closes_active_response(monkeypatch: MonkeyPatch) -> None:
     download_response = _BlockingResponse()
     _install_fake_sessions(
-        monkeypatch,
-        (_FakeResponse(json_value={"href": "https://download.example/media"}),),
-        (download_response,),
+        monkeypatch=monkeypatch,
+        api_responses=(_FakeResponse(json_value={"href": "https://download.example/media"}),),
+        download_responses=(download_response,),
     )
 
     async with YandexS3Client("secret") as client:
         with pytest.raises(TimeoutError):
-            await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(milliseconds=1))
+            await client.download_file(path="day/image.png", max_bytes=10, timeout=timedelta(milliseconds=1))
 
     assert download_response.exited is True
 
@@ -183,13 +186,15 @@ async def test_download_file_timeout_closes_active_response(monkeypatch: MonkeyP
 async def test_download_file_cancellation_closes_active_response(monkeypatch: MonkeyPatch) -> None:
     download_response = _BlockingResponse()
     _install_fake_sessions(
-        monkeypatch,
-        (_FakeResponse(json_value={"href": "https://download.example/media"}),),
-        (download_response,),
+        monkeypatch=monkeypatch,
+        api_responses=(_FakeResponse(json_value={"href": "https://download.example/media"}),),
+        download_responses=(download_response,),
     )
 
     async with YandexS3Client("secret") as client:
-        task = asyncio.create_task(client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=10)))
+        task = asyncio.create_task(
+            client.download_file(path="day/image.png", max_bytes=10, timeout=timedelta(seconds=10))
+        )
         await asyncio.wait_for(download_response.started.wait(), timeout=1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -202,13 +207,13 @@ async def test_download_transport_error_closes_active_response(monkeypatch: Monk
     download_response = _FakeResponse()
     download_response.content = _FailingContent(())
     _install_fake_sessions(
-        monkeypatch,
-        (_FakeResponse(json_value={"href": "https://download.example/media"}),),
-        (download_response,),
+        monkeypatch=monkeypatch,
+        api_responses=(_FakeResponse(json_value={"href": "https://download.example/media"}),),
+        download_responses=(download_response,),
     )
     async with YandexS3Client("secret") as client:
         with pytest.raises(ClientPayloadError):
-            await client.download_file("day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
+            await client.download_file(path="day/image.png", max_bytes=10, timeout=timedelta(seconds=1))
 
     assert download_response.exited is True
 
@@ -304,7 +309,7 @@ class _BlockingResponse(_FakeResponse):
 
 
 class _FakeSession:
-    def __init__(self, responses: tuple[_FakeResponse, ...], kwargs: dict[str, Any]) -> None:
+    def __init__(self, *, responses: tuple[_FakeResponse, ...], kwargs: dict[str, Any]) -> None:
         self._responses = iter(responses)
         self.headers = dict(kwargs.get("headers", {}))
         self.requests: list[str] = []
@@ -322,6 +327,7 @@ class _FakeSession:
 
 
 def _install_fake_sessions(
+    *,
     monkeypatch: MonkeyPatch,
     api_responses: tuple[_FakeResponse, ...],
     download_responses: tuple[_FakeResponse, ...],
@@ -330,9 +336,10 @@ def _install_fake_sessions(
     response_groups = iter((api_responses, download_responses))
 
     def create_session(**kwargs: Any) -> _FakeSession:
-        session = _FakeSession(next(response_groups), kwargs)
+        session = _FakeSession(responses=next(response_groups), kwargs=kwargs)
         sessions.append(session)
         return session
 
     monkeypatch.setattr(yandex.aiohttp, "ClientSession", create_session)
+
     return sessions

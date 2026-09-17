@@ -74,7 +74,9 @@ class YandexS3Client:
                 )
             )
             self._exit_stack = stack.pop_all()
+
         self._download_session: aiohttp.ClientSession | None = None
+
         return self
 
     async def __aexit__(self, *args: Any, **kwargs: Any) -> None:
@@ -179,8 +181,8 @@ class YandexS3Client:
 
     async def download_file(
         self,
-        path: str,
         *,
+        path: str,
         max_bytes: int,
         timeout: timedelta,
     ) -> DownloadedFile:
@@ -195,6 +197,7 @@ class YandexS3Client:
                 self._download_session = await self._exit_stack.enter_async_context(
                     aiohttp.ClientSession(raise_for_status=True)
                 )
+
             async with self._download_session.get(url) as response:
                 if response.content_length is not None and response.content_length > max_bytes:
                     raise YandexDownloadTooLargeError(
@@ -208,6 +211,7 @@ class YandexS3Client:
                             f"Yandex download exceeds byte limit while streaming: > {max_bytes}"
                         )
                     content.extend(chunk)
+
                 return DownloadedFile(
                     content=bytes(content),
                     content_type=response.headers.get("Content-Type"),

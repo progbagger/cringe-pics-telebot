@@ -35,25 +35,28 @@ async def enqueue_media_alias_enrichment_jobs(
 ) -> int:
     if media_ids is not None and not media_ids:
         return 0
+
     now = enqueued_at or datetime.now(UTC)
     media_filter = category_media.c.subscription_type_id == subscription_type_id
     if media_ids is not None:
         media_filter &= category_media.c.id.in_(media_ids)
+
     aliases_exist = exists(
         select(media_search_aliases.c.media_id).where(media_search_aliases.c.media_id == category_media.c.id)
     )
+
     async with get_connection() as conn:
         await conn.execute(
             update(media_alias_enrichment_jobs)
-            .where(media_alias_enrichment_jobs.c.media_id == category_media.c.id)
-            .where(media_filter)
-            .where(media_alias_enrichment_jobs.c.status.in_(_UNFINISHED_STATUSES))
             .where(
+                media_alias_enrichment_jobs.c.media_id == category_media.c.id,
+                media_filter,
+                media_alias_enrichment_jobs.c.status.in_(_UNFINISHED_STATUSES),
                 or_(
                     category_media.c.is_active.is_(False),
                     media_alias_enrichment_jobs.c.source_revision != category_media.c.source_revision,
                     aliases_exist,
-                )
+                ),
             )
             .values(
                 status=MediaAliasEnrichmentJobStatus.obsolete,
@@ -71,6 +74,7 @@ async def enqueue_media_alias_enrichment_jobs(
                 finished_at=now,
             )
         )
+
         pending = select(
             category_media.c.id,
             category_media.c.source_revision,
@@ -87,6 +91,7 @@ async def enqueue_media_alias_enrichment_jobs(
             category_media.c.is_active.is_(True),
             ~aliases_exist,
         )
+
         statement = insert(media_alias_enrichment_jobs).from_select(
             (
                 "media_id",
@@ -103,6 +108,7 @@ async def enqueue_media_alias_enrichment_jobs(
             pending,
         )
         excluded = statement.excluded
+
         rows = (
             await conn.execute(
                 statement.on_conflict_do_update(
@@ -124,6 +130,7 @@ async def enqueue_media_alias_enrichment_jobs(
                 ).returning(media_alias_enrichment_jobs.c.id)
             )
         ).all()
+
     return len(rows)
 
 
@@ -145,6 +152,7 @@ async def claim_media_alias_enrichment_jobs(
 
     now = claimed_at or datetime.now(UTC)
     leased_until = now + lease_ttl
+
     candidates = (
         select(media_alias_enrichment_jobs.c.id)
         .where(
@@ -170,6 +178,7 @@ async def claim_media_alias_enrichment_jobs(
         .limit(limit)
         .cte("media_alias_enrichment_candidates")
     )
+
     async with get_connection() as conn:
         rows = (
             await conn.execute(
@@ -191,6 +200,7 @@ async def claim_media_alias_enrichment_jobs(
                 .returning(media_alias_enrichment_jobs)
             )
         ).all()
+
     return [_job_from_row(row) for row in rows]
 
 
@@ -202,16 +212,20 @@ async def refresh_media_alias_enrichment_job_lease(
     refreshed_at: datetime | None = None,
 ) -> bool:
     now = refreshed_at or datetime.now(UTC)
+
     async with get_connection() as conn:
         result = await conn.execute(
             update(media_alias_enrichment_jobs)
-            .where(media_alias_enrichment_jobs.c.id == job_id)
-            .where(media_alias_enrichment_jobs.c.status == MediaAliasEnrichmentJobStatus.processing)
-            .where(media_alias_enrichment_jobs.c.lease_token == lease_token)
-            .where(media_alias_enrichment_jobs.c.leased_until > now)
+            .where(
+                media_alias_enrichment_jobs.c.id == job_id,
+                media_alias_enrichment_jobs.c.status == MediaAliasEnrichmentJobStatus.processing,
+                media_alias_enrichment_jobs.c.lease_token == lease_token,
+                media_alias_enrichment_jobs.c.leased_until > now,
+            )
             .values(leased_until=leased_until, updated_at=now)
             .returning(media_alias_enrichment_jobs.c.id)
         )
+
     return result.one_or_none() is not None
 
 
@@ -223,8 +237,10 @@ async def get_media_alias_enrichment_job(
     query = select(media_alias_enrichment_jobs).where(media_alias_enrichment_jobs.c.id == job_id)
     if with_for_update:
         query = query.with_for_update()
+
     async with get_connection() as conn:
         row = (await conn.execute(query)).one_or_none()
+
     return _job_from_row(row) if row is not None else None
 
 
@@ -245,13 +261,16 @@ async def finish_media_alias_enrichment_job(
         MediaAliasEnrichmentJobStatus.obsolete,
     ):
         raise ValueError("Enrichment completion must be retry or a terminal status")
+
     async with get_connection() as conn:
         result = await conn.execute(
             update(media_alias_enrichment_jobs)
-            .where(media_alias_enrichment_jobs.c.id == job_id)
-            .where(media_alias_enrichment_jobs.c.status == MediaAliasEnrichmentJobStatus.processing)
-            .where(media_alias_enrichment_jobs.c.lease_token == lease_token)
-            .where(media_alias_enrichment_jobs.c.leased_until > finished_at)
+            .where(
+                media_alias_enrichment_jobs.c.id == job_id,
+                media_alias_enrichment_jobs.c.status == MediaAliasEnrichmentJobStatus.processing,
+                media_alias_enrichment_jobs.c.lease_token == lease_token,
+                media_alias_enrichment_jobs.c.leased_until > finished_at,
+            )
             .values(
                 status=status,
                 lease_token=None,
@@ -264,6 +283,7 @@ async def finish_media_alias_enrichment_job(
             )
             .returning(media_alias_enrichment_jobs.c.id)
         )
+
     return result.one_or_none() is not None
 
 
@@ -283,6 +303,7 @@ async def get_media_alias_enrichment_queue_counts(*, now: datetime) -> MediaAlia
         .scalar_subquery()
     )
     failed = select(func.count()).where(jobs.status == MediaAliasEnrichmentJobStatus.failed).scalar_subquery()
+
     async with get_connection() as conn:
         row = (
             await conn.execute(
@@ -293,6 +314,7 @@ async def get_media_alias_enrichment_queue_counts(*, now: datetime) -> MediaAlia
                 )
             )
         ).one()
+
     return MediaAliasEnrichmentQueueCounts(
         available=row.available,
         expired_processing=row.expired_processing,
@@ -306,11 +328,14 @@ async def get_media_alias_enrichment_jobs(
 ) -> list[MediaAliasEnrichmentJob]:
     if media_ids is not None and not media_ids:
         return []
+
     query = select(media_alias_enrichment_jobs).order_by(media_alias_enrichment_jobs.c.id)
     if media_ids is not None:
         query = query.where(media_alias_enrichment_jobs.c.media_id.in_(media_ids))
+
     async with get_connection() as conn:
         rows = (await conn.execute(query)).all()
+
     return [_job_from_row(row) for row in rows]
 
 

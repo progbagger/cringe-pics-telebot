@@ -1,3 +1,6 @@
+import asyncio
+from collections.abc import Iterable
+from contextlib import nullcontext
 from types import TracebackType
 from typing import Self
 
@@ -7,6 +10,7 @@ from hamcrest import assert_that, equal_to, instance_of, is_, same_instance
 from cringe_pics_telebot.helpers.metrics import (
     CounterMetric,
     GaugeMetric,
+    Metric,
     NullMetricsSink,
     StatsDMetricsSink,
     Stopwatch,
@@ -21,6 +25,35 @@ def test_stopwatch_uses_injected_monotonic_clock() -> None:
     clock = iter((10.0, 10.125)).__next__
 
     assert_that(Stopwatch.start(clock=clock).elapsed_milliseconds(), equal_to(125))
+
+
+@pytest.mark.parametrize("error_type", [None, ValueError, asyncio.CancelledError])
+def test_stopwatch_context_emits_timing_and_preserves_failure(error_type: type[BaseException] | None) -> None:
+    client = _RecordingStatsDClient()
+    clock = iter((10.0, 10.125)).__next__
+    expectation = nullcontext() if error_type is None else pytest.raises(error_type)
+
+    with (
+        expectation,
+        configured_metrics({"STATSD_HOST": "metrics.example.com"}, client_factory=lambda **kwargs: client),
+        Stopwatch.start(metric_name="enrichment.request", clock=clock) as stopwatch,
+    ):
+        if error_type is not None:
+            raise error_type
+
+    assert stopwatch.elapsed_milliseconds() == 125
+    assert_that(client.calls, equal_to([("timing", "enrichment.request", 125)]))
+
+
+def test_stopwatch_metric_failure_does_not_mask_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailedMetricsSink(NullMetricsSink):
+        def emit(self, metrics: Iterable[Metric]) -> None:
+            raise RuntimeError("Metrics are unavailable")
+
+    monkeypatch.setattr("cringe_pics_telebot.helpers.metrics._metrics_sink", FailedMetricsSink())
+
+    with pytest.raises(asyncio.CancelledError), Stopwatch.start(metric_name="enrichment.request"):
+        raise asyncio.CancelledError
 
 
 def test_create_metrics_sink_disables_metrics_without_host() -> None:

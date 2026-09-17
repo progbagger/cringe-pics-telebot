@@ -59,6 +59,7 @@ class FakeYandex:
             barrier.clear()
         else:
             barrier.set()
+
         return web.json_response({"ok": True})
 
     async def release_download(self, request: web.Request) -> web.Response:
@@ -72,6 +73,7 @@ class FakeYandex:
             await self._download_condition.wait_for(
                 lambda: any(item["method"] == "download" and item["path"] == name for item in self._requests)
             )
+
         return web.json_response({"ok": True})
 
     async def resources(self, request: web.Request) -> web.Response:
@@ -122,11 +124,13 @@ class FakeYandex:
                 "authorization": request.headers.get("Authorization"),
             }
         )
+
         async with self._download_condition:
             self._download_condition.notify_all()
         configured = self._downloads.get(name, {})
         if barrier := self._download_barriers.get(name):
             await barrier.wait()
+
         body = base64.b64decode(configured["content"]) if "content" in configured else IMAGE_BYTES
         return web.Response(
             body=body,

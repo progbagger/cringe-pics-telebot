@@ -55,33 +55,42 @@ def load_media_alias_enrichment_settings(
     if not enabled:
         return MediaAliasEnrichmentSettings()
 
-    base_url = _required(environ, "OLLAMA_BASE_URL")
-    model = _required(environ, "OLLAMA_MODEL")
-    prompt = _required(environ, "MEDIA_ALIAS_LLM_PROMPT")
+    base_url = _required(environ=environ, name="OLLAMA_BASE_URL")
+    model = _required(environ=environ, name="OLLAMA_MODEL")
+    prompt = _required(environ=environ, name="MEDIA_ALIAS_LLM_PROMPT")
     settings = MediaAliasEnrichmentSettings(
         enabled=True,
         ollama_base_url=_normalize_base_url(base_url),
         ollama_model=model,
         ollama_api_key=environ.get("OLLAMA_API_KEY", "").strip() or None,
-        ollama_request_timeout=_seconds(environ, "OLLAMA_REQUEST_TIMEOUT_SECONDS", 120),
+        ollama_request_timeout=_seconds(environ=environ, name="OLLAMA_REQUEST_TIMEOUT_SECONDS", default=120),
         prompt=prompt,
-        concurrency=_positive_int(environ, "MEDIA_ALIAS_ENRICHMENT_CONCURRENCY", 2),
-        poll_interval=_seconds(environ, "MEDIA_ALIAS_ENRICHMENT_POLL_INTERVAL_SECONDS", 5),
-        lease_ttl=_seconds(environ, "MEDIA_ALIAS_ENRICHMENT_LEASE_TTL_SECONDS", 300),
-        lease_refresh=_seconds(environ, "MEDIA_ALIAS_ENRICHMENT_LEASE_REFRESH_SECONDS", 60),
-        max_attempts=_positive_int(environ, "MEDIA_ALIAS_ENRICHMENT_MAX_ATTEMPTS", 5),
-        retry_base=_seconds(environ, "MEDIA_ALIAS_ENRICHMENT_RETRY_BASE_SECONDS", 30),
-        retry_max=_seconds(environ, "MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS", 3600),
-        download_timeout=_seconds(environ, "MEDIA_ALIAS_ENRICHMENT_DOWNLOAD_TIMEOUT_SECONDS", 60),
-        max_source_bytes=_positive_int(environ, "MEDIA_ALIAS_ENRICHMENT_MAX_SOURCE_BYTES", 20 * 1024 * 1024),
-        max_frame_pixels=_positive_int(environ, "MEDIA_ALIAS_ENRICHMENT_MAX_FRAME_PIXELS", 40_000_000),
-        max_image_edge_pixels=_positive_int(environ, "MEDIA_ALIAS_ENRICHMENT_MAX_IMAGE_EDGE_PIXELS", 1280),
-        max_image_bytes=_positive_int(environ, "MEDIA_ALIAS_ENRICHMENT_MAX_IMAGE_BYTES", 4 * 1024 * 1024),
+        concurrency=_positive_int(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_CONCURRENCY", default=2),
+        poll_interval=_seconds(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_POLL_INTERVAL_SECONDS", default=5),
+        lease_ttl=_seconds(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_LEASE_TTL_SECONDS", default=300),
+        lease_refresh=_seconds(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_LEASE_REFRESH_SECONDS", default=60),
+        max_attempts=_positive_int(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_MAX_ATTEMPTS", default=5),
+        retry_base=_seconds(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_RETRY_BASE_SECONDS", default=30),
+        retry_max=_seconds(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS", default=3600),
+        download_timeout=_seconds(environ=environ, name="MEDIA_ALIAS_ENRICHMENT_DOWNLOAD_TIMEOUT_SECONDS", default=60),
+        max_source_bytes=_positive_int(
+            environ=environ, name="MEDIA_ALIAS_ENRICHMENT_MAX_SOURCE_BYTES", default=20 * 1024 * 1024
+        ),
+        max_frame_pixels=_positive_int(
+            environ=environ, name="MEDIA_ALIAS_ENRICHMENT_MAX_FRAME_PIXELS", default=40_000_000
+        ),
+        max_image_edge_pixels=_positive_int(
+            environ=environ, name="MEDIA_ALIAS_ENRICHMENT_MAX_IMAGE_EDGE_PIXELS", default=1280
+        ),
+        max_image_bytes=_positive_int(
+            environ=environ, name="MEDIA_ALIAS_ENRICHMENT_MAX_IMAGE_BYTES", default=4 * 1024 * 1024
+        ),
     )
     if settings.lease_refresh >= settings.lease_ttl:
         raise ValueError("MEDIA_ALIAS_ENRICHMENT_LEASE_REFRESH_SECONDS must be less than lease TTL")
     if settings.retry_max < settings.retry_base:
         raise ValueError("MEDIA_ALIAS_ENRICHMENT_RETRY_MAX_SECONDS must be greater than or equal to retry base")
+
     return settings
 
 
@@ -95,30 +104,35 @@ def _parse_bool(value: str) -> bool:
             raise ValueError("MEDIA_ALIAS_ENRICHMENT_ENABLED must be a boolean")
 
 
-def _required(environ: Mapping[str, str], name: str) -> str:
+def _required(*, environ: Mapping[str, str], name: str) -> str:
     value = environ.get(name, "").strip()
     if not value:
         raise ValueError(f"{name} is required when media alias enrichment is enabled")
+
     return value
 
 
-def _positive_int(environ: Mapping[str, str], name: str, default: int) -> int:
+def _positive_int(*, environ: Mapping[str, str], name: str, default: int) -> int:
     try:
         value = int(environ.get(name, str(default)))
     except ValueError as error:
         raise ValueError(f"{name} must be an integer") from error
+
     if value <= 0:
         raise ValueError(f"{name} must be positive")
+
     return value
 
 
-def _seconds(environ: Mapping[str, str], name: str, default: float) -> timedelta:
+def _seconds(*, environ: Mapping[str, str], name: str, default: float) -> timedelta:
     try:
         value = float(environ.get(name, str(default)))
     except ValueError as error:
         raise ValueError(f"{name} must be a number") from error
+
     if not isfinite(value) or value <= 0:
         raise ValueError(f"{name} must be positive")
+
     return timedelta(seconds=value)
 
 
@@ -133,7 +147,9 @@ def _normalize_base_url(value: str) -> str:
         or parsed.fragment
     ):
         raise ValueError("OLLAMA_BASE_URL must be an HTTP(S) root URL without credentials, query or fragment")
+
     path = parsed.path.rstrip("/")
     if path:
         raise ValueError("OLLAMA_BASE_URL must be a root URL without a path")
+
     return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))

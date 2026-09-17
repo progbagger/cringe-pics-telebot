@@ -16,13 +16,13 @@ class FakeOllamaServer:
     base_url: str
 
     async def reset(self) -> None:
-        await self._post("reset", {})
+        await self._post(path="reset", payload={})
 
     async def configure(self, *, responses: list[dict[str, Any]] | None = None, block: bool = False) -> None:
-        await self._post("configure", {"responses": responses or [], "block": block})
+        await self._post(path="configure", payload={"responses": responses or [], "block": block})
 
     async def release(self) -> None:
-        await self._post("release", {})
+        await self._post(path="release", payload={})
 
     async def requests(self, *, wait_for: int | None = None) -> list[dict[str, Any]]:
         path = "requests" if wait_for is None else f"wait?count={wait_for}"
@@ -30,7 +30,7 @@ class FakeOllamaServer:
             response.raise_for_status()
             return (await response.json())["result"]
 
-    async def _post(self, path: str, payload: dict[str, Any]) -> None:
+    async def _post(self, *, path: str, payload: dict[str, Any]) -> None:
         async with (
             aiohttp.ClientSession() as session,
             session.post(f"{self.base_url}/test/{path}", json=payload) as response,
@@ -53,6 +53,7 @@ class EnrichmentDatabase:
             ORDER BY media.source_path, jobs.id
             """
         )
+
         return [dict(row) for row in rows]
 
     async def wait_for_jobs(
@@ -70,6 +71,7 @@ class EnrichmentDatabase:
                     jobs = await self.jobs()
                     if predicate(jobs):
                         return jobs
+
                     await self.changed.wait()
         except TimeoutError as error:
             states = [(job["source_path"], job["status"], job["result_class"]) for job in jobs]

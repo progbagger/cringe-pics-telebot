@@ -9,6 +9,7 @@ from cringe_pics_telebot.services.media_alias_enrichment import media_alias_retr
 
 def test_generated_aliases_normalize_and_deduplicate_without_splitting_one_alias_into_many() -> None:
     aliases = parse_generated_media_aliases(("  Сонный кот  ", "СОННЫЙ   КОТ", "С кофе\nв лапах", "  "))
+
     assert_that(
         aliases,
         contains_exactly(
@@ -25,7 +26,7 @@ def test_generated_aliases_reject_invalid_or_empty_output(values: tuple[str, ...
 
 
 @pytest.mark.parametrize(("attempt", "expected"), [(1, 30), (2, 60), (3, 120), (4, 150), (1_000_000, 150)])
-def test_retry_delay_doubles_and_caps_without_unbounded_exponent(attempt: int, expected: int) -> None:
-    assert media_alias_retry_delay(attempt, base=timedelta(seconds=30), maximum=timedelta(seconds=150)) == timedelta(
-        seconds=expected
-    )
+def test_retry_delay_doubles_and_caps_without_unbounded_exponent(*, attempt: int, expected: int) -> None:
+    assert media_alias_retry_delay(
+        retry_count=attempt, base=timedelta(seconds=30), maximum=timedelta(seconds=150)
+    ) == timedelta(seconds=expected)

@@ -45,12 +45,14 @@ async def reconcile_category_media_snapshot(
             source_paths=source_paths,
             seen_at=now,
         )
+
         alias_enrichment_queued = 0
         if alias_enrichment_settings is not None and alias_enrichment_settings.enabled:
             model = alias_enrichment_settings.ollama_model
             prompt_sha256 = alias_enrichment_settings.prompt_sha256
             if model is None or prompt_sha256 is None:
                 raise ValueError("Enabled media alias enrichment settings require a model and prompt")
+
             alias_enrichment_queued = await enqueue_media_alias_enrichment_jobs(
                 subscription_type_id=subscription_type_id,
                 model=model,

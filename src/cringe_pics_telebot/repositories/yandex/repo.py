@@ -36,6 +36,6 @@ async def get_download_urls(paths: Iterable[str]) -> list[str | None]:
     return [None if isinstance(result, BaseException) else cast(str, result) for result in results]
 
 
-async def download_file(path: str, *, max_bytes: int, timeout: timedelta) -> DownloadedFile:
+async def download_file(*, path: str, max_bytes: int, timeout: timedelta) -> DownloadedFile:
     async with get_connection() as conn:
-        return await conn.download_file(path, max_bytes=max_bytes, timeout=timeout)
+        return await conn.download_file(path=path, max_bytes=max_bytes, timeout=timeout)
