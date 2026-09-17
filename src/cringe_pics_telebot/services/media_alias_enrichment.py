@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -210,14 +209,7 @@ async def _process_job(
                 )
         finally:
             heartbeat.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await heartbeat
-
-            # Suppress the heartbeat's cancellation, not cancellation of this job.
-            current_task = asyncio.current_task()
-            assert current_task is not None
-            if current_task.cancelling():
-                raise asyncio.CancelledError
+            await asyncio.gather(heartbeat, return_exceptions=True)
     except asyncio.CancelledError:
         result_class = await _wait_for_cleanup(_cancel_and_release(job=job, tasks=(work, heartbeat), now=now))
         if work.done() and not work.cancelled() and work.exception() is None:

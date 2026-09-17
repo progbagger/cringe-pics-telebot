@@ -5,7 +5,7 @@ from types import TracebackType
 from typing import Self
 
 import pytest
-from hamcrest import assert_that, equal_to, instance_of, is_, same_instance
+from hamcrest import assert_that, contains_string, equal_to, instance_of, is_, same_instance
 
 from cringe_pics_telebot.helpers.metrics import (
     CounterMetric,
@@ -45,7 +45,11 @@ def test_stopwatch_context_emits_timing_and_preserves_failure(error_type: type[B
     assert_that(client.calls, equal_to([("timing", "enrichment.request", 125)]))
 
 
-def test_stopwatch_metric_failure_does_not_mask_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stopwatch_metric_failure_logs_metric_name_without_masking_cancellation(
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class FailedMetricsSink(NullMetricsSink):
         def emit(self, metrics: Iterable[Metric]) -> None:
             raise RuntimeError("Metrics are unavailable")
@@ -54,6 +58,9 @@ def test_stopwatch_metric_failure_does_not_mask_cancellation(monkeypatch: pytest
 
     with pytest.raises(asyncio.CancelledError), Stopwatch.start(metric_name="enrichment.request"):
         raise asyncio.CancelledError
+
+    assert_that(caplog.text, contains_string("Failed to emit stopwatch timing metric metric=enrichment.request"))
+    assert "Metrics are unavailable" not in caplog.text
 
 
 def test_create_metrics_sink_disables_metrics_without_host() -> None:

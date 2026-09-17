@@ -121,12 +121,13 @@ class Stopwatch:
         traceback: TracebackType | None,
     ) -> None:
         self._finished_at = self._clock()
+
         if self._metric_name is not None:
             try:
                 get_metrics_sink().emit((TimingMetric(self._metric_name, self.elapsed_milliseconds()),))
             except Exception:
                 # Observability must not mask the measured operation's failure or cancellation.
-                logger.error("Failed to emit stopwatch timing metric")
+                logger.error("Failed to emit stopwatch timing metric metric=%s", self._metric_name)
 
     def elapsed_milliseconds(self) -> float:
         finished_at = self._finished_at if self._finished_at is not None else self._clock()
