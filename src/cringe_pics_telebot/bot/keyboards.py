@@ -93,5 +93,5 @@ def create_reply_keyboard(
     return reply_keyboard_builder.as_markup(
         resize_keyboard=True,
         input_field_placeholder="Выберите категорию",
-        selective=True,
+        selective=False,
     )

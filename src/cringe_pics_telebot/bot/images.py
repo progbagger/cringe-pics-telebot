@@ -12,7 +12,6 @@ from aiogram.types import (
 from cringe_pics_telebot.bot.keyboards import (
     category_button_sort_key,
     create_inline_subscriptions_keyboard,
-    create_reply_keyboard,
 )
 from cringe_pics_telebot.bot.media import add_image_to_message
 from cringe_pics_telebot.bot.subscription_callback_data import (
@@ -23,7 +22,6 @@ from cringe_pics_telebot.bot.subscription_callback_data import (
 from cringe_pics_telebot.repositories.postgres import (
     SubscriptionType,
     get_category_media_by_subscription_types,
-    is_administrator,
 )
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import (
@@ -81,13 +79,7 @@ async def handle_start(message: Message) -> None:
 Первый результат 🎲 отправит случайную.
 """
 
-    await message.answer(
-        text=text,
-        reply_markup=create_reply_keyboard(
-            subscription_types,
-            is_admin=await is_administrator(message.from_user.id),
-        ),
-    )
+    await message.answer(text=text)
 
 
 @router.message(Command("timezone"))

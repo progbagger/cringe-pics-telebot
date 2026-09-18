@@ -4,6 +4,11 @@ from .connection import get_connection
 from .tables import administrators
 
 
+async def get_administrator_ids() -> frozenset[int]:
+    async with get_connection() as conn:
+        return frozenset(await conn.scalars(select(administrators.c.user_id)))
+
+
 async def is_administrator(user_id: int) -> bool:
     async with get_connection() as conn:
         return (
