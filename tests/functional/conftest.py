@@ -134,14 +134,22 @@ class FakeTelegramServer:
         ):
             response.raise_for_status()
 
-    async def push_message(self, *, text: str, user_id: int = 42, first_name: str = "Functional") -> dict[str, Any]:
+    async def push_message(
+        self,
+        *,
+        text: str,
+        user_id: int = 42,
+        first_name: str = "Functional",
+        chat_id: int | None = None,
+        chat_type: str = "private",
+    ) -> dict[str, Any]:
         update = {
             "message": {
                 "message_id": 1,
                 "date": _telegram_message_date(),
                 "chat": {
-                    "id": user_id,
-                    "type": "private",
+                    "id": user_id if chat_id is None else chat_id,
+                    "type": chat_type,
                     "first_name": first_name,
                 },
                 "from": {
@@ -260,6 +268,24 @@ class FakeTelegramServer:
             await asyncio.sleep(0.1)
 
         raise TimeoutError(f"Telegram request {method!r} was not received in {timeout} seconds")
+
+
+@dataclass(slots=True)
+class MainKeyboardBot:
+    telegram: FakeTelegramServer
+    clock_url: str
+
+    async def advance(self, seconds: float = 0, *, wall_now: datetime | None = None) -> None:
+        payload: dict[str, float | str] = {"seconds": seconds}
+        if wall_now is not None:
+            payload["wall_now"] = wall_now.isoformat()
+
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{self.clock_url}/advance", json=payload) as response,
+        ):
+            response.raise_for_status()
+            await response.json()
 
 
 @dataclass(slots=True)
@@ -842,11 +868,72 @@ async def enrichment_bot(
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def main_keyboard_clock_url() -> str:
+    return f"http://127.0.0.1:{_get_unused_tcp_port()}"
+
+
+@pytest.fixture
+def start_main_keyboard_bot(
+    docker_compose: DependencyPorts,
+    fake_yandex_server: FakeYandexServer,
+) -> Callable[[], AbstractAsyncContextManager[MainKeyboardBot]]:
+    @asynccontextmanager
+    async def start() -> AsyncIterator[MainKeyboardBot]:
+        port = _get_unused_tcp_port()
+        clock_port = _get_unused_tcp_port()
+        telegram_process = await subprocess.create_subprocess_exec(
+            sys.executable,
+            str(FUNCTIONAL_DIR / "fake_telegram.py"),
+            "--port",
+            str(port),
+            cwd=ROOT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        telegram = FakeTelegramServer(f"http://127.0.0.1:{port}", telegram_process)
+        process: subprocess.Process | None = None
+
+        try:
+            await _wait_until_ready(lambda: _http_ready(f"{telegram.base_url}/healthz"), "keyboard Telegram")
+            process = await subprocess.create_subprocess_exec(
+                sys.executable,
+                str(FUNCTIONAL_DIR / "main_keyboard_clock_runner.py"),
+                "--port",
+                str(clock_port),
+                "--wall-now",
+                "2030-09-18T00:00:00+00:00",
+                cwd=ROOT_DIR,
+                env=_bot_env(docker_compose)
+                | {
+                    "TELEGRAM_API_BASE_URL": telegram.base_url,
+                    "YANDEX_DISK_API_BASE_URL": f"{fake_yandex_server.base_url}/v1/disk/",
+                    "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.1",
+                    "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.1",
+                },
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await telegram.wait_for_request("getMe")
+
+            yield MainKeyboardBot(telegram, f"http://127.0.0.1:{clock_port}")
+        finally:
+            if process is not None:
+                await _terminate_process(process)
+
+            if telegram_process.returncode is None:
+                telegram_process.kill()
+            await telegram_process.wait()
+
+    return start
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def bot_process(
     docker_compose: DependencyPorts,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     fake_statsd_server: FakeStatsDServer,
+    main_keyboard_clock_url: str,
 ) -> AsyncIterator[subprocess.Process]:
     env = _bot_env(docker_compose)
     env["TELEGRAM_API_BASE_URL"] = fake_telegram_server.base_url
@@ -856,9 +943,10 @@ async def bot_process(
     env["STATSD_PREFIX"] = "functional"
 
     process = await subprocess.create_subprocess_exec(
-        "uv",
-        "run",
-        "bot",
+        sys.executable,
+        str(FUNCTIONAL_DIR / "main_keyboard_clock_runner.py"),
+        "--port",
+        main_keyboard_clock_url.rsplit(":", 1)[1],
         cwd=ROOT_DIR,
         env=env,
         stdout=subprocess.DEVNULL,
@@ -872,12 +960,30 @@ async def bot_process(
 
 
 @pytest.fixture
+def advance_main_keyboard_clock(
+    bot_process: subprocess.Process,
+    main_keyboard_clock_url: str,
+) -> Callable[[float], Awaitable[None]]:
+    async def advance(seconds: float) -> None:
+        _raise_if_process_exited(bot_process, "bot")
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(f"{main_keyboard_clock_url}/advance", json={"seconds": seconds}) as response,
+        ):
+            response.raise_for_status()
+            await response.json()
+
+    return advance
+
+
+@pytest.fixture
 async def seeded_subscription_types(
     docker_compose: DependencyPorts,
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,
     fake_statsd_server: FakeStatsDServer,
+    advance_main_keyboard_clock: Callable[[float], Awaitable[None]],
 ) -> tuple[FunctionalSubscriptionType, ...]:
     _raise_if_process_exited(bot_process, "bot")
     await fake_telegram_server.reset()
@@ -886,6 +992,7 @@ async def seeded_subscription_types(
     await _reset_database(docker_compose)
     await _flush_redis(docker_compose)
     await _insert_subscription_types(docker_compose, SEEDED_SUBSCRIPTION_TYPES)
+    await advance_main_keyboard_clock(60)
     return SEEDED_SUBSCRIPTION_TYPES
 
 
@@ -901,10 +1008,12 @@ async def user_subscribed_to_morning(
 async def reset_functional_state(
     bot_process: subprocess.Process,
     reset_dependency_state: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    advance_main_keyboard_clock: Callable[[float], Awaitable[None]],
 ) -> Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]]:
     async def reset(subscription_types: tuple[FunctionalSubscriptionType, ...]) -> None:
         _raise_if_process_exited(bot_process, "bot")
         await reset_dependency_state(subscription_types)
+        await advance_main_keyboard_clock(60)
 
     return reset
 
