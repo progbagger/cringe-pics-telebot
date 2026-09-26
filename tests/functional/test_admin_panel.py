@@ -53,6 +53,7 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
     set_functional_administrator: Callable[..., Awaitable[None]],
+    advance_main_keyboard_clock: Callable[[float], Awaitable[None]],
 ) -> None:
     await set_functional_administrator(user_id=42)
     await fake_telegram_server.push_message(text="/start", first_name="Admin")
@@ -80,6 +81,13 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
         predicate=lambda request: "Что умеет бот" in request["payload"].get("text", ""),
     )
     button_texts = _reply_keyboard_button_texts(non_admin_request["payload"])
+    # Access is revoked immediately, while the UI snapshot still has its 60s TTL.
+    assert_that(button_texts[0], equal_to("Админ-панель"))
+    await advance_main_keyboard_clock(60)
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_message(text="/timezone")
+    refreshed = await fake_telegram_server.wait_for_request("sendMessage")
+    button_texts = _reply_keyboard_button_texts(refreshed["payload"])
     assert_that([text for text in button_texts if text == "Админ-панель"], empty())
 
     await fake_telegram_server.reset()

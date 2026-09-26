@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from datetime import timedelta
+from time import monotonic
 
 from cringe_pics_telebot.bot.bot import create_bot, dp
 from cringe_pics_telebot.helpers.metrics import configured_metrics
@@ -77,7 +78,12 @@ async def _connect_redis() -> AsyncGenerator:
         yield
 
 
-async def start_polling(*, subscription_broadcast_now: TimeProvider | None = None) -> None:
+async def start_polling(
+    *,
+    subscription_broadcast_now: TimeProvider | None = None,
+    admin_broadcast_now: TimeProvider | None = None,
+    main_keyboard_clock: Callable[[], float] = monotonic,
+) -> None:
     enrichment_settings = await load_media_alias_enrichment_settings()
     connectors = (_connect_postgres, _create_yandex_client, _connect_redis)
     async with AsyncExitStack() as stack:
@@ -90,6 +96,7 @@ async def start_polling(*, subscription_broadcast_now: TimeProvider | None = Non
             bot = create_bot(
                 os.environ["TELEGRAM_BOT_TOKEN"],
                 api_base_url=os.environ.get("TELEGRAM_API_BASE_URL"),
+                main_keyboard_clock=main_keyboard_clock,
             )
         except KeyError:
             logger.exception("Failed to get Telegram bot token")
@@ -130,6 +137,7 @@ async def start_polling(*, subscription_broadcast_now: TimeProvider | None = Non
                 run_admin_broadcasts(
                     bot,
                     interval=timedelta(seconds=admin_broadcast_interval),
+                    now=admin_broadcast_now,
                 )
             ),
             asyncio.create_task(
