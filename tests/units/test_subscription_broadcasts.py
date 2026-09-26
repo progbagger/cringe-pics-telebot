@@ -7,6 +7,7 @@ from aiogram import Bot
 from hamcrest import assert_that, equal_to, is_
 from pytest import MonkeyPatch
 
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -16,7 +17,7 @@ from cringe_pics_telebot.repositories.postgres import (
     User,
 )
 from cringe_pics_telebot.services import subscription_broadcasts
-from cringe_pics_telebot.services.subscription_broadcasts import _is_subscription_due
+from cringe_pics_telebot.services.subscription_schedules import is_subscription_due
 
 
 @pytest.mark.parametrize(
@@ -48,10 +49,13 @@ def test_subscription_due_matches_local_minute_and_weekday(
     expected: bool,
 ) -> None:
     assert_that(
-        _is_subscription_due(
-            scheduled_time,
-            weekdays,
-            current_time,
+        is_subscription_due(
+            scheduled_time=scheduled_time,
+            schedule_kind=SubscriptionScheduleKind.weekly,
+            weekdays=weekdays,
+            annual_date=None,
+            birthday=None,
+            current_time=current_time,
             timezone_offset_minutes=timezone_offset_minutes,
         ),
         is_(expected),

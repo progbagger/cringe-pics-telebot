@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from datetime import datetime, time
 
+from cringe_pics_telebot.entities.annual_date import AnnualDate
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 
 
@@ -11,6 +13,8 @@ class CreateSubscriptionType:
     s3_directory_path: str
     search_aliases: tuple[str, ...]
     weekdays: SubscriptionWeekdays = field(default_factory=SubscriptionWeekdays.daily)
+    schedule_kind: SubscriptionScheduleKind = SubscriptionScheduleKind.weekly
+    annual_date: AnnualDate | None = None
 
 
 @dataclass(slots=True, eq=False)
@@ -33,6 +37,10 @@ class SubscriptionType:
     """Время обновления типа подписки"""
     weekdays: SubscriptionWeekdays = field(default_factory=SubscriptionWeekdays.daily)
     """ISO-дни недели, в которые исполняется расписание"""
+    schedule_kind: SubscriptionScheduleKind = SubscriptionScheduleKind.weekly
+    """Вид календарного расписания"""
+    annual_date: AnnualDate | None = None
+    """Фиксированная ежегодная дата для режима ``annual_date``"""
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, SubscriptionType):

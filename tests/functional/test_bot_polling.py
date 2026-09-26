@@ -108,6 +108,46 @@ async def test_bot_shows_subscription_list(
     )
 
 
+async def test_subscription_list_formats_annual_schedules_and_prompts_for_missing_birthday(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(
+                1,
+                "/new-year",
+                time(9),
+                "new-year",
+                schedule_kind="annual_date",
+                annual_date=(1, 1),
+            ),
+            FunctionalSubscriptionType(
+                2,
+                "/birthday",
+                time(10),
+                "birthday",
+                schedule_kind="annual_birthday",
+            ),
+        )
+    )
+
+    await fake_telegram_server.push_message(text="/subscriptions")
+    request = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_subscription_list_answer)
+
+    assert_that(
+        _inline_keyboard_button_texts(request["payload"]),
+        equal_to(
+            [
+                "❌ /new-year – 09:00 · ежегодно 01.01",
+                "❌ /birthday – 10:00 · ежегодно в твой день рождения",
+            ]
+        ),
+    )
+    assert_that(request["payload"]["text"], contains_string("<code>/birthday DD.MM</code>"))
+
+
 async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callback(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,

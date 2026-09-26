@@ -1,12 +1,11 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from aiogram import Bot
 
 from cringe_pics_telebot.bot.media import send_image_to_chat
-from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -14,6 +13,7 @@ from cringe_pics_telebot.repositories.postgres import (
     get_category_media_by_subscription_types,
 )
 from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
+from cringe_pics_telebot.services.subscription_schedules import is_subscription_due
 from cringe_pics_telebot.services.subscriptions import get_scheduled_subscription_types, get_subscription_users
 from cringe_pics_telebot.services.user_media_cycles import deliver_user_category_media
 
@@ -68,10 +68,13 @@ async def _broadcast_subscription_type(*, bot: Bot, subscription_type: Subscript
     users = [
         user
         for user in await get_subscription_users(subscription_type.id)
-        if _is_subscription_due(
-            scheduled_time,
-            subscription_type.weekdays,
-            current_time,
+        if is_subscription_due(
+            scheduled_time=scheduled_time,
+            schedule_kind=subscription_type.schedule_kind,
+            weekdays=subscription_type.weekdays,
+            annual_date=subscription_type.annual_date,
+            birthday=user.birthday,
+            current_time=current_time,
             timezone_offset_minutes=user.timezone_offset_minutes,
         )
     ]
@@ -149,21 +152,6 @@ async def _reserve_scheduled_send(*, subscription_type_id: int, user_id: int, cu
 def _dedupe_key(*, subscription_type_id: int, user_id: int, current_time: datetime) -> str:
     minute = aware_datetime(current_time).astimezone(UTC).strftime("%Y%m%d%H%M")
     return f"subscription-broadcast:{subscription_type_id}:{user_id}:{minute}"
-
-
-def _is_subscription_due(
-    scheduled_time: time,
-    weekdays: SubscriptionWeekdays,
-    current_time: datetime,
-    *,
-    timezone_offset_minutes: int,
-) -> bool:
-    local_datetime = aware_datetime(current_time).astimezone(timezone(timedelta(minutes=timezone_offset_minutes)))
-    return (
-        scheduled_time.hour == local_datetime.hour
-        and scheduled_time.minute == local_datetime.minute
-        and local_datetime.isoweekday() in weekdays
-    )
 
 
 def _now() -> datetime:

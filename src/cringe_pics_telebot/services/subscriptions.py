@@ -8,6 +8,9 @@ from cringe_pics_telebot.repositories.postgres import (
     transaction,
 )
 from cringe_pics_telebot.repositories.postgres import get_subscription_users as get_subscription_users_from_pg
+from cringe_pics_telebot.repositories.postgres import (
+    get_user_birthday as get_user_birthday_from_pg,
+)
 from cringe_pics_telebot.repositories.postgres import get_user_subscriptions as get_user_subscriptions_from_pg
 from cringe_pics_telebot.repositories.postgres.entities import CreateSubscription, User
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
@@ -27,6 +30,10 @@ async def get_scheduled_subscription_types() -> list[SubscriptionType]:
 
 async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
     return await get_user_subscriptions_from_pg(user_id)
+
+
+async def user_has_birthday(user_id: int) -> bool:
+    return await get_user_birthday_from_pg(user_id) is not None
 
 
 async def get_subscription_users(subscription_type_id: int) -> list[User]:

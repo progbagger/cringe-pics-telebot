@@ -2,6 +2,8 @@ from datetime import time
 
 from attr import dataclass
 
+from cringe_pics_telebot.entities.annual_date import AnnualDate
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 
 
@@ -17,6 +19,10 @@ class SubscriptionInfo:
     """ISO-дни недели отправки подписки"""
     subscribed: bool
     """Активна ли подписка"""
+    schedule_kind: SubscriptionScheduleKind = SubscriptionScheduleKind.weekly
+    """Вид календарного расписания"""
+    annual_date: AnnualDate | None = None
+    """Фиксированная ежегодная дата"""
 
 
 @dataclass

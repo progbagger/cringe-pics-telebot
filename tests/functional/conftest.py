@@ -71,6 +71,8 @@ class FunctionalSubscriptionType:
     search_aliases: tuple[str, ...] = ()
     is_active: bool = True
     weekdays: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7)
+    schedule_kind: str = "weekly"
+    annual_date: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,6 +460,32 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         env=_bot_env(dependency_ports),
     )
     await _prepare_pre_weekdays_rows(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
+        "0014",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_annual_schedule_columns_absent(dependency_ports)
     await _run_checked(
         "uv",
         "run",
@@ -1055,12 +1083,14 @@ async def create_user_subscription(
         user_id: int,
         subscription_type_id: int,
         timezone_offset_minutes: int = 420,
+        birthday: tuple[int, int] | None = None,
     ) -> None:
         await _insert_user_subscription(
             docker_compose,
             user_id=user_id,
             subscription_type_id=subscription_type_id,
             timezone_offset_minutes=timezone_offset_minutes,
+            birthday=birthday,
         )
 
     return create
@@ -1075,12 +1105,14 @@ async def create_functional_user(
         user_id: int,
         timezone_offset_minutes: int = 420,
         is_active: bool = True,
+        birthday: tuple[int, int] | None = None,
     ) -> None:
         await _insert_user(
             docker_compose,
             user_id=user_id,
             timezone_offset_minutes=timezone_offset_minutes,
             is_active=is_active,
+            birthday=birthday,
         )
 
     return create
@@ -1770,6 +1802,53 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             await connection.fetchval("SELECT weekdays FROM subscription_types WHERE name = '/migration-probe'"),
             equal_to(127),
         )
+        schedule_row = await connection.fetchrow(
+            """
+            SELECT schedule_kind, annual_month, annual_day
+            FROM subscription_types
+            WHERE name = '/migration-probe'
+            """
+        )
+        assert schedule_row is not None
+        assert_that(dict(schedule_row), equal_to({"schedule_kind": "weekly", "annual_month": None, "annual_day": None}))
+        birthday_row = await connection.fetchrow(
+            "SELECT birth_month, birth_day, birthdate_source FROM users WHERE id = 1"
+        )
+        assert birthday_row is not None
+        assert_that(
+            dict(birthday_row),
+            equal_to({"birth_month": None, "birth_day": None, "birthdate_source": None}),
+        )
+        assert_that(
+            [
+                row["enumlabel"]
+                for row in await connection.fetch(
+                    """
+                    SELECT enum.enumlabel
+                    FROM pg_enum AS enum
+                    JOIN pg_type AS type ON type.oid = enum.enumtypid
+                    WHERE type.typname = 'subscription_schedule_kind'
+                    ORDER BY enum.enumsortorder
+                    """
+                )
+            ],
+            equal_to(["weekly", "annual_date", "annual_birthday"]),
+        )
+        assert_that(
+            [
+                row["enumlabel"]
+                for row in await connection.fetch(
+                    """
+                    SELECT enum.enumlabel
+                    FROM pg_enum AS enum
+                    JOIN pg_type AS type ON type.oid = enum.enumtypid
+                    WHERE type.typname = 'user_birthday_source'
+                    ORDER BY enum.enumsortorder
+                    """
+                )
+            ],
+            equal_to(["telegram", "manual"]),
+        )
         assert_that(
             await connection.fetchval(
                 "SELECT weekdays FROM subscription_types WHERE name = '/migration-null-schedule-probe'"
@@ -1830,12 +1909,101 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
             """
             INSERT INTO subscription_types(name, time, s3_directory_path, created_at, updated_at)
             VALUES('/migration-default-probe', '11:00', 'migration-default-probe', now(), now())
-            RETURNING is_active, weekdays
+            RETURNING is_active, weekdays, schedule_kind
             """
         )
         assert default_row is not None
         assert_that(default_row["is_active"], is_(False))
         assert_that(default_row["weekdays"], equal_to(127))
+        assert_that(default_row["schedule_kind"], equal_to("weekly"))
+        await connection.execute("DELETE FROM subscription_types WHERE name = '/migration-annual-probe'")
+        annual_row = await connection.fetchrow(
+            """
+            INSERT INTO subscription_types(
+                name,
+                time,
+                schedule_kind,
+                annual_month,
+                annual_day,
+                s3_directory_path,
+                created_at,
+                updated_at
+            )
+            VALUES('/migration-annual-probe', '10:00', 'annual_date', 2, 29, 'annual', now(), now())
+            RETURNING schedule_kind, annual_month, annual_day
+            """
+        )
+        assert annual_row is not None
+        assert_that(
+            dict(annual_row),
+            equal_to({"schedule_kind": "annual_date", "annual_month": 2, "annual_day": 29}),
+        )
+        await connection.execute("DELETE FROM subscription_types WHERE name = '/migration-annual-probe'")
+        with pytest.raises(asyncpg.InvalidTextRepresentationError):
+            await connection.execute(
+                """
+                INSERT INTO subscription_types(
+                    name,
+                    time,
+                    schedule_kind,
+                    s3_directory_path,
+                    created_at,
+                    updated_at
+                )
+                VALUES('/migration-invalid-schedule-kind-probe', '10:00', 'unknown', 'invalid', now(), now())
+                """
+            )
+        for schedule_kind, month, day in (
+            ("annual_date", None, None),
+            ("annual_date", 4, 31),
+            ("weekly", 1, 1),
+            ("annual_birthday", 1, 1),
+        ):
+            with pytest.raises(asyncpg.CheckViolationError):
+                await connection.execute(
+                    """
+                    INSERT INTO subscription_types(
+                        name,
+                        time,
+                        schedule_kind,
+                        annual_month,
+                        annual_day,
+                        s3_directory_path,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES('/migration-invalid-annual-probe', '10:00', $1, $2, $3, 'invalid', now(), now())
+                    """,
+                    schedule_kind,
+                    month,
+                    day,
+                )
+        await connection.execute("DELETE FROM users WHERE id = 2")
+        await connection.execute(
+            """
+            INSERT INTO users(id, birth_month, birth_day, birthdate_source, created_at)
+            VALUES(2, 2, 29, 'manual', now())
+            """
+        )
+        with pytest.raises(asyncpg.InvalidTextRepresentationError):
+            await connection.execute(
+                """
+                INSERT INTO users(id, birth_month, birth_day, birthdate_source, created_at)
+                VALUES(3, 1, 1, 'unknown', now())
+                """
+            )
+        for month, day, source in ((2, 30, "manual"), (2, 29, None), (None, None, "telegram")):
+            with pytest.raises(asyncpg.CheckViolationError):
+                await connection.execute(
+                    """
+                    INSERT INTO users(id, birth_month, birth_day, birthdate_source, created_at)
+                    VALUES(3, $1, $2, $3, now())
+                    """,
+                    month,
+                    day,
+                    source,
+                )
+        await connection.execute("DELETE FROM users WHERE id IN (2, 3)")
         with pytest.raises(asyncpg.CheckViolationError):
             await connection.execute(
                 """
@@ -2064,6 +2232,46 @@ async def _assert_weekdays_column_absent(dependency_ports: DependencyPorts) -> N
         await connection.close()
 
 
+async def _assert_annual_schedule_columns_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        for table_name, column_name in (
+            ("subscription_types", "schedule_kind"),
+            ("subscription_types", "annual_month"),
+            ("subscription_types", "annual_day"),
+            ("users", "birth_month"),
+            ("users", "birth_day"),
+            ("users", "birthdate_source"),
+        ):
+            assert_that(
+                await connection.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = $1
+                          AND column_name = $2
+                    )
+                    """,
+                    table_name,
+                    column_name,
+                ),
+                is_(False),
+            )
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'"),
+            equal_to(1),
+        )
+        for type_name in ("subscription_schedule_kind", "user_birthday_source"):
+            assert_that(
+                await connection.fetchval("SELECT EXISTS (SELECT 1 FROM pg_type WHERE typname = $1)", type_name),
+                is_(False),
+            )
+    finally:
+        await connection.close()
+
+
 async def _assert_media_search_aliases_table_absent(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
@@ -2168,13 +2376,16 @@ async def _insert_subscription_types(
                 name,
                 time,
                 weekdays,
+                schedule_kind,
+                annual_month,
+                annual_day,
                 s3_directory_path,
                 search_aliases,
                 is_active,
                 created_at,
                 updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
             """,
             [
                 (
@@ -2182,6 +2393,9 @@ async def _insert_subscription_types(
                     subscription.name,
                     subscription.send_time,
                     _weekdays_mask(subscription.weekdays),
+                    subscription.schedule_kind,
+                    subscription.annual_date[0] if subscription.annual_date is not None else None,
+                    subscription.annual_date[1] if subscription.annual_date is not None else None,
                     subscription.s3_directory_path,
                     list(subscription.search_aliases),
                     subscription.is_active,
@@ -2218,11 +2432,13 @@ async def _insert_user_subscription(
     user_id: int,
     subscription_type_id: int,
     timezone_offset_minutes: int = 420,
+    birthday: tuple[int, int] | None = None,
 ) -> None:
     await _insert_user(
         dependency_ports,
         user_id=user_id,
         timezone_offset_minutes=timezone_offset_minutes,
+        birthday=birthday,
     )
     connection = await _create_postgres_connection(dependency_ports)
     try:
@@ -2245,20 +2461,35 @@ async def _insert_user(
     user_id: int,
     timezone_offset_minutes: int = 420,
     is_active: bool = True,
+    birthday: tuple[int, int] | None = None,
 ) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
         await connection.execute(
             """
-            INSERT INTO users(id, timezone_offset_minutes, is_active, created_at)
-            VALUES($1, $2, $3, $4)
+            INSERT INTO users(
+                id,
+                timezone_offset_minutes,
+                is_active,
+                birth_month,
+                birth_day,
+                birthdate_source,
+                created_at
+            )
+            VALUES($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO UPDATE
             SET timezone_offset_minutes = EXCLUDED.timezone_offset_minutes,
-                is_active = EXCLUDED.is_active
+                is_active = EXCLUDED.is_active,
+                birth_month = EXCLUDED.birth_month,
+                birth_day = EXCLUDED.birth_day,
+                birthdate_source = EXCLUDED.birthdate_source
             """,
             user_id,
             timezone_offset_minutes,
             is_active,
+            birthday[0] if birthday is not None else None,
+            birthday[1] if birthday is not None else None,
+            "manual" if birthday is not None else None,
             _database_time(),
         )
     finally:
