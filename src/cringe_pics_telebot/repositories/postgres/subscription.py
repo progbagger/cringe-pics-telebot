@@ -1,8 +1,11 @@
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
+from cringe_pics_telebot.entities.annual_date import AnnualDate
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
+from cringe_pics_telebot.entities.user_birthday import UserBirthdaySource
 
 from .connection import get_connection
 from .entities import CreateSubscription, Subscription, User
@@ -46,6 +49,9 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
                     st.c.name,
                     st.c.time,
                     st.c.weekdays,
+                    st.c.schedule_kind,
+                    st.c.annual_month,
+                    st.c.annual_day,
                     us.c.id.is_not(None).label("subscribed"),
                 )
                 .select_from(st.outerjoin(us, us.c.subscription_type_id == st.c.id))
@@ -60,6 +66,12 @@ async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
                 send_time=row.time,
                 weekdays=SubscriptionWeekdays.from_mask(row.weekdays),
                 subscribed=row.subscribed,
+                schedule_kind=SubscriptionScheduleKind(row.schedule_kind),
+                annual_date=(
+                    AnnualDate(month=row.annual_month, day=row.annual_day)
+                    if row.annual_month is not None and row.annual_day is not None
+                    else None
+                ),
             )
             for row in rows
         ]
@@ -83,6 +95,14 @@ async def get_subscription_users(subscription_type_id: int) -> list[User]:
                 timezone_offset_minutes=row.timezone_offset_minutes,
                 is_active=row.is_active,
                 created_at=row.created_at,
+                birthday=(
+                    AnnualDate(month=row.birth_month, day=row.birth_day)
+                    if row.birth_month is not None and row.birth_day is not None
+                    else None
+                ),
+                birthday_source=(
+                    UserBirthdaySource(row.birthdate_source) if row.birthdate_source is not None else None
+                ),
             )
             for row in rows
         ]

@@ -7,6 +7,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardMarkup, Message
 
+from cringe_pics_telebot.entities.annual_date import AnnualDate
+from cringe_pics_telebot.entities.subscription_schedule import (
+    DEFAULT_ANNUAL_SCHEDULE_TIME,
+    SubscriptionScheduleKind,
+)
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories.postgres import (
     CreateSubscriptionType,
@@ -18,15 +23,18 @@ from cringe_pics_telebot.repositories.postgres import (
 from cringe_pics_telebot.repositories.postgres.entities import SubscriptionType
 from cringe_pics_telebot.services.admin_categories import (
     AdminCategoryNameConflictError,
+    InvalidAdminCategoryDateError,
     InvalidAdminCategoryNameError,
     InvalidAdminCategoryPathError,
     InvalidAdminCategoryTimeError,
     admin_category_name_exists,
     create_admin_category,
+    parse_admin_category_date,
     parse_admin_category_name,
     parse_admin_category_path,
     parse_admin_category_time,
     set_admin_category_activity,
+    set_admin_category_schedule,
     set_admin_category_time,
     set_admin_category_weekdays,
 )
@@ -34,7 +42,10 @@ from cringe_pics_telebot.services.category_aliases import (
     InvalidCategoryAliasesError,
     parse_category_search_aliases,
 )
-from cringe_pics_telebot.services.subscription_schedules import format_subscription_weekdays
+from cringe_pics_telebot.services.subscription_schedules import (
+    format_subscription_schedule,
+    format_subscription_weekdays,
+)
 
 from .admin_access import IsAdministrator
 from .admin_category_callback_data import (
@@ -46,6 +57,7 @@ from .admin_keyboards import (
     create_admin_categories_keyboard,
     create_admin_category_form_cancel_keyboard,
     create_admin_category_keyboard,
+    create_admin_category_schedule_kind_keyboard,
     create_admin_category_schedule_mode_keyboard,
     create_admin_category_weekdays_keyboard,
     create_admin_panel_keyboard,
@@ -64,6 +76,7 @@ class AdminCategoryCreationForm(StatesGroup):
     schedule_mode = State()
     send_time = State()
     weekdays = State()
+    annual_date = State()
     aliases = State()
 
 
@@ -73,6 +86,11 @@ class AdminCategoryTimeForm(StatesGroup):
 
 class AdminCategoryWeekdaysForm(StatesGroup):
     weekdays = State()
+
+
+class AdminCategoryScheduleForm(StatesGroup):
+    kind = State()
+    annual_date = State()
 
 
 class AdminCategoryAliasesForm(StatesGroup):
@@ -187,6 +205,32 @@ async def receive_new_category_time(message: Message, state: FSMContext) -> None
     )
 
 
+@router.message(AdminCategoryCreationForm.annual_date)
+async def receive_new_category_annual_date(message: Message, state: FSMContext) -> None:
+    if message.text is None:
+        await message.answer(
+            _annual_date_error("Ежегодная дата должна быть текстом."),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return
+
+    try:
+        annual_date = parse_admin_category_date(message.text)
+    except InvalidAdminCategoryDateError:
+        await message.answer(
+            _annual_date_error("Не удалось распознать ежегодную дату."),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return
+
+    await state.update_data(annual_month=annual_date.month, annual_day=annual_date.day)
+    await state.set_state(AdminCategoryCreationForm.aliases)
+    await message.answer(
+        _new_category_aliases_prompt(annual_default=True),
+        reply_markup=create_admin_category_form_cancel_keyboard(),
+    )
+
+
 @router.message(AdminCategoryTimeForm.send_time)
 async def receive_category_time(message: Message, state: FSMContext) -> None:
     if message.text is None:
@@ -225,6 +269,52 @@ async def receive_category_time(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         f"Время отправки обновлено.\n\n{_category_details(category)}",
+        reply_markup=_category_keyboard(category, page=page),
+    )
+
+
+@router.message(AdminCategoryScheduleForm.annual_date)
+async def receive_category_annual_date(message: Message, state: FSMContext) -> None:
+    if message.text is None:
+        await message.answer(
+            _edit_annual_date_error("Ежегодная дата должна быть текстом."),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return
+
+    try:
+        annual_date = parse_admin_category_date(message.text)
+    except InvalidAdminCategoryDateError:
+        await message.answer(
+            _edit_annual_date_error("Не удалось распознать ежегодную дату."),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return
+
+    category_id = await _state_category_id(state)
+    page = await _state_page(state)
+    if category_id is None:
+        await message.answer(
+            "Черновик потерян. Откройте категорию заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return
+
+    category = await set_admin_category_schedule(
+        category_id,
+        schedule_kind=SubscriptionScheduleKind.annual_date,
+        annual_date=annual_date,
+    )
+    await state.clear()
+    if category is None:
+        await message.answer(
+            "Категория больше недоступна.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return
+
+    await message.answer(
+        f"Ежегодная дата обновлена.\n\n{_category_details(category)}",
         reply_markup=_category_keyboard(category, page=page),
     )
 
@@ -336,9 +426,15 @@ async def _dispatch_admin_category_callback(
         case AdminCategoryAction.create:
             await _start_new_category(message, state, page=callback_data.page)
         case AdminCategoryAction.create_scheduled:
-            return await _select_new_category_schedule(message, state, scheduled=True)
+            return await _select_category_schedule_kind(message, state, SubscriptionScheduleKind.weekly)
+        case AdminCategoryAction.schedule_weekly:
+            return await _select_category_schedule_kind(message, state, SubscriptionScheduleKind.weekly)
+        case AdminCategoryAction.schedule_annual_date:
+            return await _select_category_schedule_kind(message, state, SubscriptionScheduleKind.annual_date)
+        case AdminCategoryAction.schedule_annual_birthday:
+            return await _select_category_schedule_kind(message, state, SubscriptionScheduleKind.annual_birthday)
         case AdminCategoryAction.create_without_schedule:
-            return await _select_new_category_schedule(message, state, scheduled=False)
+            return await _select_new_category_without_schedule(message, state)
         case AdminCategoryAction.activate:
             await state.clear()
             return await _set_category_activity(
@@ -362,6 +458,10 @@ async def _dispatch_admin_category_callback(
             return await _disable_schedule(message, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.edit_weekdays:
             return await _start_edit_weekdays(message, state, callback_data.category_id, page=callback_data.page)
+        case AdminCategoryAction.edit_schedule_kind:
+            return await _start_edit_schedule_kind(message, state, callback_data.category_id, page=callback_data.page)
+        case AdminCategoryAction.edit_annual_date:
+            return await _start_edit_annual_date(message, state, callback_data.category_id, page=callback_data.page)
         case AdminCategoryAction.toggle_weekday:
             return await _toggle_weekday(message, state, callback_data.weekday)
         case AdminCategoryAction.confirm_weekdays:
@@ -412,7 +512,30 @@ async def _start_new_category(message: Message, state: FSMContext, *, page: int 
     )
 
 
-async def _select_new_category_schedule(message: Message, state: FSMContext, *, scheduled: bool) -> str | None:
+async def _select_category_schedule_kind(
+    message: Message,
+    state: FSMContext,
+    schedule_kind: SubscriptionScheduleKind,
+) -> str | None:
+    current_state = await state.get_state()
+    if current_state == AdminCategoryCreationForm.schedule_mode.state:
+        return await _select_new_category_schedule_kind(message, state, schedule_kind)
+    if current_state == AdminCategoryScheduleForm.kind.state:
+        return await _select_existing_category_schedule_kind(message, state, schedule_kind)
+
+    await state.clear()
+    await message.edit_text(
+        "<b>Админ-панель</b>\n\nЧерновик потерян. Начните действие заново.",
+        reply_markup=create_admin_panel_keyboard(),
+    )
+    return "Черновик настройки расписания потерян."
+
+
+async def _select_new_category_schedule_kind(
+    message: Message,
+    state: FSMContext,
+    schedule_kind: SubscriptionScheduleKind,
+) -> str | None:
     data = await state.get_data()
     if not isinstance(data.get("name"), str) or not isinstance(data.get("s3_directory_path"), str):
         await state.clear()
@@ -422,15 +545,53 @@ async def _select_new_category_schedule(message: Message, state: FSMContext, *, 
         )
         return "Черновик создания категории потерян."
 
-    if scheduled:
-        await state.set_state(AdminCategoryCreationForm.send_time)
-        await message.edit_text(
-            _time_prompt(),
-            reply_markup=create_admin_category_form_cancel_keyboard(),
-        )
-        return None
+    await state.update_data(
+        schedule_kind=schedule_kind.value,
+        annual_month=None,
+        annual_day=None,
+        weekdays=SubscriptionWeekdays.daily().days,
+    )
+    match schedule_kind:
+        case SubscriptionScheduleKind.weekly:
+            await state.set_state(AdminCategoryCreationForm.send_time)
+            await message.edit_text(
+                _time_prompt(),
+                reply_markup=create_admin_category_form_cancel_keyboard(),
+            )
+        case SubscriptionScheduleKind.annual_date:
+            await state.update_data(send_time=DEFAULT_ANNUAL_SCHEDULE_TIME)
+            await state.set_state(AdminCategoryCreationForm.annual_date)
+            await message.edit_text(
+                _annual_date_prompt(),
+                reply_markup=create_admin_category_form_cancel_keyboard(),
+            )
+        case SubscriptionScheduleKind.annual_birthday:
+            await state.update_data(send_time=DEFAULT_ANNUAL_SCHEDULE_TIME)
+            await state.set_state(AdminCategoryCreationForm.aliases)
+            await message.edit_text(
+                _new_category_aliases_prompt(annual_default=True),
+                reply_markup=create_admin_category_form_cancel_keyboard(),
+            )
+    return None
 
-    await state.update_data(send_time=None, weekdays=SubscriptionWeekdays.daily().days)
+
+async def _select_new_category_without_schedule(message: Message, state: FSMContext) -> str | None:
+    data = await state.get_data()
+    if not isinstance(data.get("name"), str) or not isinstance(data.get("s3_directory_path"), str):
+        await state.clear()
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Начните создание категории заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик создания категории потерян."
+
+    await state.update_data(
+        send_time=None,
+        weekdays=SubscriptionWeekdays.daily().days,
+        schedule_kind=SubscriptionScheduleKind.weekly.value,
+        annual_month=None,
+        annual_day=None,
+    )
     await state.set_state(AdminCategoryCreationForm.aliases)
     await message.edit_text(
         _new_category_aliases_prompt(),
@@ -492,6 +653,86 @@ async def _disable_schedule(message: Message, category_id: int, *, page: int) ->
     return "Расписание отключено."
 
 
+async def _start_edit_schedule_kind(
+    message: Message,
+    state: FSMContext,
+    category_id: int,
+    *,
+    page: int,
+) -> str | None:
+    category = await get_subscription_type(category_id)
+    if category is None:
+        await _show_categories(message, page=page)
+        return "Категория больше недоступна."
+
+    await state.set_state(AdminCategoryScheduleForm.kind)
+    await state.set_data({"category_id": category_id, "page": page})
+    await message.edit_text(
+        _edit_schedule_kind_prompt(category.name),
+        reply_markup=create_admin_category_schedule_kind_keyboard(),
+    )
+    return None
+
+
+async def _select_existing_category_schedule_kind(
+    message: Message,
+    state: FSMContext,
+    schedule_kind: SubscriptionScheduleKind,
+) -> str | None:
+    category_id = await _state_category_id(state)
+    page = await _state_page(state)
+    if category_id is None:
+        await message.edit_text(
+            "<b>Админ-панель</b>\n\nЧерновик потерян. Откройте категорию заново.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
+        return "Черновик настройки расписания потерян."
+
+    if schedule_kind is SubscriptionScheduleKind.annual_date:
+        await state.set_state(AdminCategoryScheduleForm.annual_date)
+        await message.edit_text(
+            _edit_annual_date_prompt(),
+            reply_markup=create_admin_category_form_cancel_keyboard(),
+        )
+        return None
+
+    category = await set_admin_category_schedule(category_id, schedule_kind=schedule_kind)
+    await state.clear()
+    if category is None:
+        await _show_categories(message, page=page)
+        return "Категория больше недоступна."
+
+    await message.edit_text(
+        _category_details(category),
+        reply_markup=_category_keyboard(category, page=page),
+    )
+    return "Вид расписания обновлён."
+
+
+async def _start_edit_annual_date(
+    message: Message,
+    state: FSMContext,
+    category_id: int,
+    *,
+    page: int,
+) -> str | None:
+    category = await get_subscription_type(category_id)
+    if category is None:
+        await _show_categories(message, page=page)
+        return "Категория больше недоступна."
+    if category.schedule_kind is not SubscriptionScheduleKind.annual_date:
+        await _show_category(message, category_id, page=page)
+        return "У категории нет фиксированной ежегодной даты."
+
+    await state.set_state(AdminCategoryScheduleForm.annual_date)
+    await state.set_data({"category_id": category_id, "page": page})
+    await message.edit_text(
+        _edit_annual_date_prompt(),
+        reply_markup=create_admin_category_form_cancel_keyboard(),
+    )
+    return None
+
+
 async def _start_edit_weekdays(
     message: Message,
     state: FSMContext,
@@ -503,9 +744,9 @@ async def _start_edit_weekdays(
     if category is None:
         await _show_categories(message, page=page)
         return "Категория больше недоступна."
-    if category.time is None:
+    if category.schedule_kind is not SubscriptionScheduleKind.weekly:
         await _show_category(message, category_id, page=page)
-        return "Расписание категории отключено."
+        return "У категории нет расписания по дням недели."
 
     await state.set_state(AdminCategoryWeekdaysForm.weekdays)
     await state.set_data({"category_id": category_id, "weekdays": category.weekdays.days, "page": page})
@@ -640,6 +881,16 @@ async def _state_creation_draft(
         return None
     send_time = data["send_time"]
     weekdays = _weekdays_from_state_data(data)
+    raw_schedule_kind = data.get("schedule_kind")
+    if not isinstance(raw_schedule_kind, str):
+        await state.clear()
+        return None
+    try:
+        schedule_kind = SubscriptionScheduleKind(raw_schedule_kind)
+        annual_date = _annual_date_from_state_data(data, schedule_kind=schedule_kind)
+    except TypeError, ValueError:
+        await state.clear()
+        return None
     if (
         not isinstance(name, str)
         or not isinstance(s3_directory_path, str)
@@ -655,6 +906,8 @@ async def _state_creation_draft(
         s3_directory_path=s3_directory_path,
         search_aliases=search_aliases,
         weekdays=weekdays,
+        schedule_kind=schedule_kind,
+        annual_date=annual_date,
     )
 
 
@@ -702,12 +955,29 @@ def _weekdays_from_state_data(data: dict[str, object]) -> SubscriptionWeekdays |
         return None
 
 
+def _annual_date_from_state_data(
+    data: dict[str, object],
+    *,
+    schedule_kind: SubscriptionScheduleKind,
+) -> AnnualDate | None:
+    month = data.get("annual_month")
+    day = data.get("annual_day")
+    if schedule_kind is not SubscriptionScheduleKind.annual_date:
+        if month is not None or day is not None:
+            raise ValueError("Only fixed annual schedules can contain a date")
+        return None
+    if not isinstance(month, int) or not isinstance(day, int):
+        raise ValueError("Fixed annual schedule date is missing")
+    return AnnualDate(month=month, day=day)
+
+
 def _category_keyboard(category: SubscriptionType, *, page: int = 0) -> InlineKeyboardMarkup:
     return create_admin_category_keyboard(
         category.id,
         has_aliases=bool(category.search_aliases),
         has_schedule=category.time is not None,
         is_active=category.is_active,
+        schedule_kind=category.schedule_kind,
         page=page,
     )
 
@@ -729,14 +999,31 @@ def _category_details(category: SubscriptionType) -> str:
     else:
         aliases = "<i>не заданы</i>"
     status = "активна" if category.is_active else "неактивна"
+    schedule = format_subscription_schedule(
+        schedule_kind=category.schedule_kind,
+        weekdays=category.weekdays,
+        annual_date=category.annual_date,
+        daily_label="каждый день",
+    )
+    if category.schedule_kind is SubscriptionScheduleKind.annual_birthday:
+        schedule = "ежегодно в день рождения подписчика"
     send_time = f"<code>{category.time.strftime('%H:%M')}</code>" if category.time is not None else "без расписания"
-    weekdays = format_subscription_weekdays(category.weekdays, daily_label="каждый день")
+    if category.time is None:
+        schedule = f"{schedule}, отключено"
+    else:
+        schedule = f"{schedule} в <code>{category.time.strftime('%H:%M')}</code> по локальному времени пользователя"
+    weekdays = (
+        f"Дни отправки: {format_subscription_weekdays(category.weekdays, daily_label='каждый день')}\n"
+        if category.schedule_kind is SubscriptionScheduleKind.weekly
+        else ""
+    )
     return (
         f"<b>Категория {escape(category.name)}</b>\n\n"
         f"Статус: <b>{status}</b>\n"
         f"Путь к каталогу: <code>{escape(category.s3_directory_path)}</code>\n"
+        f"Расписание: {schedule}\n"
         f"Локальное время отправки: {send_time}\n"
-        f"Дни отправки: {weekdays}\n\n"
+        f"{weekdays}\n"
         f"Алиасы для inline-поиска:\n{aliases}"
     )
 
@@ -760,8 +1047,8 @@ def _path_error(reason: str) -> str:
 def _schedule_mode_prompt() -> str:
     return (
         "<b>Новая категория — режим отправки</b>\n\n"
-        "Выберите «По расписанию», чтобы задать локальное время и дни рассылки, "
-        "или «Без расписания» для выдачи только по пользовательской кнопке."
+        "Выберите периодичность рассылки. Ежегодные режимы создаются со временем "
+        "<code>12:00</code> по локальному времени пользователя; его можно изменить в карточке категории."
     )
 
 
@@ -773,6 +1060,16 @@ def _time_prompt(*, prefix: str = "Введите локальное время 
 
 def _time_error(reason: str) -> str:
     return f"{reason}\n\n{_time_prompt(prefix='Попробуйте ещё раз.')}"
+
+
+def _annual_date_prompt(*, prefix: str = "Введите фиксированную ежегодную дату категории.") -> str:
+    return (
+        f"<b>Новая категория — ежегодная дата</b>\n\n{prefix}\nФормат: <code>ДД.ММ</code>, например <code>01.01</code>."
+    )
+
+
+def _annual_date_error(reason: str) -> str:
+    return f"{reason}\n\n{_annual_date_prompt(prefix='Попробуйте ещё раз.')}"
 
 
 def _new_category_weekdays_prompt() -> str:
@@ -789,6 +1086,21 @@ def _edit_category_weekdays_prompt(category_name: str) -> str:
     )
 
 
+def _edit_schedule_kind_prompt(category_name: str) -> str:
+    return (
+        f"<b>Вид расписания категории {escape(category_name)}</b>\n\n"
+        "Выберите новый вид. Текущее время отправки и подписки сохранятся."
+    )
+
+
+def _edit_annual_date_prompt(*, prefix: str = "Введите новую фиксированную ежегодную дату.") -> str:
+    return f"<b>Изменение ежегодной даты</b>\n\n{prefix}\nФормат: <code>ДД.ММ</code>, например <code>01.01</code>."
+
+
+def _edit_annual_date_error(reason: str) -> str:
+    return f"{reason}\n\n{_edit_annual_date_prompt(prefix='Попробуйте ещё раз.')}"
+
+
 def _edit_time_prompt(*, prefix: str = "Введите новое локальное время отправки категории.") -> str:
     return f"<b>Изменение времени отправки</b>\n\n{prefix}\nФормат: <code>ЧЧ:ММ</code>, например <code>15:30</code>."
 
@@ -797,11 +1109,14 @@ def _edit_time_error(reason: str) -> str:
     return f"{reason}\n\n{_edit_time_prompt(prefix='Попробуйте ещё раз.')}"
 
 
-def _new_category_aliases_prompt() -> str:
+def _new_category_aliases_prompt(*, annual_default: bool = False) -> str:
+    default_notice = (
+        " Время ежегодной отправки: <code>12:00</code> по локальному времени пользователя." if annual_default else ""
+    )
     return (
         "<b>Новая категория — алиасы</b>\n\n"
         "Отправьте алиасы для inline-поиска: один алиас на строку. "
-        "Пробелы внутри алиаса сохраняются, пустые строки и повторы игнорируются."
+        f"Пробелы внутри алиаса сохраняются, пустые строки и повторы игнорируются.{default_notice}"
     )
 
 

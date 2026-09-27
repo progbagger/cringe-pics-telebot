@@ -139,6 +139,93 @@ async def test_subscription_broadcasts_use_each_users_local_weekday_across_sunda
     assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
 
 
+async def test_annual_date_broadcast_uses_each_users_local_calendar_date_and_deduplicates(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(
+                1,
+                "/new-year",
+                time(12),
+                "new-year",
+                schedule_kind="annual_date",
+                annual_date=(1, 1),
+            ),
+        )
+    )
+    await create_user_subscription(user_id=700, subscription_type_id=1, timezone_offset_minutes=12 * 60)
+    await create_user_subscription(user_id=701, subscription_type_id=1, timezone_offset_minutes=-12 * 60)
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    due_at = datetime(2027, 1, 1, 0, tzinfo=UTC)
+    assert_that(await run_subscription_broadcasts_at(due_at), equal_to(1))
+    assert_that(await run_subscription_broadcasts_at(due_at.replace(second=45)), equal_to(0))
+    assert_that(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto")), equal_to([700]))
+
+
+async def test_annual_birthday_broadcast_matches_each_subscribers_local_birthday(
+    fake_telegram_server: FakeTelegramServer,
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    create_functional_user: Callable[..., Awaitable[None]],
+    run_subscription_broadcasts_at: Callable[[datetime], Awaitable[int]],
+    synchronize_functional_media_catalog: Callable[[], Awaitable[MediaSyncSummary]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(
+                1,
+                "/birthday",
+                time(12),
+                "birthday",
+                schedule_kind="annual_birthday",
+            ),
+        )
+    )
+    await create_user_subscription(
+        user_id=700,
+        subscription_type_id=1,
+        timezone_offset_minutes=12 * 60,
+        birthday=(9, 27),
+    )
+    await create_user_subscription(
+        user_id=701,
+        subscription_type_id=1,
+        timezone_offset_minutes=-12 * 60,
+        birthday=(9, 26),
+    )
+    await create_user_subscription(
+        user_id=702,
+        subscription_type_id=1,
+        timezone_offset_minutes=12 * 60,
+        birthday=(9, 26),
+    )
+    await create_user_subscription(
+        user_id=703,
+        subscription_type_id=1,
+        timezone_offset_minutes=12 * 60,
+    )
+    await create_functional_user(user_id=704, timezone_offset_minutes=12 * 60, birthday=(9, 27))
+    await synchronize_functional_media_catalog()
+    await fake_yandex_server.reset()
+
+    sent_count = await run_subscription_broadcasts_at(datetime(2026, 9, 27, 0, tzinfo=UTC))
+
+    assert_that(sent_count, equal_to(2))
+    assert_that(
+        sorted(_sent_chat_ids(await fake_telegram_server.requests(method="sendPhoto"))),
+        equal_to([700, 701]),
+    )
+
+
 async def test_inactive_subscription_broadcast_resumes_after_reactivation_without_deleting_subscription(
     fake_telegram_server: FakeTelegramServer,
     fake_yandex_server: FakeYandexServer,

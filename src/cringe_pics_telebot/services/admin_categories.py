@@ -2,6 +2,8 @@ import re
 from collections.abc import Iterable
 from datetime import datetime, time
 
+from cringe_pics_telebot.entities.annual_date import AnnualDate
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.repositories.postgres import (
     CreateSubscriptionType,
@@ -10,11 +12,13 @@ from cringe_pics_telebot.repositories.postgres import (
     get_subscription_type_by_name,
     set_subscription_type_activity,
     transaction,
+    update_subscription_type_schedule,
     update_subscription_type_time,
     update_subscription_type_weekdays,
 )
 
 _LOCAL_TIME_PATTERN = re.compile(r"\d{2}:\d{2}")
+_ANNUAL_DATE_PATTERN = re.compile(r"\d{2}\.\d{2}")
 
 
 class InvalidAdminCategoryNameError(ValueError): ...
@@ -24,6 +28,9 @@ class InvalidAdminCategoryPathError(ValueError): ...
 
 
 class InvalidAdminCategoryTimeError(ValueError): ...
+
+
+class InvalidAdminCategoryDateError(ValueError): ...
 
 
 class AdminCategoryNameConflictError(ValueError): ...
@@ -54,6 +61,18 @@ def parse_admin_category_time(value: str) -> time:
         raise InvalidAdminCategoryTimeError("Category time contains an invalid hour or minute") from error
 
 
+def parse_admin_category_date(value: str) -> AnnualDate:
+    normalized = value.strip()
+    if _ANNUAL_DATE_PATTERN.fullmatch(normalized) is None:
+        raise InvalidAdminCategoryDateError("Annual category date must use DD.MM")
+
+    day, month = (int(part) for part in normalized.split("."))
+    try:
+        return AnnualDate(month=month, day=day)
+    except ValueError as error:
+        raise InvalidAdminCategoryDateError("Annual category date is invalid") from error
+
+
 async def admin_category_name_exists(name: str) -> bool:
     return await get_subscription_type_by_name(name) is not None
 
@@ -81,6 +100,23 @@ async def set_admin_category_weekdays(
     normalized_weekdays = SubscriptionWeekdays(*weekdays)
     async with transaction():
         return await update_subscription_type_weekdays(category_id, normalized_weekdays)
+
+
+async def set_admin_category_schedule(
+    category_id: int,
+    *,
+    schedule_kind: SubscriptionScheduleKind,
+    annual_date: AnnualDate | None = None,
+) -> SubscriptionType | None:
+    if (schedule_kind is SubscriptionScheduleKind.annual_date) != (annual_date is not None):
+        raise ValueError("Annual date must be set only for a fixed annual schedule")
+
+    async with transaction():
+        return await update_subscription_type_schedule(
+            category_id,
+            schedule_kind=schedule_kind,
+            annual_date=annual_date,
+        )
 
 
 async def set_admin_category_activity(

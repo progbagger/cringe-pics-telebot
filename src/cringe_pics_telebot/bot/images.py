@@ -19,6 +19,7 @@ from cringe_pics_telebot.bot.subscription_callback_data import (
     SubscriptionCallbackData,
     SubscriptionPageCallbackData,
 )
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.repositories.postgres import (
     SubscriptionType,
     get_category_media_by_subscription_types,
@@ -30,6 +31,7 @@ from cringe_pics_telebot.services.subscriptions import (
     get_user_subscriptions,
     subscribe,
     unsubscribe,
+    user_has_birthday,
 )
 from cringe_pics_telebot.services.timezones import (
     InvalidTimezoneOffsetError,
@@ -125,6 +127,11 @@ async def show_subscriptions(message: Message) -> None:
 
     subscriptions = await get_user_subscriptions(message.from_user.id)
     timezone_offset = format_timezone_offset(await get_user_timezone_offset(message.from_user.id))
+    birthday_hint = ""
+    if any(
+        item.schedule_kind is SubscriptionScheduleKind.annual_birthday for item in subscriptions
+    ) and not await user_has_birthday(message.from_user.id):
+        birthday_hint = "\n<i>Для рассылки в день рождения укажи дату командой <code>/birthday DD.MM</code>.</i>\n"
     await message.answer(
         text=f"""\
 Вот <b>список</b> твоих подписок.
@@ -133,6 +140,7 @@ async def show_subscriptions(message: Message) -> None:
 
 <i>Время категорий — локальное, твой часовой пояс: UTC{timezone_offset}.</i>
 <i>Изменить его можно командой <code>/timezone</code>.</i>\
+{birthday_hint}\
 """,
         reply_markup=create_inline_subscriptions_keyboard(subscriptions),
     )

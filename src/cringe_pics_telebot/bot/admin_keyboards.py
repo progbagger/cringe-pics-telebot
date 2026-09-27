@@ -3,6 +3,7 @@ from collections.abc import Collection, Iterable
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.repositories.postgres.entities import (
     AdminBroadcast,
     CategoryMediaSearchMetadata,
@@ -86,12 +87,42 @@ def create_admin_categories_keyboard(
 def create_admin_category_schedule_mode_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="По расписанию",
-        callback_data=_category_callback(AdminCategoryAction.create_scheduled),
+        text="По дням недели",
+        callback_data=_category_callback(AdminCategoryAction.schedule_weekly),
+    )
+    builder.button(
+        text="Раз в год — фиксированная дата",
+        callback_data=_category_callback(AdminCategoryAction.schedule_annual_date),
+    )
+    builder.button(
+        text="Раз в год — день рождения подписчика",
+        callback_data=_category_callback(AdminCategoryAction.schedule_annual_birthday),
     )
     builder.button(
         text="Без расписания",
         callback_data=_category_callback(AdminCategoryAction.create_without_schedule),
+    )
+    builder.button(
+        text="Отмена",
+        callback_data=_category_callback(AdminCategoryAction.cancel_form),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def create_admin_category_schedule_kind_keyboard() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="По дням недели",
+        callback_data=_category_callback(AdminCategoryAction.schedule_weekly),
+    )
+    builder.button(
+        text="Раз в год — фиксированная дата",
+        callback_data=_category_callback(AdminCategoryAction.schedule_annual_date),
+    )
+    builder.button(
+        text="Раз в год — день рождения подписчика",
+        callback_data=_category_callback(AdminCategoryAction.schedule_annual_birthday),
     )
     builder.button(
         text="Отмена",
@@ -131,6 +162,7 @@ def create_admin_category_keyboard(
     has_aliases: bool,
     has_schedule: bool,
     is_active: bool,
+    schedule_kind: SubscriptionScheduleKind,
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
@@ -146,11 +178,21 @@ def create_admin_category_keyboard(
         text="Изменить время отправки",
         callback_data=_paged_category_callback(AdminCategoryAction.edit_time, category_id, page=page),
     )
-    if has_schedule:
+    builder.button(
+        text="Изменить вид расписания",
+        callback_data=_paged_category_callback(AdminCategoryAction.edit_schedule_kind, category_id, page=page),
+    )
+    if schedule_kind is SubscriptionScheduleKind.weekly:
         builder.button(
             text="Изменить дни отправки",
             callback_data=_paged_category_callback(AdminCategoryAction.edit_weekdays, category_id, page=page),
         )
+    elif schedule_kind is SubscriptionScheduleKind.annual_date:
+        builder.button(
+            text="Изменить ежегодную дату",
+            callback_data=_paged_category_callback(AdminCategoryAction.edit_annual_date, category_id, page=page),
+        )
+    if has_schedule:
         builder.button(
             text="Отключить расписание",
             callback_data=_paged_category_callback(AdminCategoryAction.disable_schedule, category_id, page=page),

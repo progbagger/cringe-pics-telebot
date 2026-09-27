@@ -33,7 +33,7 @@ exclude = ["^alembic/"]
 
 [dependency-groups]
 migration = [
-  "alembic>=1.17.2",
+  "alembic>=1.17.2,<1.19.2",
 ]
 dev = [
   "dotenv>=0.9.9",

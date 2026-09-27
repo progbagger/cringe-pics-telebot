@@ -1,5 +1,8 @@
 import sqlalchemy as sa
 
+from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
+from cringe_pics_telebot.entities.user_birthday import UserBirthdaySource
+
 from ._metadata import _metadata
 from .entities.media_alias_enrichment import MediaAliasEnrichmentJobStatus
 
@@ -19,10 +22,31 @@ users = sa.Table(
         server_default=sa.text("420"),
     ),
     sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column("birth_month", sa.SMALLINT, nullable=True),
+    sa.Column("birth_day", sa.SMALLINT, nullable=True),
+    sa.Column(
+        "birthdate_source",
+        sa.Enum(
+            UserBirthdaySource,
+            name="user_birthday_source",
+            values_callable=lambda sources: [source.value for source in sources],
+        ),
+        nullable=True,
+    ),
     _time_column("created_at"),
     sa.CheckConstraint(
         "timezone_offset_minutes BETWEEN -720 AND 840",
         name="users_timezone_offset_minutes_range",
+    ),
+    sa.CheckConstraint(
+        "(birth_month IS NULL AND birth_day IS NULL AND birthdate_source IS NULL) OR "
+        "(birth_month IS NOT NULL AND birth_day IS NOT NULL AND birthdate_source IS NOT NULL AND "
+        "birth_month BETWEEN 1 AND 12 AND "
+        "birth_day BETWEEN 1 AND CASE "
+        "WHEN birth_month = 2 THEN 29 "
+        "WHEN birth_month IN (4, 6, 9, 11) THEN 30 "
+        "ELSE 31 END)",
+        name="users_birthdate_valid",
     ),
 )
 
@@ -119,6 +143,18 @@ subscription_types = sa.Table(
     sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
     sa.Column("time", sa.TIME(False), nullable=True),
     sa.Column("weekdays", sa.SMALLINT, nullable=False, server_default=sa.text("127")),
+    sa.Column(
+        "schedule_kind",
+        sa.Enum(
+            SubscriptionScheduleKind,
+            name="subscription_schedule_kind",
+            values_callable=lambda kinds: [kind.value for kind in kinds],
+        ),
+        nullable=False,
+        server_default=SubscriptionScheduleKind.weekly.value,
+    ),
+    sa.Column("annual_month", sa.SMALLINT, nullable=True),
+    sa.Column("annual_day", sa.SMALLINT, nullable=True),
     sa.Column("s3_directory_path", sa.VARCHAR, nullable=False),
     sa.Column("is_active", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column(
@@ -132,6 +168,17 @@ subscription_types = sa.Table(
     sa.CheckConstraint(
         "weekdays BETWEEN 1 AND 127",
         name="subscription_types_weekdays_valid",
+    ),
+    sa.CheckConstraint(
+        "(schedule_kind = 'annual_date' AND "
+        "annual_month IS NOT NULL AND annual_day IS NOT NULL AND "
+        "annual_month BETWEEN 1 AND 12 AND "
+        "annual_day BETWEEN 1 AND CASE "
+        "WHEN annual_month = 2 THEN 29 "
+        "WHEN annual_month IN (4, 6, 9, 11) THEN 30 "
+        "ELSE 31 END) OR "
+        "(schedule_kind IN ('weekly', 'annual_birthday') AND annual_month IS NULL AND annual_day IS NULL)",
+        name="subscription_types_annual_date_valid",
     ),
 )
 
