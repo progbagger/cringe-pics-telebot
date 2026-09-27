@@ -1403,6 +1403,58 @@ async def read_user_state(
 
 
 @pytest.fixture
+async def read_user_birthday_state(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[int | None, int | None, str | None] | None]]:
+    async def read(user_id: int) -> tuple[int | None, int | None, str | None] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            row = await connection.fetchrow(
+                "SELECT birth_month, birth_day, birthdate_source FROM users WHERE id = $1",
+                user_id,
+            )
+            if row is None:
+                return None
+
+            return row["birth_month"], row["birth_day"], row["birthdate_source"]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def set_user_birthday_state(
+    docker_compose: DependencyPorts,
+) -> Callable[[int, tuple[int, int] | None, str | None], Awaitable[None]]:
+    async def set_birthday(
+        user_id: int,
+        birthday: tuple[int, int] | None,
+        source: str | None,
+    ) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.execute(
+                """
+                INSERT INTO users(id, birth_month, birth_day, birthdate_source, created_at)
+                VALUES($1, $2, $3, $4, now())
+                ON CONFLICT (id) DO UPDATE
+                SET birth_month = EXCLUDED.birth_month,
+                    birth_day = EXCLUDED.birth_day,
+                    birthdate_source = EXCLUDED.birthdate_source
+                """,
+                user_id,
+                birthday[0] if birthday is not None else None,
+                birthday[1] if birthday is not None else None,
+                source,
+            )
+        finally:
+            await connection.close()
+
+    return set_birthday
+
+
+@pytest.fixture
 async def read_user_timezone_offset(
     docker_compose: DependencyPorts,
 ) -> Callable[[int], Awaitable[int | None]]:

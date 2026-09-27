@@ -5,7 +5,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from cringe_pics_telebot.entities.annual_date import AnnualDate
-from cringe_pics_telebot.entities.user_birthday import UserBirthdaySource
+from cringe_pics_telebot.entities.user_birthday import UserBirthday, UserBirthdaySource
 
 from .connection import get_connection
 from .entities import User
@@ -71,6 +71,56 @@ async def get_user_birthday(user_id: int) -> AnnualDate | None:
     if row is None or row.birth_month is None or row.birth_day is None:
         return None
     return AnnualDate(month=row.birth_month, day=row.birth_day)
+
+
+async def get_user_birthday_details(user_id: int) -> UserBirthday | None:
+    async with get_connection() as conn:
+        row = (
+            await conn.execute(
+                select(users.c.birth_month, users.c.birth_day, users.c.birthdate_source).where(users.c.id == user_id)
+            )
+        ).one_or_none()
+
+    if row is None:
+        return None
+
+    birthday = _birthday_from_row(row)
+    source = _birthday_source_from_row(row)
+    if birthday is None or source is None:
+        return None
+
+    return UserBirthday(date=birthday, source=source)
+
+
+async def set_user_birthday(
+    *,
+    user_id: int,
+    birthday: AnnualDate,
+    source: UserBirthdaySource,
+) -> None:
+    async with get_connection() as conn:
+        await conn.execute(
+            update(users)
+            .where(users.c.id == user_id)
+            .values(
+                birth_month=birthday.month,
+                birth_day=birthday.day,
+                birthdate_source=source,
+            )
+        )
+
+
+async def clear_user_birthday(user_id: int) -> None:
+    async with get_connection() as conn:
+        await conn.execute(
+            update(users)
+            .where(users.c.id == user_id)
+            .values(
+                birth_month=None,
+                birth_day=None,
+                birthdate_source=None,
+            )
+        )
 
 
 async def set_user_timezone_offset(*, user_id: int, timezone_offset_minutes: int) -> None:
