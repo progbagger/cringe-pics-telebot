@@ -61,7 +61,15 @@ async def test_admin_creates_inactive_category_with_all_fields(
     )
     assert_that(
         _inline_keyboard_button_texts(schedule_mode["payload"]),
-        equal_to(["По расписанию", "Без расписания", "Отмена"]),
+        equal_to(
+            [
+                "По дням недели",
+                "Раз в год — фиксированная дата",
+                "Раз в год — день рождения подписчика",
+                "Без расписания",
+                "Отмена",
+            ]
+        ),
     )
     await _choose_category_schedule_mode(fake_telegram_server, scheduled=True)
     weekdays = await _send_message_and_wait(fake_telegram_server, " 15:30 ", "Новая категория — дни отправки")
@@ -91,6 +99,7 @@ async def test_admin_creates_inactive_category_with_all_fields(
             [
                 "Активировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
                 "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
@@ -226,6 +235,8 @@ async def test_admin_creates_and_activates_category_without_schedule(
             [
                 "Активировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
+                "Изменить дни отправки",
                 "Изменить алиасы",
                 "Очистить алиасы",
                 "Медиа и алиасы",
@@ -263,6 +274,8 @@ async def test_admin_creates_and_activates_category_without_schedule(
             [
                 "Деактивировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
+                "Изменить дни отправки",
                 "Изменить алиасы",
                 "Очистить алиасы",
                 "Медиа и алиасы",
@@ -273,6 +286,104 @@ async def test_admin_creates_and_activates_category_without_schedule(
     active_category = await read_functional_subscription_type("/instant")
     assert active_category is not None
     assert_that(active_category, has_entries(time=None, is_active=True))
+
+
+async def test_admin_creates_annual_categories_with_local_noon_default(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+
+    await _open_category_creation(fake_telegram_server)
+    await _send_message_and_wait(fake_telegram_server, "/new-year", "путь к каталогу")
+    await _send_message_and_wait(fake_telegram_server, "new-year", "режим отправки")
+    await _choose_category_schedule_mode(fake_telegram_server, schedule_kind="annual_date")
+    await _send_message_and_wait(fake_telegram_server, "1.01", "Не удалось распознать ежегодную дату")
+    await _send_message_and_wait(fake_telegram_server, "31.04", "Не удалось распознать ежегодную дату")
+    assert await read_functional_subscription_type("/new-year") is None
+
+    await _send_message_and_wait(fake_telegram_server, "29.02", "Новая категория — алиасы")
+    fixed_created = await _send_message_and_wait(
+        fake_telegram_server,
+        "новый год",
+        "Категория создана неактивной",
+    )
+    assert_that(
+        fixed_created["payload"]["text"],
+        contains_string("Расписание: ежегодно 29.02 в <code>12:00</code> по локальному времени пользователя"),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(fixed_created["payload"]),
+        equal_to(
+            [
+                "Активировать",
+                "Изменить время отправки",
+                "Изменить вид расписания",
+                "Изменить ежегодную дату",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Медиа и алиасы",
+                "Назад",
+            ]
+        ),
+    )
+    fixed = await _required_category(read_functional_subscription_type, "/new-year")
+    assert_that(
+        fixed,
+        has_entries(
+            time=time(12),
+            schedule_kind="annual_date",
+            annual_month=2,
+            annual_day=29,
+            weekdays=(1, 2, 3, 4, 5, 6, 7),
+        ),
+    )
+
+    await fake_telegram_server.reset()
+    await _open_category_creation(fake_telegram_server, message_id=110)
+    await _send_message_and_wait(fake_telegram_server, "/birthday", "путь к каталогу")
+    await _send_message_and_wait(fake_telegram_server, "birthday", "режим отправки")
+    await _choose_category_schedule_mode(fake_telegram_server, schedule_kind="annual_birthday")
+    birthday_created = await _send_message_and_wait(
+        fake_telegram_server,
+        "день рождения",
+        "Категория создана неактивной",
+    )
+    assert_that(
+        birthday_created["payload"]["text"],
+        contains_string(
+            "Расписание: ежегодно в день рождения подписчика в <code>12:00</code> по локальному времени пользователя"
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(birthday_created["payload"]),
+        equal_to(
+            [
+                "Активировать",
+                "Изменить время отправки",
+                "Изменить вид расписания",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Медиа и алиасы",
+                "Назад",
+            ]
+        ),
+    )
+    birthday = await _required_category(read_functional_subscription_type, "/birthday")
+    assert_that(
+        birthday,
+        has_entries(
+            time=time(12),
+            schedule_kind="annual_birthday",
+            annual_month=None,
+            annual_day=None,
+            weekdays=(1, 2, 3, 4, 5, 6, 7),
+        ),
+    )
 
 
 async def test_category_creation_validates_each_step_without_partial_write(
@@ -452,6 +563,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
             [
                 "Деактивировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
                 "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
@@ -480,6 +592,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
             [
                 "Активировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
                 "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
@@ -526,6 +639,7 @@ async def test_admin_sets_category_activity_without_changing_category_data(
             [
                 "Деактивировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
                 "Изменить дни отправки",
                 "Отключить расписание",
                 "Изменить алиасы",
@@ -625,6 +739,8 @@ async def test_admin_updates_disables_and_restores_category_schedule(
             [
                 "Деактивировать",
                 "Изменить время отправки",
+                "Изменить вид расписания",
+                "Изменить дни отправки",
                 "Изменить алиасы",
                 "Очистить алиасы",
                 "Медиа и алиасы",
@@ -674,6 +790,177 @@ async def test_admin_updates_disables_and_restores_category_schedule(
     assert_that(
         _inline_keyboard_button_texts(restored_subscriptions["payload"]),
         has_item("✅ /day – 16:00 · Пн, Ср, Пт"),
+    )
+    assert_that(await count_user_subscriptions(700), equal_to(1))
+
+
+async def test_admin_switches_schedule_kind_and_edits_fixed_date_without_changing_other_data(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    set_functional_administrator: Callable[..., Awaitable[None]],
+    read_functional_subscription_type: Callable[[str], Awaitable[dict[str, Any] | None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    count_user_subscriptions: Callable[[int], Awaitable[int]],
+) -> None:
+    await set_functional_administrator(user_id=42)
+    await create_user_subscription(user_id=700, subscription_type_id=2)
+    before = await _required_category(read_functional_subscription_type, "/day")
+
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_schedule_kind, category_id=2),
+    )
+    kind_picker = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Вид расписания категории /day" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(kind_picker["payload"]),
+        equal_to(
+            [
+                "По дням недели",
+                "Раз в год — фиксированная дата",
+                "Раз в год — день рождения подписчика",
+                "Отмена",
+            ]
+        ),
+    )
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.schedule_annual_date),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Изменение ежегодной даты" in request["payload"].get("text", ""),
+    )
+    await _send_message_and_wait(fake_telegram_server, "31.04", "Не удалось распознать ежегодную дату")
+    assert_that(
+        _category_business_data(await _required_category(read_functional_subscription_type, "/day")),
+        equal_to(_category_business_data(before)),
+    )
+
+    await fake_telegram_server.push_callback_query(data=_category_callback(AdminCategoryAction.cancel_form))
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "редактирование категории отменено" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _category_business_data(await _required_category(read_functional_subscription_type, "/day")),
+        equal_to(_category_business_data(before)),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_schedule_kind, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Вид расписания категории /day" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.schedule_annual_date),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Изменение ежегодной даты" in request["payload"].get("text", ""),
+    )
+    fixed_card = await _send_message_and_wait(fake_telegram_server, "01.01", "Ежегодная дата обновлена")
+    assert_that(fixed_card["payload"]["text"], contains_string("ежегодно 01.01"))
+    assert_that(
+        _inline_keyboard_button_texts(fixed_card["payload"]),
+        equal_to(
+            [
+                "Деактивировать",
+                "Изменить время отправки",
+                "Изменить вид расписания",
+                "Изменить ежегодную дату",
+                "Отключить расписание",
+                "Изменить алиасы",
+                "Очистить алиасы",
+                "Медиа и алиасы",
+                "Назад",
+            ]
+        ),
+    )
+    fixed = await _required_category(read_functional_subscription_type, "/day")
+    assert_that(
+        _category_business_data(fixed),
+        equal_to(
+            _category_business_data(before) | {"schedule_kind": "annual_date", "annual_month": 1, "annual_day": 1}
+        ),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.disable_schedule, category_id=2),
+    )
+    disabled = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "ежегодно 01.01, отключено" in request["payload"].get("text", ""),
+    )
+    assert_that(_inline_keyboard_button_texts(disabled["payload"]), has_item("Изменить ежегодную дату"))
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_annual_date, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Изменение ежегодной даты" in request["payload"].get("text", ""),
+    )
+    await _send_message_and_wait(fake_telegram_server, "02.02", "Ежегодная дата обновлена")
+    updated_date = await _required_category(read_functional_subscription_type, "/day")
+    assert_that(
+        updated_date,
+        has_entries(time=None, schedule_kind="annual_date", annual_month=2, annual_day=2),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_time, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Изменение времени отправки" in request["payload"].get("text", ""),
+    )
+    await _send_message_and_wait(fake_telegram_server, "16:00", "Время отправки обновлено")
+    reenabled = await _required_category(read_functional_subscription_type, "/day")
+    assert_that(
+        reenabled,
+        has_entries(time=time(16), schedule_kind="annual_date", annual_month=2, annual_day=2),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.disable_schedule, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "ежегодно 02.02, отключено" in request["payload"].get("text", ""),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.edit_schedule_kind, category_id=2),
+    )
+    await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Вид расписания категории /day" in request["payload"].get("text", ""),
+    )
+    await fake_telegram_server.push_callback_query(
+        data=_category_callback(AdminCategoryAction.schedule_annual_birthday),
+    )
+    birthday_card = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: (
+            "ежегодно в день рождения подписчика, отключено" in request["payload"].get("text", "")
+        ),
+    )
+    assert_that(_inline_keyboard_button_texts(birthday_card["payload"]), has_item("Изменить вид расписания"))
+    assert "Изменить ежегодную дату" not in _inline_keyboard_button_texts(birthday_card["payload"])
+
+    birthday = await _required_category(read_functional_subscription_type, "/day")
+    assert_that(
+        birthday,
+        has_entries(time=None, schedule_kind="annual_birthday", annual_month=None, annual_day=None),
     )
     assert_that(await count_user_subscriptions(700), equal_to(1))
 
@@ -737,16 +1024,28 @@ async def _open_category_creation(
 async def _choose_category_schedule_mode(
     fake_telegram_server: FakeTelegramServer,
     *,
-    scheduled: bool,
+    scheduled: bool = True,
+    schedule_kind: str = "weekly",
     user_id: int = 42,
 ) -> None:
+    action = {
+        "weekly": AdminCategoryAction.schedule_weekly,
+        "annual_date": AdminCategoryAction.schedule_annual_date,
+        "annual_birthday": AdminCategoryAction.schedule_annual_birthday,
+    }[schedule_kind]
+    if scheduled is False:
+        action = AdminCategoryAction.create_without_schedule
     await fake_telegram_server.push_callback_query(
-        data=_category_callback(
-            AdminCategoryAction.create_scheduled if scheduled else AdminCategoryAction.create_without_schedule
-        ),
+        data=_category_callback(action),
         user_id=user_id,
     )
-    expected_prompt = "Новая категория — время отправки" if scheduled else "Новая категория — алиасы"
+    expected_prompt = {
+        "weekly": "Новая категория — время отправки",
+        "annual_date": "Новая категория — ежегодная дата",
+        "annual_birthday": "Новая категория — алиасы",
+    }[schedule_kind]
+    if scheduled is False:
+        expected_prompt = "Новая категория — алиасы"
     await fake_telegram_server.wait_for_request(
         "editMessageText",
         predicate=lambda request: (
@@ -833,6 +1132,9 @@ def _category_business_data(category: dict[str, Any]) -> dict[str, Any]:
         "search_aliases": category["search_aliases"],
         "is_active": category["is_active"],
         "weekdays": category["weekdays"],
+        "schedule_kind": category["schedule_kind"],
+        "annual_month": category["annual_month"],
+        "annual_day": category["annual_day"],
     }
 
 
