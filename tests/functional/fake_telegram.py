@@ -16,6 +16,7 @@ class FakeTelegram:
         self._blocked_methods: set[str] = set()
         self._forbidden_chat_ids: set[int] = set()
         self._invalid_file_ids: set[str] = set()
+        self._messages_with_reply_keyboard: set[tuple[int, int]] = set()
         self._get_chat_responses: dict[int, deque[dict[str, Any]]] = {}
         self._active_get_chat_requests = 0
         self._max_active_get_chat_requests = 0
@@ -52,6 +53,7 @@ class FakeTelegram:
             self._blocked_methods.clear()
             self._forbidden_chat_ids.clear()
             self._invalid_file_ids.clear()
+            self._messages_with_reply_keyboard.clear()
             self._get_chat_responses.clear()
             self._active_get_chat_requests = 0
             self._max_active_get_chat_requests = 0
@@ -173,6 +175,11 @@ class FakeTelegram:
             return _telegram_error(403, "Forbidden: bot was blocked by the user")
         if _request_media_id(method, payload) in self._invalid_file_ids:
             return _telegram_error(400, "Bad Request: wrong file identifier/HTTP URL specified")
+        if self._message_has_reply_keyboard(payload):
+            if method == "editMessageMedia":
+                return _telegram_error(400, "Bad Request: message media can't be edited")
+            if method == "editMessageText":
+                return _telegram_error(400, "Bad Request: message can't be edited")
 
         match method:
             case "getMe":
@@ -278,8 +285,16 @@ class FakeTelegram:
         reply_markup = payload.get("reply_markup")
         if isinstance(reply_markup, dict) and "inline_keyboard" in reply_markup:
             message["reply_markup"] = reply_markup
+        elif isinstance(reply_markup, dict):
+            self._messages_with_reply_keyboard.add((chat_id, self._next_message_id))
 
         return message
+
+    def _message_has_reply_keyboard(self, payload: dict[str, Any]) -> bool:
+        chat_id = int(payload.get("chat_id") or 0)
+        message_id = int(payload.get("message_id") or 0)
+
+        return (chat_id, message_id) in self._messages_with_reply_keyboard
 
     def _media_message_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = self._message_from_payload(payload)

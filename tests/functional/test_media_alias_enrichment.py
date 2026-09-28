@@ -11,7 +11,7 @@ from typing import Any
 
 import av
 import pytest
-from hamcrest import assert_that, contains_exactly, contains_string, empty, has_entries, has_length
+from hamcrest import assert_that, contains_exactly, contains_string, empty, equal_to, has_entries, has_length
 from PIL import Image
 from redis import asyncio as redis
 
@@ -300,11 +300,11 @@ async def test_ollama_failure_does_not_stop_ordinary_or_scheduled_delivery(
 
         update = await bot.telegram.push_message(text="/test", user_id=42)
         ordinary = await bot.telegram.wait_for_request(
-            "editMessageMedia", predicate=lambda request: int(request["payload"]["chat_id"]) == 42
+            "sendPhoto", predicate=lambda request: int(request["payload"]["chat_id"]) == 42
         )
         assert_that(
-            ordinary["payload"]["media"],
-            has_entries(type="photo", media=f"{fake_yandex_server.base_url}/download/image.png"),
+            ordinary["payload"]["photo"],
+            equal_to(f"{fake_yandex_server.base_url}/download/image.png"),
         )
         await bot.wait_for_log(f"Update id={update['result']['update_id']} is handled")
 
