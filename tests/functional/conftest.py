@@ -11,7 +11,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import aiohttp
 import asyncpg
@@ -135,6 +135,54 @@ class FakeTelegramServer:
             ) as response,
         ):
             response.raise_for_status()
+
+    async def set_get_chat_responses(self, responses: dict[int, list[dict[str, Any]]]) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/get-chat-responses",
+                json={"responses": responses},
+            ) as response,
+        ):
+            response.raise_for_status()
+
+    async def wait_for_requests(
+        self,
+        method: str,
+        *,
+        count: int = 1,
+        active: int = 0,
+        active_at_most: int | None = None,
+        timeout: float = 10,
+    ) -> dict[str, int]:
+        params: dict[str, int | float | str] = {
+            "method": method,
+            "count": count,
+            "active": active,
+            "timeout": timeout,
+        }
+        if active_at_most is not None:
+            params["active_max"] = active_at_most
+
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                f"{self.base_url}/test/wait",
+                params=params,
+            ) as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
+
+    async def get_chat_stats(self) -> dict[str, int]:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.base_url}/test/get-chat-stats") as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
 
     async def push_message(
         self,
@@ -288,6 +336,21 @@ class MainKeyboardBot:
         ):
             response.raise_for_status()
             await response.json()
+
+
+@dataclass(slots=True)
+class RunningFunctionalBot:
+    process: subprocess.Process
+    telegram: FakeTelegramServer
+
+
+class FunctionalBotStarter(Protocol):
+    def __call__(
+        self,
+        *,
+        get_chat_responses: dict[int, list[dict[str, Any]]] | None = None,
+        block_get_chat: bool = False,
+    ) -> AbstractAsyncContextManager[RunningFunctionalBot]: ...
 
 
 @dataclass(slots=True)
@@ -988,6 +1051,65 @@ async def bot_process(
 
 
 @pytest.fixture
+def start_functional_bot_process(
+    docker_compose: DependencyPorts,
+    fake_yandex_server: FakeYandexServer,
+    fake_statsd_server: FakeStatsDServer,
+) -> FunctionalBotStarter:
+    @asynccontextmanager
+    async def start(
+        *,
+        get_chat_responses: dict[int, list[dict[str, Any]]] | None = None,
+        block_get_chat: bool = False,
+    ) -> AsyncIterator[RunningFunctionalBot]:
+        telegram_port = _get_unused_tcp_port()
+        telegram_process = await subprocess.create_subprocess_exec(
+            sys.executable,
+            str(FUNCTIONAL_DIR / "fake_telegram.py"),
+            "--port",
+            str(telegram_port),
+            cwd=ROOT_DIR,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        telegram = FakeTelegramServer(f"http://127.0.0.1:{telegram_port}", telegram_process)
+        process: subprocess.Process | None = None
+
+        try:
+            await _wait_until_ready(lambda: _http_ready(f"{telegram.base_url}/healthz"), "isolated fake Telegram")
+            if get_chat_responses is not None:
+                await telegram.set_get_chat_responses(get_chat_responses)
+            if block_get_chat:
+                await telegram.block_method("getChat")
+
+            env = _bot_env(docker_compose)
+            env["TELEGRAM_API_BASE_URL"] = telegram.base_url
+            env["YANDEX_DISK_API_BASE_URL"] = f"{fake_yandex_server.base_url}/v1/disk/"
+            env["STATSD_HOST"] = fake_statsd_server.udp_host
+            env["STATSD_PORT"] = str(fake_statsd_server.udp_port)
+            env["STATSD_PREFIX"] = "functional-isolated"
+
+            process = await subprocess.create_subprocess_exec(
+                sys.executable,
+                str(FUNCTIONAL_DIR / "main_keyboard_clock_runner.py"),
+                "--port",
+                str(_get_unused_tcp_port()),
+                cwd=ROOT_DIR,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            await telegram.wait_for_requests("getMe", timeout=30)
+            yield RunningFunctionalBot(process=process, telegram=telegram)
+        finally:
+            if process is not None:
+                await _terminate_process(process)
+            await _terminate_process(telegram_process)
+
+    return start
+
+
+@pytest.fixture
 def advance_main_keyboard_clock(
     bot_process: subprocess.Process,
     main_keyboard_clock_url: str,
@@ -1400,6 +1522,164 @@ async def read_user_state(
             await connection.close()
 
     return read
+
+
+@pytest.fixture
+async def read_user_birthday_state(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[int | None, int | None, str | None] | None]]:
+    async def read(user_id: int) -> tuple[int | None, int | None, str | None] | None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            row = await connection.fetchrow(
+                "SELECT birth_month, birth_day, birthdate_source FROM users WHERE id = $1",
+                user_id,
+            )
+            if row is None:
+                return None
+
+            return row["birth_month"], row["birth_day"], row["birthdate_source"]
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+def wait_for_user_birthday_state(
+    read_user_birthday_state: Callable[[int], Awaitable[tuple[int | None, int | None, str | None] | None]],
+) -> Callable[[int, tuple[int | None, int | None, str | None]], Awaitable[None]]:
+    async def wait(user_id: int, expected: tuple[int | None, int | None, str | None]) -> None:
+        deadline = asyncio.get_running_loop().time() + 10
+        while asyncio.get_running_loop().time() < deadline:
+            if await read_user_birthday_state(user_id) == expected:
+                return
+            await asyncio.sleep(0.05)
+
+        raise TimeoutError(f"User {user_id} birthday did not become {expected!r}")
+
+    return wait
+
+
+@pytest.fixture
+async def set_user_birthday_state(
+    docker_compose: DependencyPorts,
+) -> Callable[[int, tuple[int, int] | None, str | None], Awaitable[None]]:
+    async def set_birthday(
+        user_id: int,
+        birthday: tuple[int, int] | None,
+        source: str | None,
+    ) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.execute(
+                """
+                INSERT INTO users(id, birth_month, birth_day, birthdate_source, created_at)
+                VALUES($1, $2, $3, $4, now())
+                ON CONFLICT (id) DO UPDATE
+                SET birth_month = EXCLUDED.birth_month,
+                    birth_day = EXCLUDED.birth_day,
+                    birthdate_source = EXCLUDED.birthdate_source
+                """,
+                user_id,
+                birthday[0] if birthday is not None else None,
+                birthday[1] if birthday is not None else None,
+                source,
+            )
+        finally:
+            await connection.close()
+
+    return set_birthday
+
+
+@pytest.fixture
+async def seed_birthday_sync_users(
+    docker_compose: DependencyPorts,
+) -> Callable[[list[tuple[int, int, bool, tuple[int, int] | None, str | None]]], Awaitable[None]]:
+    async def seed(users: list[tuple[int, int, bool, tuple[int, int] | None, str | None]]) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.executemany(
+                """
+                INSERT INTO users(
+                    id,
+                    timezone_offset_minutes,
+                    is_active,
+                    birth_month,
+                    birth_day,
+                    birthdate_source,
+                    created_at
+                )
+                VALUES($1, $2, $3, $4, $5, $6, now())
+                ON CONFLICT (id) DO UPDATE
+                SET timezone_offset_minutes = EXCLUDED.timezone_offset_minutes,
+                    is_active = EXCLUDED.is_active,
+                    birth_month = EXCLUDED.birth_month,
+                    birth_day = EXCLUDED.birth_day,
+                    birthdate_source = EXCLUDED.birthdate_source
+                """,
+                [
+                    (
+                        user_id,
+                        timezone_offset_minutes,
+                        is_active,
+                        birthday[0] if birthday is not None else None,
+                        birthday[1] if birthday is not None else None,
+                        source,
+                    )
+                    for user_id, timezone_offset_minutes, is_active, birthday, source in users
+                ],
+            )
+        finally:
+            await connection.close()
+
+    return seed
+
+
+@pytest.fixture
+async def read_birthday_sync_users(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[dict[int, tuple[int, bool, int | None, int | None, str | None]]]]:
+    async def read() -> dict[int, tuple[int, bool, int | None, int | None, str | None]]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT id, timezone_offset_minutes, is_active, birth_month, birth_day, birthdate_source
+                FROM users
+                ORDER BY id
+                """
+            )
+            return {
+                row["id"]: (
+                    row["timezone_offset_minutes"],
+                    row["is_active"],
+                    row["birth_month"],
+                    row["birth_day"],
+                    row["birthdate_source"],
+                )
+                for row in rows
+            }
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+def redis_key_exists(docker_compose: DependencyPorts) -> Callable[[str], Awaitable[bool]]:
+    async def exists(key: str) -> bool:
+        client = redis.from_url(
+            f"redis://{REDIS_ENV['REDIS_HOST']}:{docker_compose.redis}",
+            username=REDIS_ENV["REDIS_USERNAME"],
+            password=REDIS_ENV["REDIS_PASSWORD"],
+        )
+        try:
+            return bool(await client.exists(key))
+        finally:
+            await client.aclose()
+
+    return exists
 
 
 @pytest.fixture

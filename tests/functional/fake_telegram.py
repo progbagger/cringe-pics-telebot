@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import time
+from collections import deque
 from typing import Any
 
 from aiohttp import web
@@ -15,6 +16,9 @@ class FakeTelegram:
         self._blocked_methods: set[str] = set()
         self._forbidden_chat_ids: set[int] = set()
         self._invalid_file_ids: set[str] = set()
+        self._get_chat_responses: dict[int, deque[dict[str, Any]]] = {}
+        self._active_get_chat_requests = 0
+        self._max_active_get_chat_requests = 0
         self._next_update_id = 1
         self._next_message_id = 1
 
@@ -48,6 +52,9 @@ class FakeTelegram:
             self._blocked_methods.clear()
             self._forbidden_chat_ids.clear()
             self._invalid_file_ids.clear()
+            self._get_chat_responses.clear()
+            self._active_get_chat_requests = 0
+            self._max_active_get_chat_requests = 0
             self._condition.notify_all()
 
         return web.json_response({"ok": True})
@@ -75,9 +82,65 @@ class FakeTelegram:
         self._invalid_file_ids = {str(file_id) for file_id in payload.get("file_ids", [])}
         return web.json_response({"ok": True})
 
+    async def set_get_chat_responses(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        async with self._condition:
+            self._get_chat_responses = {
+                int(user_id): deque(responses) for user_id, responses in payload.get("responses", {}).items()
+            }
+            self._condition.notify_all()
+        return web.json_response({"ok": True})
+
+    async def wait_for_requests(self, request: web.Request) -> web.Response:
+        method = request.query["method"]
+        expected_count = int(request.query.get("count", 1))
+        expected_active = int(request.query.get("active", 0))
+        maximum_active = int(request.query["active_max"]) if "active_max" in request.query else None
+        timeout = float(request.query.get("timeout", 10))
+
+        async with self._condition:
+            try:
+                async with asyncio.timeout(timeout):
+                    while (
+                        self._request_count(method) < expected_count
+                        or (method == "getChat" and self._active_get_chat_requests < expected_active)
+                        or (
+                            method == "getChat"
+                            and maximum_active is not None
+                            and self._active_get_chat_requests > maximum_active
+                        )
+                    ):
+                        await self._condition.wait()
+            except TimeoutError:
+                raise web.HTTPRequestTimeout from None
+
+            return web.json_response(
+                {
+                    "ok": True,
+                    "result": {
+                        "count": self._request_count(method),
+                        "active": self._active_get_chat_requests,
+                        "max_active": self._max_active_get_chat_requests,
+                    },
+                }
+            )
+
+    async def get_chat_stats(self, request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "ok": True,
+                "result": {
+                    "count": self._request_count("getChat"),
+                    "active": self._active_get_chat_requests,
+                    "max_active": self._max_active_get_chat_requests,
+                },
+            }
+        )
+
     async def handle_bot_api(self, request: web.Request) -> web.Response:
         method = request.match_info["method"]
         payload = await self._read_payload(request)
+        tracks_get_chat = method == "getChat"
         async with self._condition:
             self._requests.append(
                 {
@@ -86,28 +149,30 @@ class FakeTelegram:
                     "payload": payload,
                 }
             )
+            if tracks_get_chat:
+                self._active_get_chat_requests += 1
+                self._max_active_get_chat_requests = max(
+                    self._max_active_get_chat_requests,
+                    self._active_get_chat_requests,
+                )
+            self._condition.notify_all()
             while method in self._blocked_methods:
                 await self._condition.wait()
 
+        try:
+            return await self._handle_bot_api_method(method, payload)
+        finally:
+            if tracks_get_chat:
+                async with self._condition:
+                    self._active_get_chat_requests -= 1
+                    self._condition.notify_all()
+
+    async def _handle_bot_api_method(self, method: str, payload: dict[str, Any]) -> web.Response:
         chat_id = int(payload.get("chat_id") or 0)
         if method == "copyMessage" and chat_id in self._forbidden_chat_ids:
-            return web.json_response(
-                {
-                    "ok": False,
-                    "error_code": 403,
-                    "description": "Forbidden: bot was blocked by the user",
-                },
-                status=403,
-            )
+            return _telegram_error(403, "Forbidden: bot was blocked by the user")
         if _request_media_id(method, payload) in self._invalid_file_ids:
-            return web.json_response(
-                {
-                    "ok": False,
-                    "error_code": 400,
-                    "description": "Bad Request: wrong file identifier/HTTP URL specified",
-                },
-                status=400,
-            )
+            return _telegram_error(400, "Bad Request: wrong file identifier/HTTP URL specified")
 
         match method:
             case "getMe":
@@ -121,6 +186,8 @@ class FakeTelegram:
                 result = True
             case "getUpdates":
                 result = await self._get_updates(payload)
+            case "getChat":
+                return self._get_chat_response(chat_id)
             case "sendMessage":
                 result = self._message_from_payload(payload)
             case "sendPhoto":
@@ -144,6 +211,37 @@ class FakeTelegram:
                 result = True
 
         return web.json_response({"ok": True, "result": result})
+
+    def _get_chat_response(self, chat_id: int) -> web.Response:
+        responses = self._get_chat_responses.get(chat_id)
+        configured = responses.popleft() if responses else {}
+        if "error_code" in configured:
+            return _telegram_error(
+                int(configured["error_code"]),
+                str(configured.get("description", "Configured Telegram error")),
+                retry_after=configured.get("retry_after"),
+            )
+
+        result = {
+            "id": configured.get("id", chat_id),
+            "type": configured.get("type", "private"),
+            "first_name": "Functional",
+            "accent_color_id": 0,
+            "max_reaction_count": 0,
+            "accepted_gift_types": {
+                "unlimited_gifts": False,
+                "limited_gifts": False,
+                "unique_gifts": False,
+                "premium_subscription": False,
+                "gifts_from_channels": False,
+            },
+        }
+        if "birthdate" in configured:
+            result["birthdate"] = configured["birthdate"]
+        return web.json_response({"ok": True, "result": result})
+
+    def _request_count(self, method: str) -> int:
+        return sum(request["method"] == method for request in self._requests)
 
     async def _get_updates(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         offset = int(payload.get("offset") or 0)
@@ -286,6 +384,17 @@ def _request_media_id(method: str, payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _telegram_error(error_code: int, description: str, *, retry_after: Any = None) -> web.Response:
+    payload: dict[str, Any] = {
+        "ok": False,
+        "error_code": error_code,
+        "description": description,
+    }
+    if retry_after is not None:
+        payload["parameters"] = {"retry_after": retry_after}
+    return web.json_response(payload, status=error_code)
+
+
 def create_app() -> web.Application:
     fake = FakeTelegram()
     app = web.Application()
@@ -297,6 +406,9 @@ def create_app() -> web.Application:
     app.router.add_post("/test/release-method", fake.release_method)
     app.router.add_post("/test/forbidden-chats", fake.set_forbidden_chats)
     app.router.add_post("/test/invalid-file-ids", fake.set_invalid_file_ids)
+    app.router.add_post("/test/get-chat-responses", fake.set_get_chat_responses)
+    app.router.add_get("/test/wait", fake.wait_for_requests)
+    app.router.add_get("/test/get-chat-stats", fake.get_chat_stats)
     app.router.add_route("*", "/{bot_token}/{method}", fake.handle_bot_api)
     return app
 

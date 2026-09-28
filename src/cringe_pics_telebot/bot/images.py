@@ -20,9 +20,17 @@ from cringe_pics_telebot.bot.subscription_callback_data import (
     SubscriptionPageCallbackData,
 )
 from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
+from cringe_pics_telebot.entities.user_birthday import UserBirthdaySource
 from cringe_pics_telebot.repositories.postgres import (
     SubscriptionType,
     get_category_media_by_subscription_types,
+)
+from cringe_pics_telebot.services.birthdays import (
+    InvalidBirthdayError,
+    clear_birthday,
+    get_user_birthday,
+    parse_birthday_command,
+    set_manual_birthday,
 )
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import (
@@ -75,6 +83,8 @@ async def handle_start(message: Message) -> None:
 <code>/list</code> или <code>/subscriptions</code> — подписаться на категорию или отписаться \
 от неё. Время каждой категории применяется в твоём часовом поясе: UTC{timezone_offset}.
 <code>/timezone [+HH:MM]</code> — посмотреть или изменить часовой пояс.
+<code>/birthday [DD.MM|clear]</code> — посмотреть, вручную указать или удалить день рождения. \
+Бот хранит только день и месяц; ручной ввод добровольный и имеет приоритет над данными профиля Telegram.
 
 <b>💬 Отправить картинку в другой чат</b>
 Введи <code>@имя_бота</code> и название категории без <code>/</code>, затем выбери картинку. \
@@ -115,6 +125,49 @@ async def handle_timezone(message: Message, command: CommandObject) -> None:
     await message.answer(
         f"Часовой пояс сохранён: <b>UTC{format_timezone_offset(offset_minutes)}</b>. "
         "Время всех категорий теперь применяется в этом часовом поясе."
+    )
+
+
+@router.message(Command("birthday"))
+async def handle_birthday(message: Message, command: CommandObject) -> None:
+    if message.from_user is None:
+        logger.info("Received birthday command without from_user: %d", message.message_id)
+        return
+
+    user_id = message.from_user.id
+    if command.args is None or not command.args.strip():
+        current_birthday = await get_user_birthday(user_id)
+        if current_birthday is None:
+            await message.answer(
+                "Твой день рождения пока не указан. Чтобы сохранить только день и месяц вручную, "
+                "отправь, например: <code>/birthday 31.12</code>."
+            )
+            return
+
+        source = "указан вручную" if current_birthday.source is UserBirthdaySource.manual else "получен из Telegram"
+        await message.answer(f"Твой день рождения: <b>{current_birthday.date.format()}</b> — {source}.")
+        return
+
+    try:
+        parsed_birthday = parse_birthday_command(command.args)
+    except InvalidBirthdayError:
+        await message.answer(
+            "Не удалось распознать дату. Используй формат <code>DD.MM</code>, например "
+            "<code>/birthday 31.12</code>, или команду <code>/birthday clear</code>."
+        )
+        return
+
+    if parsed_birthday is None:
+        await clear_birthday(user_id)
+        await message.answer(
+            "День рождения удалён. Следующая синхронизация сможет снова получить его из профиля Telegram."
+        )
+        return
+
+    await set_manual_birthday(user_id=user_id, birthday=parsed_birthday)
+    await message.answer(
+        f"День рождения сохранён: <b>{parsed_birthday.format()}</b>. "
+        "Ручное значение имеет приоритет над значением из профиля Telegram."
     )
 
 
