@@ -4,29 +4,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram import Bot
-from aiogram.types import InputMediaAnimation, InputMediaPhoto, InputMediaVideo, Message
-from hamcrest import assert_that, equal_to, instance_of, same_instance
+from aiogram.types import Message
+from hamcrest import assert_that, equal_to, same_instance
 
 from cringe_pics_telebot.bot import media as bot_media
-from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
-
-
-@pytest.mark.parametrize(
-    ("mime_type", "expected_type"),
-    [
-        ("image/png", InputMediaPhoto),
-        ("image/gif", InputMediaAnimation),
-        ("video/mp4", InputMediaVideo),
-    ],
-)
-def test_input_media_matches_mime_type(
-    mime_type: str,
-    expected_type: type[InputMediaPhoto | InputMediaAnimation | InputMediaVideo],
-) -> None:
-    result = bot_media._input_media(image=_linked_media(mime_type), media="https://media.test/file")
-
-    assert_that(result, instance_of(expected_type))
-    assert_that(result.media, equal_to("https://media.test/file"))
+from cringe_pics_telebot.services.random_image import CachedMedia
 
 
 @pytest.mark.parametrize(
@@ -83,16 +65,6 @@ def test_get_message_media_file_ids_reads_native_media(
     assert_that(
         bot_media.get_message_media_file_ids(Message.model_validate(payload)),
         equal_to((file_id, file_unique_id)),
-    )
-
-
-def _linked_media(mime_type: str) -> LinkedMedia:
-    return LinkedMedia(
-        name="media",
-        mime_type=mime_type,
-        path="day/media",
-        source_revision="sha256:media",
-        url="https://media.test/file",
     )
 
 

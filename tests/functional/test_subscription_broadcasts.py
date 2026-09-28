@@ -483,8 +483,8 @@ async def test_ordinary_and_scheduled_delivery_share_one_user_cycle(
     await fake_yandex_server.reset()
 
     await fake_telegram_server.push_message(text="/cycle")
-    ordinary_request = await fake_telegram_server.wait_for_request("editMessageMedia")
-    ordinary_media = ordinary_request["payload"]["media"]["media"]
+    ordinary_request = await fake_telegram_server.wait_for_request("sendPhoto")
+    ordinary_media = ordinary_request["payload"]["photo"]
     await _wait_for_cycle_shown_count(
         read_functional_user_media_cycle,
         user_id=42,
