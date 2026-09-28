@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from cringe_pics_telebot.bot import admin_panel
-from cringe_pics_telebot.bot.admin_panel import _media_sync_summary_text
+from cringe_pics_telebot.bot.admin_panel import _birthday_sync_summary_text, _media_sync_summary_text
+from cringe_pics_telebot.services.birthday_sync import BirthdaySyncSummary
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 
 
@@ -56,20 +57,38 @@ def test_media_sync_summary_text(summary: MediaSyncSummary, expected: str) -> No
     assert _media_sync_summary_text(summary) == expected
 
 
+@pytest.mark.parametrize(
+    ("summary", "expected_heading"),
+    [
+        (BirthdaySyncSummary(acquired=False), "Синхронизация профилей уже выполняется"),
+        (
+            BirthdaySyncSummary(acquired=True, completed=True, considered=2, unchanged=1, missing=1),
+            "Синхронизация профилей завершена",
+        ),
+        (
+            BirthdaySyncSummary(acquired=True, completed=False, considered=2, failed=1),
+            "Синхронизация профилей завершена частично",
+        ),
+    ],
+)
+def test_birthday_sync_summary_text(summary: BirthdaySyncSummary, expected_heading: str) -> None:
+    assert expected_heading in _birthday_sync_summary_text(summary)
+
+
 async def test_manual_media_sync_logs_unexpected_error_and_shows_safe_message(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     message = AsyncMock()
     synchronize = AsyncMock(side_effect=RuntimeError("sensitive details"))
-    monkeypatch.setattr(admin_panel, "synchronize_media_catalog", synchronize)
+    monkeypatch.setattr(admin_panel, "synchronize_bot_data", synchronize)
 
     with caplog.at_level(logging.ERROR, logger=admin_panel.__name__):
         await admin_panel._synchronize_media(message)
 
     assert message.edit_text.await_count == 2
     assert message.edit_text.await_args_list[1].args[0] == (
-        "<b>Не удалось синхронизировать медиа</b>\n\nПопробуйте повторить позже."
+        "<b>Не удалось запустить синхронизацию данных</b>\n\nПопробуйте повторить позже."
     )
     assert "sensitive details" not in message.edit_text.await_args_list[1].args[0]
     assert any(record.exc_info is not None for record in caplog.records)
@@ -78,7 +97,7 @@ async def test_manual_media_sync_logs_unexpected_error_and_shows_safe_message(
 async def test_manual_media_sync_propagates_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
     message = AsyncMock()
     synchronize = AsyncMock(side_effect=asyncio.CancelledError)
-    monkeypatch.setattr(admin_panel, "synchronize_media_catalog", synchronize)
+    monkeypatch.setattr(admin_panel, "synchronize_bot_data", synchronize)
 
     with pytest.raises(asyncio.CancelledError):
         await admin_panel._synchronize_media(message)

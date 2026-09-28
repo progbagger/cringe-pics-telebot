@@ -14,9 +14,10 @@ from cringe_pics_telebot.repositories.redis import connect as connect_redis
 from cringe_pics_telebot.repositories.yandex import connect as connect_yandex
 from cringe_pics_telebot.services.admin_broadcasts import DEFAULT_CHECK_INTERVAL as ADMIN_BROADCAST_CHECK_INTERVAL
 from cringe_pics_telebot.services.admin_broadcasts import run_admin_broadcasts
+from cringe_pics_telebot.services.data_sync import run_data_sync
 from cringe_pics_telebot.services.media_alias_enrichment import run_media_alias_enrichment
 from cringe_pics_telebot.services.media_alias_enrichment_settings import load_media_alias_enrichment_settings
-from cringe_pics_telebot.services.media_sync import DEFAULT_SYNC_INTERVAL, run_media_sync
+from cringe_pics_telebot.services.media_sync import DEFAULT_SYNC_INTERVAL
 from cringe_pics_telebot.services.subscription_broadcasts import (
     DEFAULT_CHECK_INTERVAL,
     TimeProvider,
@@ -141,7 +142,8 @@ async def start_polling(
                 )
             ),
             asyncio.create_task(
-                run_media_sync(
+                run_data_sync(
+                    bot,
                     interval=timedelta(seconds=media_sync_interval),
                     alias_enrichment_settings=enrichment_settings,
                 )

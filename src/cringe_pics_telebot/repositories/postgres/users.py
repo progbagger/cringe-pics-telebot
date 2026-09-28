@@ -26,31 +26,30 @@ async def create_user(user_id: int) -> User:
             )
         ).fetchone()
         assert row is not None
-        return User(
-            id=row.id,
-            timezone_offset_minutes=row.timezone_offset_minutes,
-            is_active=row.is_active,
-            created_at=row.created_at,
-            birthday=_birthday_from_row(row),
-            birthday_source=_birthday_source_from_row(row),
-        )
+        return _user_from_row(row)
 
 
 async def get_active_users() -> list[User]:
     async with get_connection() as conn:
         rows = (await conn.execute(select(users).where(users.c.is_active.is_(True)).order_by(users.c.id))).all()
 
-    return [
-        User(
-            id=row.id,
-            timezone_offset_minutes=row.timezone_offset_minutes,
-            is_active=row.is_active,
-            created_at=row.created_at,
-            birthday=_birthday_from_row(row),
-            birthday_source=_birthday_source_from_row(row),
-        )
-        for row in rows
-    ]
+    return [_user_from_row(row) for row in rows]
+
+
+async def get_users_page(*, after_user_id: int, limit: int) -> list[User]:
+    async with get_connection() as conn:
+        rows = (
+            await conn.execute(select(users).where(users.c.id > after_user_id).order_by(users.c.id).limit(limit))
+        ).all()
+
+    return [_user_from_row(row) for row in rows]
+
+
+async def get_user_for_update(user_id: int) -> User | None:
+    async with get_connection() as conn:
+        row = (await conn.execute(select(users).where(users.c.id == user_id).with_for_update())).one_or_none()
+
+    return _user_from_row(row) if row is not None else None
 
 
 async def deactivate_user(user_id: int) -> None:
@@ -150,3 +149,14 @@ def _birthday_from_row(row: Any) -> AnnualDate | None:
 def _birthday_source_from_row(row: Any) -> UserBirthdaySource | None:
     source = row.birthdate_source
     return UserBirthdaySource(source) if source is not None else None
+
+
+def _user_from_row(row: Any) -> User:
+    return User(
+        id=row.id,
+        timezone_offset_minutes=row.timezone_offset_minutes,
+        is_active=row.is_active,
+        created_at=row.created_at,
+        birthday=_birthday_from_row(row),
+        birthday_source=_birthday_source_from_row(row),
+    )

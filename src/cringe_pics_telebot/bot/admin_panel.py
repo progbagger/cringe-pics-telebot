@@ -6,8 +6,10 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InaccessibleMessage, Message
 
+from cringe_pics_telebot.services.birthday_sync import BirthdaySyncSummary
+from cringe_pics_telebot.services.data_sync import DataSyncSummary, synchronize_bot_data
 from cringe_pics_telebot.services.media_alias_enrichment_settings import MediaAliasEnrichmentSettings
-from cringe_pics_telebot.services.media_sync import MediaSyncSummary, synchronize_media_catalog
+from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 
 from .admin_access import IsAdministrator
 from .admin_keyboards import create_admin_media_sync_keyboard, create_admin_panel_keyboard
@@ -64,23 +66,44 @@ async def _synchronize_media(
     *,
     alias_enrichment_settings: MediaAliasEnrichmentSettings | None = None,
 ) -> None:
-    await message.edit_text("<b>Синхронизация медиа началась</b>\n\nЭто может занять некоторое время.")
+    await message.edit_text(
+        "<b>Синхронизация медиа началась</b>\n\n"
+        "После медиа бот синхронизирует дни рождения из профилей Telegram. Это может занять некоторое время."
+    )
     try:
-        summary = await synchronize_media_catalog(alias_enrichment_settings=alias_enrichment_settings)
+        bot = message.bot
+        if bot is None:
+            raise RuntimeError("Message is not bound to a bot")
+
+        summary = await synchronize_bot_data(bot, alias_enrichment_settings=alias_enrichment_settings)
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Failed to manually synchronize media catalog")
+        logger.exception("Failed to manually synchronize bot data")
         await message.edit_text(
-            "<b>Не удалось синхронизировать медиа</b>\n\nПопробуйте повторить позже.",
+            "<b>Не удалось запустить синхронизацию данных</b>\n\nПопробуйте повторить позже.",
             reply_markup=create_admin_media_sync_keyboard(),
         )
         return
 
     await message.edit_text(
-        _media_sync_summary_text(summary),
+        _data_sync_summary_text(summary),
         reply_markup=create_admin_media_sync_keyboard(),
     )
+
+
+def _data_sync_summary_text(summary: DataSyncSummary) -> str:
+    media_text = (
+        _media_sync_summary_text(summary.media)
+        if summary.media is not None
+        else "<b>Синхронизация медиа не выполнена</b>\n\nЭтап завершился ошибкой."
+    )
+    profiles_text = (
+        _birthday_sync_summary_text(summary.profiles)
+        if summary.profiles is not None
+        else "<b>Синхронизация профилей не выполнена</b>\n\nЭтап завершился ошибкой."
+    )
+    return f"{media_text}\n\n{profiles_text}"
 
 
 def _media_sync_summary_text(summary: MediaSyncSummary) -> str:
@@ -98,6 +121,25 @@ def _media_sync_summary_text(summary: MediaSyncSummary) -> str:
         f"Повторно активировано медиа: <b>{summary.reactivated}</b>\n"
         f"Деактивировано отсутствующее медиа: <b>{summary.deactivated}</b>\n"
         f"Поставлено заданий на алиасы: <b>{summary.alias_enrichment_queued}</b>"
+    )
+
+
+def _birthday_sync_summary_text(summary: BirthdaySyncSummary) -> str:
+    if not summary.acquired:
+        return "<b>Синхронизация профилей уже выполняется</b>\n\nНовый запуск не начат."
+
+    status = "завершена" if summary.completed and not summary.failed else "завершена частично"
+    return (
+        f"<b>Синхронизация профилей {status}</b>\n\n"
+        f"Рассмотрено пользователей: <b>{summary.considered}</b>\n"
+        f"Получено дат из Telegram: <b>{summary.telegram_birthdates}</b>\n"
+        f"Создано дат: <b>{summary.created}</b>\n"
+        f"Обновлено дат: <b>{summary.updated}</b>\n"
+        f"Очищено дат: <b>{summary.cleared}</b>\n"
+        f"Без изменений: <b>{summary.unchanged}</b>\n"
+        f"Пропущено ручных значений: <b>{summary.manual_skipped}</b>\n"
+        f"Профилей без даты: <b>{summary.missing}</b>\n"
+        f"Пользователей с ошибками: <b>{summary.failed}</b>"
     )
 
 

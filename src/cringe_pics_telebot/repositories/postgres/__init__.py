@@ -86,6 +86,8 @@ from .users import deactivate_user as deactivate_user
 from .users import get_active_users as get_active_users
 from .users import get_user_birthday as get_user_birthday
 from .users import get_user_birthday_details as get_user_birthday_details
+from .users import get_user_for_update as get_user_for_update
 from .users import get_user_timezone_offset as get_user_timezone_offset
+from .users import get_users_page as get_users_page
 from .users import set_user_birthday as set_user_birthday
 from .users import set_user_timezone_offset as set_user_timezone_offset
