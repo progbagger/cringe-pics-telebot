@@ -161,13 +161,20 @@ async def test_category_changes_refresh_on_timezone_and_ordinary_without_another
         await bot.telegram.reset()
         await fake_yandex_server.reset()
         await bot.telegram.push_message(text="/keep")
-        delivered = await bot.telegram.wait_for_request("sendPhoto")
+        placeholder = await bot.telegram.wait_for_request(
+            "sendMessage",
+            predicate=lambda request: request["payload"].get("text") == "<i>Выбираю картинку</i>",
+        )
+        edited = await bot.telegram.wait_for_request("editMessageMedia")
 
-        assert_that(delivered["payload"]["photo"], equal_to(f"{fake_yandex_server.base_url}/download/image.png"))
-        assert_that(_buttons(delivered["payload"]), equal_to(_buttons(after["payload"])))
-        assert_that(await bot.telegram.requests(method="sendMessage"), empty())
-        assert_that(await bot.telegram.requests(method="editMessageMedia"), empty())
-        assert_that(await bot.telegram.requests(method="editMessageText"), empty())
+        assert "reply_markup" not in placeholder["payload"]
+        assert_that(
+            edited["payload"]["media"]["media"],
+            equal_to(f"{fake_yandex_server.base_url}/download/image.png"),
+        )
+        assert "reply_markup" not in edited["payload"]
+        assert_that(await bot.telegram.requests(method="sendMessage"), has_length(1))
+        assert_that(await bot.telegram.requests(method="sendPhoto"), empty())
 
         async def delivery_confirmed() -> None:
             row = await keyboard_database.fetchrow(
@@ -186,19 +193,18 @@ async def test_category_changes_refresh_on_timezone_and_ordinary_without_another
 
 
 @pytest.mark.parametrize(
-    ("mime_type", "method", "file_name", "file_id", "payload_key"),
+    ("mime_type", "file_name", "file_id", "media_type"),
     [
-        ("image/png", "sendPhoto", "image.png", "ready-photo-id", "photo"),
-        ("image/gif", "sendAnimation", "image.gif", "ready-animation-id", "animation"),
-        ("video/mp4", "sendVideo", "clip.mp4", "ready-video-id", "video"),
+        ("image/png", "image.png", "ready-photo-id", "photo"),
+        ("image/gif", "image.gif", "ready-animation-id", "animation"),
+        ("video/mp4", "clip.mp4", "ready-video-id", "video"),
     ],
 )
-async def test_ready_ordinary_media_is_sent_as_new_message_with_main_keyboard(
+async def test_ready_ordinary_media_replaces_placeholder_without_main_keyboard(
     mime_type: str,
-    method: str,
     file_name: str,
     file_id: str,
-    payload_key: str,
+    media_type: str,
     start_main_keyboard_bot: Callable[[], AbstractAsyncContextManager[MainKeyboardBot]],
     keyboard_database: asyncpg.Connection,
     fake_yandex_server: FakeYandexServer,
@@ -221,12 +227,18 @@ async def test_ready_ordinary_media_is_sent_as_new_message_with_main_keyboard(
         await fake_yandex_server.reset()
 
         await bot.telegram.push_message(text="/ready")
-        delivered = await bot.telegram.wait_for_request(method)
+        placeholder = await bot.telegram.wait_for_request(
+            "sendMessage",
+            predicate=lambda request: request["payload"].get("text") == "<i>Выбираю картинку</i>",
+        )
+        edited = await bot.telegram.wait_for_request("editMessageMedia")
 
-        assert delivered["payload"][payload_key] == file_id
-        assert_that(_buttons(delivered["payload"]), equal_to(["Подписки", "/ready"]))
-        assert_that(await bot.telegram.requests(method="sendMessage"), empty())
-        assert_that(await bot.telegram.requests(method="editMessageMedia"), empty())
+        assert "reply_markup" not in placeholder["payload"]
+        assert_that(edited["payload"]["media"], has_entries(type=media_type, media=file_id))
+        assert_that(await bot.telegram.requests(method="sendMessage"), has_length(1))
+        assert_that(await bot.telegram.requests(method="sendPhoto"), empty())
+        assert_that(await bot.telegram.requests(method="sendAnimation"), empty())
+        assert_that(await bot.telegram.requests(method="sendVideo"), empty())
         assert_that(await fake_yandex_server.requests(), empty())
 
         async def delivery_confirmed() -> None:
@@ -238,7 +250,7 @@ async def test_ready_ordinary_media_is_sent_as_new_message_with_main_keyboard(
         await _wait_until_ready(delivery_confirmed, "ready ordinary delivery confirmation")
 
 
-async def test_ordinary_media_failure_sends_new_error_message_and_releases_cycle(
+async def test_ordinary_media_failure_replaces_placeholder_and_releases_cycle(
     start_main_keyboard_bot: Callable[[], AbstractAsyncContextManager[MainKeyboardBot]],
     keyboard_database: asyncpg.Connection,
     fake_yandex_server: FakeYandexServer,
@@ -258,15 +270,19 @@ async def test_ordinary_media_failure_sends_new_error_message_and_releases_cycle
         await fake_yandex_server.reset()
 
         await bot.telegram.push_message(text="/broken")
-        error_message = await bot.telegram.wait_for_request(
+        placeholder = await bot.telegram.wait_for_request(
             "sendMessage",
+            predicate=lambda request: request["payload"].get("text") == "<i>Выбираю картинку</i>",
+        )
+        error_edit = await bot.telegram.wait_for_request(
+            "editMessageText",
             predicate=lambda request: request["payload"].get("text") == "<b>Произошла непредвиденная ошибка.</b>",
         )
 
-        assert_that(_buttons(error_message["payload"]), equal_to(["Подписки", "/broken"]))
-        assert_that(await bot.telegram.requests(method="sendPhoto"), empty())
+        assert "reply_markup" not in placeholder["payload"]
+        assert error_edit["payload"]["chat_id"] == 42
+        assert_that(await bot.telegram.requests(method="sendMessage"), has_length(1))
         assert_that(await bot.telegram.requests(method="editMessageMedia"), empty())
-        assert_that(await bot.telegram.requests(method="editMessageText"), empty())
 
         async def reservation_released() -> None:
             assert_that(await read_functional_user_media_cycle(42, 1), equal_to((None, {})))
@@ -275,7 +291,8 @@ async def test_ordinary_media_failure_sends_new_error_message_and_releases_cycle
 
         await bot.telegram.reset()
         await bot.telegram.push_message(text="/timezone")
-        await bot.telegram.wait_for_request("sendMessage")
+        next_message = await bot.telegram.wait_for_request("sendMessage")
+        assert_that(_buttons(next_message["payload"]), equal_to(["Подписки", "/broken"]))
 
 
 async def test_subscription_inline_ui_and_callback_pagination_do_not_add_messages(

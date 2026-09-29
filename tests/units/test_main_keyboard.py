@@ -46,7 +46,7 @@ from aiogram.types import (
 )
 from hamcrest import assert_that, equal_to, not_, same_instance
 
-from cringe_pics_telebot.bot.main_keyboard import MainKeyboardMiddleware, main_keyboard_recipient
+from cringe_pics_telebot.bot.main_keyboard import MainKeyboardMiddleware, main_keyboard_recipient, without_main_keyboard
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import SubscriptionType
 from cringe_pics_telebot.services import main_keyboard
 from cringe_pics_telebot.services.main_keyboard import MainKeyboardCache
@@ -251,5 +251,76 @@ async def test_reused_methods_remain_unchanged_and_share_markup_until_snapshot_e
         refreshed_markup = sent[3].reply_markup
         assert isinstance(refreshed_markup, ReplyKeyboardMarkup)
         assert_that(refreshed_markup.keyboard[0][0].text, equal_to("Админ-панель"))
+    finally:
+        await bot.session.close()
+
+
+async def test_without_main_keyboard_is_scoped_to_current_async_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: dict[str, SendMessage] = {}
+
+    async def categories() -> list[SubscriptionType]:
+        return []
+
+    async def administrators() -> frozenset[int]:
+        return frozenset()
+
+    async def capture(bot: Bot, method: TelegramMethod[Any]) -> Response[Any]:
+        assert isinstance(method, SendMessage)
+        sent[method.text] = method
+        return Response(ok=True, result=True)
+
+    async def send_without_keyboard() -> None:
+        with without_main_keyboard():
+            await asyncio.sleep(0)
+            await middleware(capture, bot, SendMessage(chat_id=42, text="placeholder"))
+
+    monkeypatch.setattr(main_keyboard, "get_active_subscription_types", categories)
+    monkeypatch.setattr(main_keyboard, "get_administrator_ids", administrators)
+    middleware = MainKeyboardMiddleware(MainKeyboardCache())
+    bot = Bot("123456:unit-test-token")
+
+    try:
+        await asyncio.gather(
+            send_without_keyboard(),
+            middleware(capture, bot, SendMessage(chat_id=42, text="parallel")),
+        )
+        await middleware(capture, bot, SendMessage(chat_id=42, text="after"))
+
+        assert sent["placeholder"].reply_markup is None
+        assert isinstance(sent["parallel"].reply_markup, ReplyKeyboardMarkup)
+        assert isinstance(sent["after"].reply_markup, ReplyKeyboardMarkup)
+    finally:
+        await bot.session.close()
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, asyncio.CancelledError])
+async def test_without_main_keyboard_restores_context_after_error(
+    error_type: type[BaseException], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[SendMessage] = []
+
+    async def categories() -> list[SubscriptionType]:
+        return []
+
+    async def administrators() -> frozenset[int]:
+        return frozenset()
+
+    async def capture(bot: Bot, method: TelegramMethod[Any]) -> Response[Any]:
+        assert isinstance(method, SendMessage)
+        sent.append(method)
+        return Response(ok=True, result=True)
+
+    monkeypatch.setattr(main_keyboard, "get_active_subscription_types", categories)
+    monkeypatch.setattr(main_keyboard, "get_administrator_ids", administrators)
+    middleware = MainKeyboardMiddleware(MainKeyboardCache())
+    bot = Bot("123456:unit-test-token")
+
+    try:
+        with pytest.raises(error_type), without_main_keyboard():
+            raise error_type()
+
+        await middleware(capture, bot, SendMessage(chat_id=42, text="after"))
+
+        assert isinstance(sent[0].reply_markup, ReplyKeyboardMarkup)
     finally:
         await bot.session.close()

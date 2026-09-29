@@ -1,3 +1,6 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 from aiogram import Bot
@@ -51,6 +54,13 @@ _MAIN_KEYBOARD_METHODS = (
     SendLivePhoto,
     SendRichMessage,
 )
+_main_keyboard_suppressed: ContextVar[bool] = ContextVar("main_keyboard_suppressed", default=False)
+
+
+@contextmanager
+def without_main_keyboard() -> Iterator[None]:
+    with _main_keyboard_suppressed.set(True):
+        yield
 
 
 def main_keyboard_recipient(method: TelegramMethod[TelegramType]) -> int | None:
@@ -86,7 +96,7 @@ class MainKeyboardMiddleware(BaseRequestMiddleware):
         bot: Bot,
         method: TelegramMethod[TelegramType],
     ) -> Response[TelegramType]:
-        recipient_id = main_keyboard_recipient(method)
+        recipient_id = None if _main_keyboard_suppressed.get() else main_keyboard_recipient(method)
         if recipient_id is not None:
             snapshot = await self._cache.get_snapshot()
             keyboards = self._keyboards

@@ -270,9 +270,9 @@ async def test_immediate_only_category_is_available_for_ordinary_and_inline_deli
 
     await fake_telegram_server.reset()
     await fake_telegram_server.push_message(text="/instant")
-    sent_media = await fake_telegram_server.wait_for_request("sendPhoto")
+    edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
     assert_that(
-        sent_media["payload"]["photo"],
+        edit_media["payload"]["media"]["media"],
         is_in(
             (
                 f"{fake_yandex_server.base_url}/download/instant.png",
@@ -502,11 +502,16 @@ async def test_bot_sends_image_for_subscription_category(
     await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text=category_name)
 
-    sent_media = await fake_telegram_server.wait_for_request("sendPhoto")
-    assert_that(sent_media["payload"]["chat_id"], equal_to(42))
-    assert_that(sent_media["payload"]["photo"], starts_with(fake_yandex_server.base_url))
-    assert_that(await fake_telegram_server.requests(method="sendMessage"), empty())
-    assert_that(await fake_telegram_server.requests(method="editMessageMedia"), empty())
+    choosing_message = await fake_telegram_server.wait_for_request(
+        "sendMessage",
+        predicate=lambda request: request["payload"].get("text") == "<i>Выбираю картинку</i>",
+    )
+    assert_that(_reply_to_message_id(choosing_message["payload"]), equal_to(1))
+
+    edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
+    assert_that(edit_media["payload"]["chat_id"], equal_to(42))
+    assert_that(edit_media["payload"]["media"]["type"], equal_to("photo"))
+    assert_that(edit_media["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
     yandex_methods = [request["method"] for request in await fake_yandex_server.requests()]
     assert_that([method for method in yandex_methods if method == "resources"], empty())
@@ -543,10 +548,11 @@ async def test_bot_materializes_mp4_for_ordinary_delivery_and_then_exposes_cache
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text="/video")
-    first_send = await fake_telegram_server.wait_for_request("sendVideo")
+    first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
 
+    assert_that(first_edit["payload"]["media"]["type"], equal_to("video"))
     assert_that(
-        first_send["payload"]["video"],
+        first_edit["payload"]["media"]["media"],
         equal_to(f"{fake_yandex_server.base_url}/download/clip.mp4"),
     )
     assert_that(
@@ -596,9 +602,10 @@ async def test_bot_materializes_mp4_for_ordinary_delivery_and_then_exposes_cache
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text="/video")
-    cached_send = await fake_telegram_server.wait_for_request("sendVideo")
+    cached_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
 
-    assert_that(cached_send["payload"]["video"], equal_to("functional-video-file-id"))
+    assert_that(cached_edit["payload"]["media"]["type"], equal_to("video"))
+    assert_that(cached_edit["payload"]["media"]["media"], equal_to("functional-video-file-id"))
     assert_that(await fake_yandex_server.requests(), empty())
 
 
@@ -621,10 +628,10 @@ async def test_bot_prefers_pending_media_over_ready_for_ordinary_delivery(
     await fake_yandex_server.reset()
 
     await fake_telegram_server.push_message(text="/day")
-    sent_media = await fake_telegram_server.wait_for_request("sendPhoto")
+    edit_media = await fake_telegram_server.wait_for_request("editMessageMedia")
 
     assert_that(
-        sent_media["payload"]["photo"],
+        edit_media["payload"]["media"]["media"],
         equal_to(f"{fake_yandex_server.base_url}/download/pending.png"),
     )
     assert_that(
@@ -663,8 +670,8 @@ async def test_bot_ordinary_delivery_uses_persistent_non_repeating_cycle(
     for expected_shown_count in (1, 2, 3, 1):
         await fake_telegram_server.reset()
         await fake_telegram_server.push_message(text="/cycle")
-        request = await fake_telegram_server.wait_for_request("sendPhoto")
-        sent_media.append(request["payload"]["photo"])
+        request = await fake_telegram_server.wait_for_request("editMessageMedia")
+        sent_media.append(request["payload"]["media"]["media"])
         await _wait_for_cycle_shown_count(
             read_functional_user_media_cycle,
             user_id=42,
@@ -678,10 +685,10 @@ async def test_bot_ordinary_delivery_uses_persistent_non_repeating_cycle(
 
 
 @pytest.mark.parametrize(
-    ("file_name", "mime_type", "telegram_file_id", "method", "payload_key"),
+    ("file_name", "mime_type", "telegram_file_id", "input_media_type"),
     [
-        ("image.png", "image/png", "functional-photo-file-id", "sendPhoto", "photo"),
-        ("clip.mp4", "video/mp4", "functional-video-file-id", "sendVideo", "video"),
+        ("image.png", "image/png", "functional-photo-file-id", "photo"),
+        ("clip.mp4", "video/mp4", "functional-video-file-id", "video"),
     ],
 )
 async def test_bot_recovers_invalid_catalog_file_id_once(
@@ -693,30 +700,30 @@ async def test_bot_recovers_invalid_catalog_file_id_once(
     file_name: str,
     mime_type: str,
     telegram_file_id: str,
-    method: str,
-    payload_key: str,
+    input_media_type: str,
 ) -> None:
     await fake_yandex_server.configure_directory("day", images=[{"name": file_name, "mime_type": mime_type}])
     await synchronize_functional_media_catalog()
     await fake_yandex_server.reset()
 
     await fake_telegram_server.push_message(text="/day")
-    first_send = await fake_telegram_server.wait_for_request(method)
-    assert_that(first_send["payload"][payload_key], starts_with(fake_yandex_server.base_url))
+    first_edit = await fake_telegram_server.wait_for_request("editMessageMedia")
+    assert_that(first_edit["payload"]["media"]["type"], equal_to(input_media_type))
+    assert_that(first_edit["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
     await fake_telegram_server.reset()
     await fake_telegram_server.set_invalid_file_ids(telegram_file_id)
     await fake_yandex_server.reset()
     await fake_telegram_server.push_message(text="/day")
-    recovered_send = await fake_telegram_server.wait_for_request(
-        method,
-        predicate=lambda request: str(request["payload"][payload_key]).startswith(fake_yandex_server.base_url),
+    recovered_edit = await fake_telegram_server.wait_for_request(
+        "editMessageMedia",
+        predicate=lambda request: str(request["payload"]["media"]["media"]).startswith(fake_yandex_server.base_url),
     )
-    assert_that(recovered_send["payload"][payload_key], starts_with(fake_yandex_server.base_url))
+    assert_that(recovered_edit["payload"]["media"]["media"], starts_with(fake_yandex_server.base_url))
 
-    sends = await fake_telegram_server.requests(method=method)
+    edits = await fake_telegram_server.requests(method="editMessageMedia")
     assert_that(
-        [request["payload"][payload_key] for request in sends],
+        [request["payload"]["media"]["media"] for request in edits],
         equal_to(
             [
                 telegram_file_id,
@@ -1012,7 +1019,7 @@ async def test_bot_returns_random_media_per_category_for_empty_inline_query(
     await synchronize_functional_media_catalog()
 
     await fake_telegram_server.push_message(text="/ready-photo")
-    await fake_telegram_server.wait_for_request("sendPhoto")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
     await fake_statsd_server.reset()
@@ -1188,7 +1195,7 @@ async def test_inline_uses_persisted_file_id_after_ordinary_delivery(
     await fake_yandex_server.reset()
 
     await fake_telegram_server.push_message(text="/day")
-    await fake_telegram_server.wait_for_request("sendPhoto")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
 
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
@@ -1232,7 +1239,7 @@ async def test_inline_metrics_cover_mixed_ready_and_pending_media(
     await fake_yandex_server.reset()
 
     await fake_telegram_server.push_message(text="/day")
-    await fake_telegram_server.wait_for_request("sendPhoto")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
 
     await fake_telegram_server.reset()
     await fake_yandex_server.reset()
@@ -1470,5 +1477,15 @@ def _button_callback_data(payload: dict[str, Any], text: str) -> str | None:
         for button in row:
             if text in button["text"]:
                 return button["callback_data"]
+
+    return None
+
+
+def _reply_to_message_id(payload: dict[str, Any]) -> int | None:
+    if "reply_to_message_id" in payload:
+        return int(payload["reply_to_message_id"])
+
+    if "reply_parameters" in payload:
+        return int(payload["reply_parameters"]["message_id"])
 
     return None
