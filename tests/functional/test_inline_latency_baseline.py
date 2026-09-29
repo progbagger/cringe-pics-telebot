@@ -74,7 +74,7 @@ async def test_collect_inline_latency_baseline(
         directories={"warm": [{"name": "only.png"}]},
     )
     await fake_telegram_server.push_message(text="/warm")
-    await fake_telegram_server.wait_for_request("sendPhoto")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
     scenarios["small_catalog_only"] = await _measure_scenario(
         query="warm",
         expected_results=1,
@@ -99,7 +99,7 @@ async def test_collect_inline_latency_baseline(
         directories={"mixed": [{"name": "ready.png"}, {"name": "pending.png"}]},
     )
     await fake_telegram_server.push_message(text="/mixed")
-    await fake_telegram_server.wait_for_request("sendPhoto")
+    await fake_telegram_server.wait_for_request("editMessageMedia")
     scenarios["small_mixed"] = await _measure_scenario(
         query="mixed",
         expected_results=2,

@@ -14,7 +14,7 @@ dependencies = [
   "pillow>=12.0.0",
   "redis[hiredis]>=8.1.0",
   "serpyco-rs>=1.21.0",
-  "sqlalchemy[asyncio]>=2.1.0b3",
+  "sqlalchemy[asyncio]>=2.1.1",
   "statsd>=4.0.1",
 ]
 
@@ -33,7 +33,7 @@ exclude = ["^alembic/"]
 
 [dependency-groups]
 migration = [
-  "alembic>=1.17.2,<1.19.2",
+  "alembic>=1.17.2",
 ]
 dev = [
   "dotenv>=0.9.9",

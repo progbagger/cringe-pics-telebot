@@ -13,7 +13,8 @@ from cringe_pics_telebot.bot.keyboards import (
     category_button_sort_key,
     create_inline_subscriptions_keyboard,
 )
-from cringe_pics_telebot.bot.media import send_image_to_chat
+from cringe_pics_telebot.bot.main_keyboard import without_main_keyboard
+from cringe_pics_telebot.bot.media import add_image_to_message
 from cringe_pics_telebot.bot.subscription_callback_data import (
     SubscriptionActionCallbackData,
     SubscriptionCallbackData,
@@ -32,6 +33,7 @@ from cringe_pics_telebot.services.birthdays import (
     parse_birthday_command,
     set_manual_birthday,
 )
+from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import (
     SubscriptionTypeUnavailableError,
     get_subscription_types,
@@ -320,28 +322,41 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
         logger.info("Received message without text or from_user: %d", message.message_id)
         return
 
-    try:
-        bot = message.bot
-        if bot is None:
-            raise RuntimeError("Message is not bound to a bot")
+    with without_main_keyboard():
+        sent_message = await message.reply("<i>Выбираю картинку</i>")
 
+    try:
         media = await get_category_media_by_subscription_types([subscription_type.id])
         await deliver_user_category_media(
             user_id=message.from_user.id,
             subscription_type_id=subscription_type.id,
             media=media,
-            send=lambda image: send_image_to_chat(bot=bot, chat_id=message.chat.id, image=image),
+            send=lambda image: _add_image_to_chat_message(message=sent_message, image=image),
         )
 
     except Exception:
         logger.exception("Failed to send media to user %d", message.from_user.id)
 
         try:
-            await message.answer("<b>Произошла непредвиденная ошибка.</b>")
+            await sent_message.edit_text("<b>Произошла непредвиденная ошибка.</b>")
         except Exception:
-            logger.exception("Failed to notify user %d about media delivery failure", message.from_user.id)
+            logger.exception("Failed to replace media placeholder for user %d", message.from_user.id)
+
+            try:
+                await message.answer("<b>Произошла непредвиденная ошибка.</b>")
+            except Exception:
+                logger.exception("Failed to notify user %d about media delivery failure", message.from_user.id)
+
+        return
 
 
 @router.message()
 async def unknown_message(message: Message) -> None:
     await handle_start(message)
+
+
+async def _add_image_to_chat_message(*, message: Message, image: LinkedMedia | CachedMedia) -> Message:
+    result = await add_image_to_message(message=message, image=image)
+
+    assert isinstance(result, Message)
+    return result
