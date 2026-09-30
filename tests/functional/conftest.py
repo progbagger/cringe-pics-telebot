@@ -136,6 +136,16 @@ class FakeTelegramServer:
         ):
             response.raise_for_status()
 
+    async def set_media_response_types(self, responses: dict[str, str]) -> None:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(
+                f"{self.base_url}/test/media-response-types",
+                json={"responses": responses},
+            ) as response,
+        ):
+            response.raise_for_status()
+
     async def set_get_chat_responses(self, responses: dict[int, list[dict[str, Any]]]) -> None:
         async with (
             aiohttp.ClientSession() as session,
@@ -324,6 +334,8 @@ class FakeTelegramServer:
 class MainKeyboardBot:
     telegram: FakeTelegramServer
     clock_url: str
+    logs: deque[str]
+    log_condition: asyncio.Condition
 
     async def advance(self, seconds: float = 0, *, wall_now: datetime | None = None) -> None:
         payload: dict[str, float | str] = {"seconds": seconds}
@@ -336,6 +348,13 @@ class MainKeyboardBot:
         ):
             response.raise_for_status()
             await response.json()
+
+    async def wait_for_log(self, fragment: str, *, timeout: float = 10) -> str:
+        async with self.log_condition:
+            async with asyncio.timeout(timeout):
+                await self.log_condition.wait_for(lambda: any(fragment in line for line in self.logs))
+
+            return next(line for line in reversed(self.logs) if fragment in line)
 
 
 @dataclass(slots=True)
@@ -983,9 +1002,12 @@ def start_main_keyboard_bot(
         )
         telegram = FakeTelegramServer(f"http://127.0.0.1:{port}", telegram_process)
         process: subprocess.Process | None = None
+        log_reader: asyncio.Task[None] | None = None
 
         try:
             await _wait_until_ready(lambda: _http_ready(f"{telegram.base_url}/healthz"), "keyboard Telegram")
+            logs: deque[str] = deque(maxlen=1000)
+            log_condition = asyncio.Condition()
             process = await subprocess.create_subprocess_exec(
                 sys.executable,
                 str(FUNCTIONAL_DIR / "main_keyboard_clock_runner.py"),
@@ -1001,15 +1023,33 @@ def start_main_keyboard_bot(
                     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.1",
                     "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.1",
                 },
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
             )
+            assert process.stdout is not None
+
+            async def drain_logs() -> None:
+                assert process is not None and process.stdout is not None
+                while line := await process.stdout.readline():
+                    async with log_condition:
+                        logs.append(line.decode("utf-8", errors="replace"))
+                        log_condition.notify_all()
+
+            log_reader = asyncio.create_task(drain_logs())
             await telegram.wait_for_request("getMe")
 
-            yield MainKeyboardBot(telegram, f"http://127.0.0.1:{clock_port}")
+            yield MainKeyboardBot(telegram, f"http://127.0.0.1:{clock_port}", logs, log_condition)
         finally:
             if process is not None:
-                await _terminate_process(process)
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=5)
+                    except TimeoutError:
+                        process.kill()
+                        await process.wait()
+                if log_reader is not None:
+                    await log_reader
 
             if telegram_process.returncode is None:
                 telegram_process.kill()

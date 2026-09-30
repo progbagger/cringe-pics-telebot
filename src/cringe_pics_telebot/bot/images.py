@@ -14,7 +14,7 @@ from cringe_pics_telebot.bot.keyboards import (
     create_inline_subscriptions_keyboard,
 )
 from cringe_pics_telebot.bot.main_keyboard import without_main_keyboard
-from cringe_pics_telebot.bot.media import add_image_to_message
+from cringe_pics_telebot.bot.media import MediaDeliveryReceipt, add_image_to_message
 from cringe_pics_telebot.bot.subscription_callback_data import (
     SubscriptionActionCallbackData,
     SubscriptionCallbackData,
@@ -355,8 +355,9 @@ async def unknown_message(message: Message) -> None:
     await handle_start(message)
 
 
-async def _add_image_to_chat_message(*, message: Message, image: LinkedMedia | CachedMedia) -> Message:
-    result = await add_image_to_message(message=message, image=image)
-
-    assert isinstance(result, Message)
-    return result
+async def _add_image_to_chat_message(
+    *,
+    message: Message,
+    image: LinkedMedia | CachedMedia,
+) -> MediaDeliveryReceipt:
+    return await add_image_to_message(message=message, image=image)

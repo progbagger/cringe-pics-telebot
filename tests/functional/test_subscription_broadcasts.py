@@ -1,6 +1,7 @@
 import asyncio
 from asyncio import subprocess
 from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, time
 from typing import Any
 
@@ -12,6 +13,7 @@ from tests.functional.conftest import (
     FakeTelegramServer,
     FakeYandexServer,
     FunctionalSubscriptionType,
+    MainKeyboardBot,
 )
 
 
@@ -107,6 +109,110 @@ async def test_subscription_broadcast_materializes_mp4_and_reuses_cached_video(
     second_request = await fake_telegram_server.wait_for_request("sendVideo")
     assert_that(second_request["payload"]["video"], equal_to("functional-video-file-id"))
     assert_that(await fake_yandex_server.requests(), empty())
+
+
+async def test_subscription_broadcast_confirms_delivery_when_response_cannot_be_materialized(
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    start_main_keyboard_bot: Callable[[], AbstractAsyncContextManager[MainKeyboardBot]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+    read_functional_user_media_cycle: Callable[[int, int], Awaitable[tuple[str | None, dict[str, str]] | None]],
+) -> None:
+    source_path = "scheduled/clip.mp4"
+    download_url = f"{fake_yandex_server.base_url}/download/clip.mp4"
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/scheduled", time(10), "scheduled"),))
+    await create_user_subscription(user_id=700, subscription_type_id=1, timezone_offset_minutes=7 * 60)
+    await fake_yandex_server.configure_directory(
+        "scheduled",
+        images=[{"name": "clip.mp4", "mime_type": "video/mp4"}],
+    )
+
+    async with start_main_keyboard_bot() as bot:
+        await _wait_for_category_media_state(
+            read_functional_category_media_states,
+            source_path=source_path,
+            expected=("pending", None),
+        )
+        await bot.telegram.reset()
+        await bot.telegram.set_media_response_types({"sendVideo": "document"})
+
+        await bot.advance(wall_now=datetime(2030, 9, 19, 3, tzinfo=UTC))
+        request = await bot.telegram.wait_for_request("sendVideo")
+        await _wait_for_cycle_state(
+            read_functional_user_media_cycle,
+            user_id=700,
+            subscription_type_id=1,
+            expected=(source_path, {source_path: "shown"}),
+        )
+        diagnostic = await bot.wait_for_log("Failed to materialize delivered media")
+
+        assert request["payload"]["video"] == download_url
+        assert request["payload"]["reply_markup"]["selective"] is False
+        assert len(await bot.telegram.requests(method="sendVideo")) == 1
+        assert_that(
+            await read_functional_category_media_states(),
+            equal_to({source_path: ("pending", None)}),
+        )
+        assert "source_path=scheduled/clip.mp4" in diagnostic
+        assert "expected_media_type=video" in diagnostic
+        assert "bot_api_method=sendVideo" in diagnostic
+        assert "message_id=" in diagnostic
+        assert "content_type=document" in diagnostic
+        assert "present_media_fields=document" in diagnostic
+        assert "error_type=ValueError" in diagnostic
+        assert download_url not in diagnostic
+        assert "functional-document-file-id" not in diagnostic
+        assert "functional-document-file-unique-id" not in diagnostic
+        assert "functional-test-token" not in diagnostic
+        logs = "".join(bot.logs)
+        assert "Failed to send scheduled image" not in logs
+        assert "ValueError: (" not in logs
+
+
+async def test_subscription_broadcast_releases_cycle_when_telegram_send_fails(
+    fake_yandex_server: FakeYandexServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    start_main_keyboard_bot: Callable[[], AbstractAsyncContextManager[MainKeyboardBot]],
+    read_functional_category_media_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+    read_functional_user_media_cycle: Callable[[int, int], Awaitable[tuple[str | None, dict[str, str]] | None]],
+) -> None:
+    source_path = "scheduled/clip.mp4"
+    download_url = f"{fake_yandex_server.base_url}/download/clip.mp4"
+    await seed_functional_subscription_types((FunctionalSubscriptionType(1, "/scheduled", time(10), "scheduled"),))
+    await create_user_subscription(user_id=700, subscription_type_id=1, timezone_offset_minutes=7 * 60)
+    await fake_yandex_server.configure_directory(
+        "scheduled",
+        images=[{"name": "clip.mp4", "mime_type": "video/mp4"}],
+    )
+
+    async with start_main_keyboard_bot() as bot:
+        await _wait_for_category_media_state(
+            read_functional_category_media_states,
+            source_path=source_path,
+            expected=("pending", None),
+        )
+        await bot.telegram.reset()
+        await bot.telegram.set_invalid_file_ids(download_url)
+
+        await bot.advance(wall_now=datetime(2030, 9, 19, 3, tzinfo=UTC))
+        request = await bot.telegram.wait_for_request("sendVideo")
+        await _wait_for_cycle_state(
+            read_functional_user_media_cycle,
+            user_id=700,
+            subscription_type_id=1,
+            expected=(None, {}),
+        )
+        await bot.wait_for_log("Failed to send scheduled image")
+
+        assert request["payload"]["video"] == download_url
+        assert request["payload"]["reply_markup"]["selective"] is False
+        assert len(await bot.telegram.requests(method="sendVideo")) == 1
+        assert_that(
+            await read_functional_category_media_states(),
+            equal_to({source_path: ("pending", None)}),
+        )
 
 
 async def test_subscription_broadcasts_use_each_users_local_weekday_across_sunday_to_monday(
@@ -535,3 +641,37 @@ async def _wait_for_cycle_shown_count(
         await asyncio.sleep(0.1)
 
     raise TimeoutError(f"Cycle did not reach {expected} shown entries in {timeout} seconds")
+
+
+async def _wait_for_category_media_state(
+    read_states: Callable[[], Awaitable[dict[str, tuple[str, str | None]]]],
+    *,
+    source_path: str,
+    expected: tuple[str, str | None],
+    timeout: float = 10,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        states = await read_states()
+        if states.get(source_path) == expected:
+            return
+        await asyncio.sleep(0.1)
+
+    raise TimeoutError(f"Category media {source_path!r} did not reach {expected!r} in {timeout} seconds")
+
+
+async def _wait_for_cycle_state(
+    read_cycle: Callable[[int, int], Awaitable[tuple[str | None, dict[str, str]] | None]],
+    *,
+    user_id: int,
+    subscription_type_id: int,
+    expected: tuple[str | None, dict[str, str]],
+    timeout: float = 10,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if await read_cycle(user_id, subscription_type_id) == expected:
+            return
+        await asyncio.sleep(0.1)
+
+    raise TimeoutError(f"Cycle did not reach {expected!r} in {timeout} seconds")

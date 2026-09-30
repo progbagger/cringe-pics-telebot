@@ -16,6 +16,7 @@ class FakeTelegram:
         self._blocked_methods: set[str] = set()
         self._forbidden_chat_ids: set[int] = set()
         self._invalid_file_ids: set[str] = set()
+        self._media_response_types: dict[str, str] = {}
         self._messages_with_reply_keyboard: set[tuple[int, int]] = set()
         self._get_chat_responses: dict[int, deque[dict[str, Any]]] = {}
         self._active_get_chat_requests = 0
@@ -53,6 +54,7 @@ class FakeTelegram:
             self._blocked_methods.clear()
             self._forbidden_chat_ids.clear()
             self._invalid_file_ids.clear()
+            self._media_response_types.clear()
             self._messages_with_reply_keyboard.clear()
             self._get_chat_responses.clear()
             self._active_get_chat_requests = 0
@@ -82,6 +84,15 @@ class FakeTelegram:
     async def set_invalid_file_ids(self, request: web.Request) -> web.Response:
         payload = await request.json()
         self._invalid_file_ids = {str(file_id) for file_id in payload.get("file_ids", [])}
+        return web.json_response({"ok": True})
+
+    async def set_media_response_types(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        response_types = {str(method): str(media_type) for method, media_type in payload.get("responses", {}).items()}
+        if unsupported := set(response_types.values()) - {"photo", "animation", "video", "document", "none"}:
+            raise web.HTTPBadRequest(text=f"Unsupported media response types: {sorted(unsupported)}")
+
+        self._media_response_types = response_types
         return web.json_response({"ok": True})
 
     async def set_get_chat_responses(self, request: web.Request) -> web.Response:
@@ -198,11 +209,23 @@ class FakeTelegram:
             case "sendMessage":
                 result = self._message_from_payload(payload)
             case "sendPhoto":
-                result = self._sent_media_message_from_payload(payload, media_key="photo")
+                result = self._sent_media_message_from_payload(
+                    payload,
+                    media_key="photo",
+                    response_media_key=self._media_response_types.get(method),
+                )
             case "sendAnimation":
-                result = self._sent_media_message_from_payload(payload, media_key="animation")
+                result = self._sent_media_message_from_payload(
+                    payload,
+                    media_key="animation",
+                    response_media_key=self._media_response_types.get(method),
+                )
             case "sendVideo":
-                result = self._sent_media_message_from_payload(payload, media_key="video")
+                result = self._sent_media_message_from_payload(
+                    payload,
+                    media_key="video",
+                    response_media_key=self._media_response_types.get(method),
+                )
             case "copyMessage":
                 self._next_message_id += 1
                 result = {"message_id": self._next_message_id}
@@ -330,11 +353,21 @@ class FakeTelegram:
             ]
         return message
 
-    def _sent_media_message_from_payload(self, payload: dict[str, Any], *, media_key: str) -> dict[str, Any]:
+    def _sent_media_message_from_payload(
+        self,
+        payload: dict[str, Any],
+        *,
+        media_key: str,
+        response_media_key: str | None,
+    ) -> dict[str, Any]:
         message = self._message_from_payload(payload)
+        message.pop("text", None)
         media_id = str(payload.get(media_key) or f"functional-{media_key}-file-id")
+        response_media_key = response_media_key or media_key
 
-        if media_key == "animation":
+        if response_media_key == "none":
+            return message
+        if response_media_key == "animation":
             message["animation"] = {
                 "file_id": "functional-animation-file-id" if _is_uploaded_media(media_id) else media_id,
                 "file_unique_id": "functional-animation-file-unique-id",
@@ -342,7 +375,7 @@ class FakeTelegram:
                 "height": 1,
                 "duration": 1,
             }
-        elif media_key == "video":
+        elif response_media_key == "video":
             message["video"] = {
                 "file_id": "functional-video-file-id" if _is_uploaded_media(media_id) else media_id,
                 "file_unique_id": "functional-video-file-unique-id",
@@ -350,7 +383,7 @@ class FakeTelegram:
                 "height": 1,
                 "duration": 1,
             }
-        else:
+        elif response_media_key == "photo":
             message["photo"] = [
                 {
                     "file_id": "functional-photo-file-id" if _is_uploaded_media(media_id) else media_id,
@@ -359,6 +392,12 @@ class FakeTelegram:
                     "height": 1,
                 }
             ]
+        else:
+            message["document"] = {
+                "file_id": "functional-document-file-id",
+                "file_unique_id": "functional-document-file-unique-id",
+                "file_name": "functional-document.bin",
+            }
 
         return message
 
@@ -421,6 +460,7 @@ def create_app() -> web.Application:
     app.router.add_post("/test/release-method", fake.release_method)
     app.router.add_post("/test/forbidden-chats", fake.set_forbidden_chats)
     app.router.add_post("/test/invalid-file-ids", fake.set_invalid_file_ids)
+    app.router.add_post("/test/media-response-types", fake.set_media_response_types)
     app.router.add_post("/test/get-chat-responses", fake.set_get_chat_responses)
     app.router.add_get("/test/wait", fake.wait_for_requests)
     app.router.add_get("/test/get-chat-stats", fake.get_chat_stats)

@@ -8,7 +8,11 @@ from time import monotonic
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 
-from cringe_pics_telebot.bot.media import get_message_media_file_ids
+from cringe_pics_telebot.bot.media import (
+    MediaDeliveryReceipt,
+    get_message_content_type,
+    get_message_media_file_ids,
+)
 from cringe_pics_telebot.repositories import redis as cache
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
@@ -26,7 +30,7 @@ MATERIALIZATION_LEASE_TTL = timedelta(seconds=30)
 MATERIALIZATION_WAIT_TIMEOUT = timedelta(seconds=30)
 MATERIALIZATION_POLL_INTERVAL = 0.1
 
-type MediaSender = Callable[[LinkedMedia | CachedMedia], Awaitable[Message]]
+type MediaSender = Callable[[LinkedMedia | CachedMedia], Awaitable[MediaDeliveryReceipt]]
 type Sleep = Callable[[float], Awaitable[None]]
 type Clock = Callable[[], float]
 
@@ -51,7 +55,8 @@ async def deliver_category_media(
         _ensure_same_active_revision(current, expected=media)
         if current.telegram_file_id is not None:
             try:
-                return await send(_cached_media(current))
+                receipt = await send(_cached_media(current))
+                return receipt.message
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -94,16 +99,9 @@ async def _materialize_as_lease_owner(
         download_url, *_ = await get_download_urls([media.source_path])
         if download_url is None:
             raise MediaDownloadUrlError(media.source_path)
-        message = await send(_linked_media(media, download_url))
-        telegram_file_id, telegram_file_unique_id = get_message_media_file_ids(message)
-        async with transaction():
-            await materialize_category_media(
-                media_id=media.id,
-                source_revision=media.source_revision,
-                telegram_file_id=telegram_file_id,
-                telegram_file_unique_id=telegram_file_unique_id,
-            )
-        return message
+        receipt = await send(_linked_media(media, download_url))
+        await _materialize_delivered_media(media, receipt=receipt)
+        return receipt.message
     finally:
         try:
             await cache.delete_if_value(key=lease_key, value=lease_token, cls=str)
@@ -111,6 +109,41 @@ async def _materialize_as_lease_owner(
             raise
         except Exception:
             logger.exception("Failed to release media materialization lease for media %d", media.id)
+
+
+async def _materialize_delivered_media(media: CategoryMedia, *, receipt: MediaDeliveryReceipt) -> None:
+    try:
+        telegram_file_id, telegram_file_unique_id = get_message_media_file_ids(
+            receipt.message,
+            expected_type=media.telegram_media_type,
+        )
+        async with transaction():
+            await materialize_category_media(
+                media_id=media.id,
+                source_revision=media.source_revision,
+                telegram_file_id=telegram_file_id,
+                telegram_file_unique_id=telegram_file_unique_id,
+            )
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        fields = ",".join(_present_media_fields(receipt.message)) or "none"
+        logger.error(
+            "Failed to materialize delivered media media_id=%d source_path=%s expected_media_type=%s "
+            "bot_api_method=%s message_id=%d content_type=%s present_media_fields=%s error_type=%s",
+            media.id,
+            media.source_path,
+            media.telegram_media_type.value,
+            receipt.bot_api_method,
+            receipt.message.message_id,
+            get_message_content_type(receipt.message),
+            fields,
+            type(error).__name__,
+        )
+
+
+def _present_media_fields(message: Message) -> tuple[str, ...]:
+    return tuple(field for field in ("photo", "animation", "video", "document") if getattr(message, field) is not None)
 
 
 async def _get_current_media(media_id: int) -> CategoryMedia:
