@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from aiogram.types import Message
 
+from cringe_pics_telebot.bot.media import MediaDeliveryReceipt
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
     confirm_user_media_cycle_reservation,
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 MEDIA_RESERVATION_TTL = timedelta(minutes=5)
 
 type TokenFactory = Callable[[], str]
-type MediaSender = Callable[[LinkedMedia | CachedMedia], Awaitable[Message]]
+type MediaSender = Callable[[LinkedMedia | CachedMedia], Awaitable[MediaDeliveryReceipt]]
 
 
 @dataclass(frozen=True, slots=True)

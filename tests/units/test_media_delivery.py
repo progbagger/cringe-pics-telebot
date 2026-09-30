@@ -1,7 +1,7 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,6 +10,7 @@ from aiogram.methods import SendPhoto
 from aiogram.types import Message
 from hamcrest import assert_that, equal_to, has_length, instance_of, same_instance
 
+from cringe_pics_telebot.bot.media import MediaDeliveryReceipt
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
     CategoryMediaStatus,
@@ -29,7 +30,8 @@ def no_database_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_ready_media_is_sent_without_redis_or_yandex(monkeypatch: pytest.MonkeyPatch) -> None:
-    send = AsyncMock(return_value=_message())
+    message = _message()
+    send = AsyncMock(return_value=_receipt(message))
     acquire = AsyncMock()
     download = AsyncMock()
     monkeypatch.setattr(media_delivery.cache, "set_if_absent", acquire)
@@ -37,7 +39,7 @@ async def test_ready_media_is_sent_without_redis_or_yandex(monkeypatch: pytest.M
 
     result = await media_delivery.deliver_category_media(_media(file_id="ready-file-id"), send=send)
 
-    assert_that(result, same_instance(send.return_value))
+    assert_that(result, same_instance(message))
     assert_that(send.await_args_list, has_length(1))
     sent_media = send.await_args_list[0].args[0]
     assert_that(sent_media, instance_of(CachedMedia))
@@ -48,7 +50,7 @@ async def test_ready_media_is_sent_without_redis_or_yandex(monkeypatch: pytest.M
 
 async def test_pending_media_is_materialized_after_real_send(monkeypatch: pytest.MonkeyPatch) -> None:
     media = _media()
-    send = AsyncMock(return_value=_message())
+    send = AsyncMock(return_value=_receipt())
     monkeypatch.setattr(media_delivery.cache, "set_if_absent", AsyncMock(return_value=True))
     release = AsyncMock(return_value=True)
     monkeypatch.setattr(media_delivery.cache, "delete_if_value", release)
@@ -56,7 +58,7 @@ async def test_pending_media_is_materialized_after_real_send(monkeypatch: pytest
     monkeypatch.setattr(
         media_delivery,
         "get_message_media_file_ids",
-        lambda message: ("telegram-file-id", "telegram-unique-id"),
+        lambda message, *, expected_type: ("telegram-file-id", "telegram-unique-id"),
     )
     materialize = AsyncMock(return_value=_media(file_id="telegram-file-id"))
     monkeypatch.setattr(media_delivery, "materialize_category_media", materialize)
@@ -89,11 +91,11 @@ async def test_concurrent_delivery_uploads_pending_revision_once(monkeypatch: py
         acquire_calls += 1
         return acquire_calls == 1
 
-    async def send(image: LinkedMedia | CachedMedia) -> Message:
+    async def send(image: LinkedMedia | CachedMedia) -> MediaDeliveryReceipt:
         if isinstance(image, LinkedMedia):
             owner_started.set()
             await allow_owner_to_finish.wait()
-        return _message()
+        return _receipt()
 
     async def materialize(**kwargs) -> CategoryMedia:
         materialized.set()
@@ -106,7 +108,11 @@ async def test_concurrent_delivery_uploads_pending_revision_once(monkeypatch: py
     monkeypatch.setattr(media_delivery.cache, "delete_if_value", AsyncMock(return_value=True))
     download = AsyncMock(return_value=["https://media.test/image.png"])
     monkeypatch.setattr(media_delivery, "get_download_urls", download)
-    monkeypatch.setattr(media_delivery, "get_message_media_file_ids", lambda message: ("telegram-file-id", "unique"))
+    monkeypatch.setattr(
+        media_delivery,
+        "get_message_media_file_ids",
+        lambda message, *, expected_type: ("telegram-file-id", "unique"),
+    )
     monkeypatch.setattr(media_delivery, "materialize_category_media", materialize)
     monkeypatch.setattr(media_delivery, "get_category_media", AsyncMock(return_value=ready))
 
@@ -135,7 +141,7 @@ async def test_invalid_file_id_is_cleared_and_retried_once(monkeypatch: pytest.M
                 method=SendPhoto(chat_id=1, photo="invalid-file-id"),
                 message="Bad Request: wrong file identifier/HTTP URL specified",
             ),
-            _message(),
+            _receipt(),
         ]
     )
     invalidate = AsyncMock(return_value=pending)
@@ -143,7 +149,11 @@ async def test_invalid_file_id_is_cleared_and_retried_once(monkeypatch: pytest.M
     monkeypatch.setattr(media_delivery.cache, "set_if_absent", AsyncMock(return_value=True))
     monkeypatch.setattr(media_delivery.cache, "delete_if_value", AsyncMock(return_value=True))
     monkeypatch.setattr(media_delivery, "get_download_urls", AsyncMock(return_value=["https://media.test/image.png"]))
-    monkeypatch.setattr(media_delivery, "get_message_media_file_ids", lambda message: ("new-file-id", "unique"))
+    monkeypatch.setattr(
+        media_delivery,
+        "get_message_media_file_ids",
+        lambda message, *, expected_type: ("new-file-id", "unique"),
+    )
     monkeypatch.setattr(media_delivery, "materialize_category_media", AsyncMock(return_value=None))
 
     await media_delivery.deliver_category_media(ready, send=send)
@@ -154,7 +164,7 @@ async def test_invalid_file_id_is_cleared_and_retried_once(monkeypatch: pytest.M
 
 
 async def test_cancellation_releases_owner_lease_without_materializing(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def cancel_send(image: LinkedMedia | CachedMedia) -> Message:
+    async def cancel_send(image: LinkedMedia | CachedMedia) -> MediaDeliveryReceipt:
         raise asyncio.CancelledError
 
     monkeypatch.setattr(media_delivery.cache, "set_if_absent", AsyncMock(return_value=True))
@@ -169,6 +179,71 @@ async def test_cancellation_releases_owner_lease_without_materializing(monkeypat
 
     release.assert_awaited_once()
     materialize.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failure_stage", ["extract", "persist"])
+async def test_post_send_materialization_failure_keeps_delivery_success(
+    failure_stage: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    message = _message()
+    send = AsyncMock(return_value=_receipt(message))
+    monkeypatch.setattr(media_delivery.cache, "set_if_absent", AsyncMock(return_value=True))
+    monkeypatch.setattr(media_delivery.cache, "delete_if_value", AsyncMock(return_value=True))
+    monkeypatch.setattr(media_delivery, "get_download_urls", AsyncMock(return_value=["https://media.test/image.png"]))
+    materialize = AsyncMock()
+    monkeypatch.setattr(media_delivery, "materialize_category_media", materialize)
+
+    if failure_stage == "extract":
+        monkeypatch.setattr(
+            media_delivery,
+            "get_message_media_file_ids",
+            lambda message, *, expected_type: (_ for _ in ()).throw(ValueError("private-file-id")),
+        )
+    else:
+        monkeypatch.setattr(
+            media_delivery,
+            "get_message_media_file_ids",
+            lambda message, *, expected_type: ("private-file-id", "private-file-unique-id"),
+        )
+        materialize.side_effect = RuntimeError("private-file-id")
+
+    with caplog.at_level(logging.ERROR, logger=media_delivery.__name__):
+        result = await media_delivery.deliver_category_media(_media(), send=send)
+
+    assert_that(result, same_instance(message))
+    send.assert_awaited_once()
+    if failure_stage == "extract":
+        materialize.assert_not_awaited()
+    else:
+        materialize.assert_awaited_once()
+    assert_that(caplog.messages, has_length(1))
+    assert "Failed to materialize delivered media media_id=7" in caplog.messages[0]
+    assert "bot_api_method=sendPhoto" in caplog.messages[0]
+    assert "private-file-id" not in caplog.messages[0]
+
+
+async def test_post_send_materialization_cancellation_is_propagated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(media_delivery.cache, "set_if_absent", AsyncMock(return_value=True))
+    release = AsyncMock(return_value=True)
+    monkeypatch.setattr(media_delivery.cache, "delete_if_value", release)
+    monkeypatch.setattr(media_delivery, "get_download_urls", AsyncMock(return_value=["https://media.test/image.png"]))
+    monkeypatch.setattr(
+        media_delivery,
+        "get_message_media_file_ids",
+        lambda message, *, expected_type: ("telegram-file-id", "telegram-unique-id"),
+    )
+    monkeypatch.setattr(
+        media_delivery,
+        "materialize_category_media",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await media_delivery.deliver_category_media(_media(), send=AsyncMock(return_value=_receipt()))
+
+    release.assert_awaited_once()
 
 
 def _media(*, file_id: str | None = None) -> CategoryMedia:
@@ -193,4 +268,15 @@ def _media(*, file_id: str | None = None) -> CategoryMedia:
 
 
 def _message() -> Message:
-    return cast(Message, object())
+    return Message.model_validate(
+        {
+            "message_id": 101,
+            "date": datetime(2026, 8, 19, tzinfo=UTC),
+            "chat": {"id": 42, "type": "private"},
+            "text": "delivered",
+        }
+    )
+
+
+def _receipt(message: Message | None = None) -> MediaDeliveryReceipt:
+    return MediaDeliveryReceipt(message=message or _message(), bot_api_method="sendPhoto")
