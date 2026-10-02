@@ -1455,6 +1455,56 @@ async def set_functional_subscription_folder_members(
 
 
 @pytest.fixture
+async def read_functional_subscription_folders(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[tuple[FunctionalSubscriptionFolder, ...]]]:
+    async def read() -> tuple[FunctionalSubscriptionFolder, ...]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT
+                    folder.id,
+                    folder.name,
+                    member.subscription_type_id
+                FROM subscription_category_folders AS folder
+                LEFT JOIN subscription_category_folder_members AS member ON member.folder_id = folder.id
+                ORDER BY folder.id, member.subscription_type_id
+                """
+            )
+        finally:
+            await connection.close()
+
+        folders: dict[int, FunctionalSubscriptionFolder] = {}
+        member_ids: dict[int, list[int]] = {}
+        for row in rows:
+            folders[row["id"]] = FunctionalSubscriptionFolder(row["id"], row["name"], ())
+            if row["subscription_type_id"] is not None:
+                member_ids.setdefault(row["id"], []).append(row["subscription_type_id"])
+
+        return tuple(
+            FunctionalSubscriptionFolder(folder.id, folder.name, tuple(member_ids.get(folder.id, ())))
+            for folder in folders.values()
+        )
+
+    return read
+
+
+@pytest.fixture
+async def delete_functional_subscription_folder(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[None]]:
+    async def delete(folder_id: int) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.execute("DELETE FROM subscription_category_folders WHERE id = $1", folder_id)
+        finally:
+            await connection.close()
+
+    return delete
+
+
+@pytest.fixture
 async def create_functional_admin_broadcast(
     docker_compose: DependencyPorts,
 ) -> Callable[..., Awaitable[int]]:

@@ -70,7 +70,7 @@ async def test_admin_access_and_reply_button_follow_database_without_restart(
     )
     assert_that(
         _inline_keyboard_button_texts(admin_panel["payload"]),
-        equal_to(["Уведомления", "Управление категориями", "Синхронизировать медиа"]),
+        equal_to(["Уведомления", "Управление категориями", "Управление папками", "Синхронизировать медиа"]),
     )
 
     await set_functional_administrator(user_id=42, enabled=False)
@@ -116,6 +116,11 @@ async def test_non_admin_cannot_forge_admin_callback(
         data=_admin_panel_callback(AdminPanelAction.synchronize_media),
         user_id=999,
         message_id=102,
+    )
+    await fake_telegram_server.push_callback_query(
+        data="af:l:0:0:0:0",
+        user_id=999,
+        message_id=103,
     )
     await fake_telegram_server.push_message(text="synchronization", user_id=999)
     await fake_telegram_server.wait_for_request(
@@ -213,7 +218,7 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
     )
     assert_that(
         _inline_keyboard_button_texts(returned_panel["payload"]),
-        equal_to(["Уведомления", "Управление категориями", "Синхронизировать медиа"]),
+        equal_to(["Уведомления", "Управление категориями", "Управление папками", "Синхронизировать медиа"]),
     )
 
 
