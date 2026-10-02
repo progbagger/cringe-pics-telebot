@@ -20,18 +20,16 @@ from hamcrest import (
     starts_with,
 )
 
-from cringe_pics_telebot.bot.subscription_callback_data import (
-    SubscriptionActionCallbackData,
-    SubscriptionCallbackData,
-    SubscriptionPageCallbackData,
-)
 from cringe_pics_telebot.services.media_sync import MediaSyncSummary
 from tests.functional.conftest import (
     FakeStatsDServer,
     FakeTelegramServer,
     FakeYandexServer,
+    FunctionalSubscriptionFolder,
     FunctionalSubscriptionType,
 )
+
+FOLDER_ACTIONS = ("Подписаться на все", "Отписаться от всех", "Назад")
 
 
 @pytest.fixture(autouse=True)
@@ -148,6 +146,292 @@ async def test_subscription_list_formats_annual_schedules_and_prompts_for_missin
     assert_that(request["payload"]["text"], contains_string("<code>/birthday DD.MM</code>"))
 
 
+async def test_subscription_folder_groups_scheduled_categories_without_joining_delivery_surfaces(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    seed_functional_subscription_folders: Callable[[tuple[FunctionalSubscriptionFolder, ...]], Awaitable[None]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(
+                1,
+                "/new-year",
+                time(9),
+                "new-year",
+                schedule_kind="annual_date",
+                annual_date=(1, 1),
+            ),
+            FunctionalSubscriptionType(
+                2,
+                "/birthday",
+                time(10),
+                "birthday",
+                schedule_kind="annual_birthday",
+            ),
+            FunctionalSubscriptionType(3, "/halloween", time(20), "halloween"),
+            FunctionalSubscriptionType(4, "/other", time(12), "other"),
+            FunctionalSubscriptionType(5, "/inactive", time(13), "inactive", is_active=False),
+            FunctionalSubscriptionType(6, "/instant", None, "instant"),
+        )
+    )
+    await seed_functional_subscription_folders((FunctionalSubscriptionFolder(10, "Праздники", (1, 2, 3, 5, 6)),))
+
+    await fake_telegram_server.push_message(text="/subscriptions")
+    root = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_subscription_list_answer)
+
+    assert_that(
+        _inline_keyboard_button_texts(root["payload"]),
+        equal_to(["📁 Праздники", "❌ /other – 12:00 · ежедневно"]),
+    )
+    assert_that(root["payload"]["text"], contains_string("<code>/birthday DD.MM</code>"))
+
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(root["payload"], "📁 Праздники") or "",
+    )
+    folder = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Папка «Праздники»" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(folder["payload"]),
+        equal_to(
+            [
+                "❌ /new-year – 09:00 · ежегодно 01.01",
+                "❌ /birthday – 10:00 · ежегодно в твой день рождения",
+                "❌ /halloween – 20:00 · ежедневно",
+                "Подписаться на все",
+                "Отписаться от всех",
+                "Назад",
+            ]
+        ),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(folder["payload"], "Назад") or "",
+        message_id=101,
+    )
+    returned_root = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "список" in request["payload"].get("text", ""),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(returned_root["payload"]),
+        equal_to(["📁 Праздники", "❌ /other – 12:00 · ежедневно"]),
+    )
+
+    await fake_telegram_server.reset()
+    await fake_telegram_server.push_message(text="Праздники")
+    start = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_start_answer)
+    reply_buttons = _reply_keyboard_button_texts(start["payload"])
+    assert_that(reply_buttons, has_item("/new-year"))
+    assert_that(reply_buttons, has_item("/instant"))
+    assert "Праздники" not in reply_buttons
+    assert "/inactive" not in reply_buttons
+    assert_that(await fake_telegram_server.requests(method="editMessageMedia"), empty())
+
+    await fake_telegram_server.push_inline_query(query="Праздники", query_id="folder-not-inline")
+    inline_answer = await fake_telegram_server.wait_for_request(
+        "answerInlineQuery",
+        predicate=lambda request: request["payload"].get("inline_query_id") == "folder-not-inline",
+    )
+    assert_that(inline_answer["payload"]["results"], empty())
+
+
+async def test_subscription_folder_individual_and_bulk_actions_are_idempotent_and_scoped(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    seed_functional_subscription_folders: Callable[[tuple[FunctionalSubscriptionFolder, ...]], Awaitable[None]],
+    create_user_subscription: Callable[..., Awaitable[None]],
+    read_user_subscription_type_ids: Callable[[int], Awaitable[tuple[int, ...]]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(1, "/morning", time(8), "morning"),
+            FunctionalSubscriptionType(2, "/day", time(13), "day"),
+            FunctionalSubscriptionType(3, "/evening", time(19), "evening"),
+            FunctionalSubscriptionType(4, "/outside", time(20), "outside"),
+        )
+    )
+    await seed_functional_subscription_folders((FunctionalSubscriptionFolder(10, "День", (1, 2, 3)),))
+    await create_user_subscription(user_id=42, subscription_type_id=4)
+
+    await fake_telegram_server.push_message(text="/subscriptions")
+    root = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_subscription_list_answer)
+    await fake_telegram_server.push_callback_query(data=_button_callback_data(root["payload"], "📁 День") or "")
+    folder = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Папка «День»" in request["payload"].get("text", ""),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(folder["payload"], "/morning") or "",
+        message_id=101,
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Подписка оформлена!",
+    )
+    individual_update = await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: any(
+            text.startswith("✅ /morning") for text in _inline_keyboard_button_texts(request["payload"])
+        ),
+    )
+    assert_that(await read_user_subscription_type_ids(42), equal_to((1, 4)))
+
+    subscribe_all_callback = _button_callback_data(individual_update["payload"], "Подписаться на все") or ""
+    await fake_telegram_server.push_callback_query(data=subscribe_all_callback, message_id=102)
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Подписки оформлены!",
+    )
+    subscribed_update = await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: (
+            sum(text.startswith("✅ /") for text in _inline_keyboard_button_texts(request["payload"])) == 3
+        ),
+    )
+    assert_that(await read_user_subscription_type_ids(42), equal_to((1, 2, 3, 4)))
+
+    await fake_telegram_server.push_callback_query(data=subscribe_all_callback, message_id=103)
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: (
+            request["payload"].get("callback_query_id") == "callback-103"
+            and request["payload"].get("text") == "Подписки оформлены!"
+        ),
+    )
+    assert_that(await read_user_subscription_type_ids(42), equal_to((1, 2, 3, 4)))
+
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(subscribed_update["payload"], "Отписаться от всех") or "",
+        message_id=104,
+    )
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Подписки удалены!",
+    )
+    assert_that(await read_user_subscription_type_ids(42), equal_to((4,)))
+
+
+async def test_subscription_folder_rejects_stale_member_and_bulk_callbacks(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    seed_functional_subscription_folders: Callable[[tuple[FunctionalSubscriptionFolder, ...]], Awaitable[None]],
+    set_functional_subscription_folder_members: Callable[[int, tuple[int, ...]], Awaitable[None]],
+    set_functional_subscription_type_activity: Callable[[int, bool], Awaitable[None]],
+    count_user_subscriptions: Callable[[int], Awaitable[int]],
+) -> None:
+    await seed_functional_subscription_types(
+        (
+            FunctionalSubscriptionType(1, "/first", time(8), "first"),
+            FunctionalSubscriptionType(2, "/second", time(9), "second"),
+        )
+    )
+    await seed_functional_subscription_folders((FunctionalSubscriptionFolder(10, "Группа", (1, 2)),))
+
+    await fake_telegram_server.push_message(text="/subscriptions")
+    root = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_subscription_list_answer)
+    await fake_telegram_server.push_callback_query(data=_button_callback_data(root["payload"], "📁 Группа") or "")
+    folder = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Папка «Группа»" in request["payload"].get("text", ""),
+    )
+    stale_member_callback = _button_callback_data(folder["payload"], "/first") or ""
+    stale_bulk_callback = _button_callback_data(folder["payload"], "Подписаться на все") or ""
+
+    await set_functional_subscription_folder_members(10, (2,))
+    await fake_telegram_server.push_callback_query(data=stale_member_callback, message_id=101)
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Категория больше недоступна.",
+    )
+    assert_that(await count_user_subscriptions(42), equal_to(0))
+
+    await set_functional_subscription_type_activity(2, False)
+    await fake_telegram_server.push_callback_query(data=stale_bulk_callback, message_id=102)
+    await fake_telegram_server.wait_for_request(
+        "answerCallbackQuery",
+        predicate=lambda request: request["payload"].get("text") == "Папка больше недоступна.",
+    )
+    refreshed_root = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "список" in request["payload"].get("text", ""),
+    )
+    assert_that(_inline_keyboard_button_texts(refreshed_root["payload"]), equal_to(["❌ /first – 08:00 · ежедневно"]))
+    assert_that(await count_user_subscriptions(42), equal_to(0))
+
+
+async def test_subscription_folder_pagination_preserves_inner_page_after_action(
+    bot_process: subprocess.Process,
+    fake_telegram_server: FakeTelegramServer,
+    seed_functional_subscription_types: Callable[[tuple[FunctionalSubscriptionType, ...]], Awaitable[None]],
+    seed_functional_subscription_folders: Callable[[tuple[FunctionalSubscriptionFolder, ...]], Awaitable[None]],
+) -> None:
+    subscription_types = tuple(
+        FunctionalSubscriptionType(
+            id=index + 1,
+            name=f"/folder-category-{index:02d}",
+            send_time=time(index),
+            s3_directory_path=f"folder-category-{index:02d}",
+        )
+        for index in range(9)
+    )
+    await seed_functional_subscription_types(subscription_types)
+    await seed_functional_subscription_folders(
+        (FunctionalSubscriptionFolder(10, "Большая папка", tuple(range(1, 10))),)
+    )
+
+    await fake_telegram_server.push_message(text="/subscriptions")
+    root = await fake_telegram_server.wait_for_request("sendMessage", predicate=_is_subscription_list_answer)
+    sent_messages_before_navigation = len(await fake_telegram_server.requests(method="sendMessage"))
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(root["payload"], "📁 Большая папка") or "",
+    )
+    first_page = await fake_telegram_server.wait_for_request(
+        "editMessageText",
+        predicate=lambda request: "Папка «Большая папка»" in request["payload"].get("text", ""),
+    )
+    assert_that(_inline_keyboard_button_texts(first_page["payload"])[-4:], equal_to([">", *FOLDER_ACTIONS]))
+
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(first_page["payload"], ">") or "",
+        message_id=101,
+    )
+    second_page = await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: any(
+            "/folder-category-08" in text for text in _inline_keyboard_button_texts(request["payload"])
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(second_page["payload"])[-4:],
+        equal_to(["<", *FOLDER_ACTIONS]),
+    )
+
+    await fake_telegram_server.push_callback_query(
+        data=_button_callback_data(second_page["payload"], "/folder-category-08") or "",
+        message_id=102,
+    )
+    updated_second_page = await fake_telegram_server.wait_for_request(
+        "editMessageReplyMarkup",
+        predicate=lambda request: any(
+            text.startswith("✅ /folder-category-08") for text in _inline_keyboard_button_texts(request["payload"])
+        ),
+    )
+    assert_that(
+        _inline_keyboard_button_texts(updated_second_page["payload"])[-4:],
+        equal_to(["<", *FOLDER_ACTIONS]),
+    )
+    assert_that(
+        len(await fake_telegram_server.requests(method="sendMessage")),
+        equal_to(sent_messages_before_navigation),
+    )
+
+
 async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callback(
     bot_process: subprocess.Process,
     fake_telegram_server: FakeTelegramServer,
@@ -205,7 +489,7 @@ async def test_inactive_category_is_hidden_and_rejects_stale_subscription_callba
     assert_that(inline_answer["payload"]["results"], empty())
 
     await fake_telegram_server.reset()
-    await fake_telegram_server.push_callback_query(data=SubscriptionCallbackData(category_id=2, subscribe=True).pack())
+    await fake_telegram_server.push_callback_query(data="subscription:2:1")
     callback_answer = await fake_telegram_server.wait_for_request(
         "answerCallbackQuery",
         predicate=lambda request: request["payload"].get("text") == "Категория больше недоступна.",
@@ -447,7 +731,7 @@ async def test_subscription_navigation_updates_message_and_preserves_page_after_
     assert_that(_inline_keyboard_button_texts(first_page["payload"])[-1], equal_to(">"))
 
     sent_messages_before_navigation = len(await fake_telegram_server.requests(method="sendMessage"))
-    await fake_telegram_server.push_callback_query(data=SubscriptionPageCallbackData(page=1).pack())
+    await fake_telegram_server.push_callback_query(data="subscription_page:1")
     middle_page = await fake_telegram_server.wait_for_request(
         "editMessageReplyMarkup",
         predicate=lambda request: any(
@@ -1457,7 +1741,9 @@ def _is_subscription_list_answer(request: dict[str, Any]) -> bool:
 
 
 def _subscription_callback(*, category_id: int, subscribe: bool, page: int = 0) -> str:
-    return SubscriptionActionCallbackData(category_id=category_id, subscribe=subscribe, page=page).pack()
+    packed_pages = page * 1_000_000
+
+    return f"s:{category_id}:{int(subscribe)}:0:{packed_pages}"
 
 
 def _matches_inline_query_id(request: dict[str, Any], *, query_id: str) -> bool:

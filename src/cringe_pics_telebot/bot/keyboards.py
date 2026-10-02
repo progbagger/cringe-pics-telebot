@@ -11,8 +11,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from cringe_pics_telebot.bot.emojis import Emoji
 from cringe_pics_telebot.bot.inline_pagination import paginate_inline_keyboard
 from cringe_pics_telebot.bot.subscription_callback_data import (
-    SubscriptionActionCallbackData,
+    SubscriptionFolderAction,
+    SubscriptionFolderCallbackData,
+    SubscriptionMenuActionCallbackData,
     SubscriptionPageCallbackData,
+    pack_subscription_pages,
+)
+from cringe_pics_telebot.entities.subscription_menu import (
+    SubscriptionFolderMenu,
+    UserSubscriptionMenu,
 )
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
 from cringe_pics_telebot.repositories.postgres.entities.subscription_type import (
@@ -22,29 +29,35 @@ from cringe_pics_telebot.services.subscription_schedules import format_subscript
 
 
 def create_inline_subscriptions_keyboard(
-    subscriptions: Iterable[SubscriptionInfo],
+    menu: UserSubscriptionMenu,
     *,
     page: int = 0,
 ) -> InlineKeyboardMarkup:
     inline_keyboard_builder = InlineKeyboardBuilder()
-    sorted_subscriptions = sorted(subscriptions, key=lambda subscription: subscription.send_time)
-    current_page = paginate_inline_keyboard(sorted_subscriptions, page)
+    items: list[SubscriptionFolderMenu | SubscriptionInfo] = [
+        *sorted(menu.folders.values(), key=_subscription_folder_sort_key),
+        *sorted(menu.ungrouped_subscriptions, key=_subscription_sort_key),
+    ]
+    current_page = paginate_inline_keyboard(items, page)
 
-    for subscription in current_page.items:
-        emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
-        schedule = format_subscription_schedule(
-            schedule_kind=subscription.schedule_kind,
-            weekdays=subscription.weekdays,
-            annual_date=subscription.annual_date,
-        )
-        inline_keyboard_builder.button(
-            text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')} · {schedule}",
-            callback_data=SubscriptionActionCallbackData(
-                category_id=subscription.id,
-                subscribe=not subscription.subscribed,
-                page=current_page.number,
-            ),
-        )
+    for item in current_page.items:
+        if isinstance(item, SubscriptionFolderMenu):
+            inline_keyboard_builder.button(
+                text=f"📁 {item.folder.name}",
+                callback_data=SubscriptionFolderCallbackData(
+                    action=SubscriptionFolderAction.open,
+                    folder_id=item.folder.id,
+                    pages=pack_subscription_pages(root_page=current_page.number, folder_page=0),
+                ),
+            )
+        else:
+            _add_subscription_button(
+                inline_keyboard_builder,
+                item,
+                folder_id=0,
+                root_page=current_page.number,
+                folder_page=0,
+            )
 
     inline_keyboard_builder.adjust(1, repeat=True)
     navigation = []
@@ -65,6 +78,137 @@ def create_inline_subscriptions_keyboard(
     if navigation:
         inline_keyboard_builder.row(*navigation)
     return inline_keyboard_builder.as_markup()
+
+
+def create_inline_subscription_folder_keyboard(
+    folder: SubscriptionFolderMenu,
+    *,
+    root_page: int,
+    folder_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    subscriptions = sorted(folder.subscriptions, key=_subscription_sort_key)
+    current_page = paginate_inline_keyboard(subscriptions, folder_page)
+
+    for subscription in current_page.items:
+        _add_subscription_button(
+            builder,
+            subscription,
+            folder_id=folder.folder.id,
+            root_page=root_page,
+            folder_page=current_page.number,
+        )
+
+    builder.adjust(1, repeat=True)
+    navigation = []
+    if current_page.previous_number is not None:
+        navigation.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_folder_callback(
+                    SubscriptionFolderAction.page,
+                    folder_id=folder.folder.id,
+                    root_page=root_page,
+                    folder_page=current_page.previous_number,
+                ),
+            )
+        )
+    if current_page.next_number is not None:
+        navigation.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_folder_callback(
+                    SubscriptionFolderAction.page,
+                    folder_id=folder.folder.id,
+                    root_page=root_page,
+                    folder_page=current_page.next_number,
+                ),
+            )
+        )
+    if navigation:
+        builder.row(*navigation)
+
+    builder.row(
+        InlineKeyboardButton(
+            text="Подписаться на все",
+            callback_data=_folder_callback(
+                SubscriptionFolderAction.subscribe_all,
+                folder_id=folder.folder.id,
+                root_page=root_page,
+                folder_page=current_page.number,
+            ),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Отписаться от всех",
+            callback_data=_folder_callback(
+                SubscriptionFolderAction.unsubscribe_all,
+                folder_id=folder.folder.id,
+                root_page=root_page,
+                folder_page=current_page.number,
+            ),
+        )
+    )
+    builder.row(
+        InlineKeyboardButton(
+            text="Назад",
+            callback_data=_folder_callback(
+                SubscriptionFolderAction.back,
+                folder_id=folder.folder.id,
+                root_page=root_page,
+                folder_page=current_page.number,
+            ),
+        )
+    )
+    return builder.as_markup()
+
+
+def _add_subscription_button(
+    builder: InlineKeyboardBuilder,
+    subscription: SubscriptionInfo,
+    *,
+    folder_id: int,
+    root_page: int,
+    folder_page: int,
+) -> None:
+    emoji = Emoji.subscribed if subscription.subscribed else Emoji.unsubscribed
+    schedule = format_subscription_schedule(
+        schedule_kind=subscription.schedule_kind,
+        weekdays=subscription.weekdays,
+        annual_date=subscription.annual_date,
+    )
+    builder.button(
+        text=f"{emoji} {subscription.name} – {subscription.send_time.strftime('%H:%M')} · {schedule}",
+        callback_data=SubscriptionMenuActionCallbackData(
+            category_id=subscription.id,
+            subscribe=not subscription.subscribed,
+            folder_id=folder_id,
+            pages=pack_subscription_pages(root_page=root_page, folder_page=folder_page),
+        ),
+    )
+
+
+def _folder_callback(
+    action: SubscriptionFolderAction,
+    *,
+    folder_id: int,
+    root_page: int,
+    folder_page: int,
+) -> str:
+    return SubscriptionFolderCallbackData(
+        action=action,
+        folder_id=folder_id,
+        pages=pack_subscription_pages(root_page=root_page, folder_page=folder_page),
+    ).pack()
+
+
+def _subscription_sort_key(subscription: SubscriptionInfo) -> tuple[time, str]:
+    return subscription.send_time, subscription.name.casefold()
+
+
+def _subscription_folder_sort_key(folder: SubscriptionFolderMenu) -> str:
+    return folder.folder.name.casefold()
 
 
 def format_category_button_text(subscription_type: SubscriptionType) -> str:

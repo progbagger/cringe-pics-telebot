@@ -1,3 +1,5 @@
+from collections.abc import Collection
+
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -15,28 +17,40 @@ st = subscription_types
 s = subscriptions
 
 
-async def create_subscription(subscription: CreateSubscription) -> Subscription:
+async def create_subscriptions(items: Collection[CreateSubscription]) -> list[Subscription]:
+    if not items:
+        return []
+
     async with get_connection() as conn:
-        row = (
+        rows = (
             await conn.execute(
                 insert(s)
                 .values(
-                    subscription_type_id=subscription.subscription_type_id,
-                    user_id=subscription.user_id,
-                    created_at=subscription.created_at,
+                    [
+                        {
+                            "subscription_type_id": item.subscription_type_id,
+                            "user_id": item.user_id,
+                            "created_at": item.created_at,
+                        }
+                        for item in items
+                    ]
                 )
-                .on_conflict_do_nothing()
+                .on_conflict_do_nothing(
+                    index_elements=[s.c.user_id, s.c.subscription_type_id],
+                )
                 .returning(s)
             )
-        ).fetchone()
-        assert row is not None
+        ).all()
 
-        return Subscription(
+    return [
+        Subscription(
             id=row.id,
             subscription_type_id=row.subscription_type_id,
             user_id=row.user_id,
             created_at=row.created_at,
         )
+        for row in rows
+    ]
 
 
 async def get_user_subscriptions(user_id: int) -> list[SubscriptionInfo]:
@@ -108,11 +122,14 @@ async def get_subscription_users(subscription_type_id: int) -> list[User]:
         ]
 
 
-async def delete_subscription(*, user_id: int, subscription_type_id: int) -> None:
+async def delete_subscriptions(*, user_id: int, subscription_type_ids: Collection[int]) -> None:
+    if not subscription_type_ids:
+        return
+
     async with get_connection() as conn:
         await conn.execute(
-            delete(subscriptions)
-            .where(subscriptions.c.user_id == user_id)
-            .where(subscriptions.c.subscription_type_id == subscription_type_id)
-            .returning()
+            delete(s).where(
+                s.c.user_id == user_id,
+                s.c.subscription_type_id.in_(subscription_type_ids),
+            )
         )
