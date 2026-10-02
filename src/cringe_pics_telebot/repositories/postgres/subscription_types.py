@@ -31,12 +31,18 @@ async def get_subscription_types() -> list[SubscriptionType]:
     return await get_all_subscription_types()
 
 
-async def get_subscription_type(subscription_type_id: int) -> SubscriptionType | None:
+async def get_subscription_type(
+    subscription_type_id: int,
+    *,
+    with_for_update: bool = False,
+) -> SubscriptionType | None:
+    query = select(subscription_types).where(subscription_types.c.id == subscription_type_id)
+    if with_for_update:
+        query = query.with_for_update()
+
     async with get_connection() as conn:
-        row = (
-            await conn.execute(select(subscription_types).where(subscription_types.c.id == subscription_type_id))
-        ).one_or_none()
-        return _subscription_type_from_row(row) if row is not None else None
+        row = (await conn.execute(query)).one_or_none()
+    return _subscription_type_from_row(row) if row is not None else None
 
 
 async def get_subscription_type_by_name(name: str) -> SubscriptionType | None:

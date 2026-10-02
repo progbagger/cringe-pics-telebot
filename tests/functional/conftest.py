@@ -76,6 +76,13 @@ class FunctionalSubscriptionType:
 
 
 @dataclass(frozen=True, slots=True)
+class FunctionalSubscriptionFolder:
+    id: int
+    name: str
+    subscription_type_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class DependencyPorts:
     postgres: int
     redis: int
@@ -542,6 +549,46 @@ async def docker_compose() -> AsyncIterator[DependencyPorts]:
         env=_bot_env(dependency_ports),
     )
     await _prepare_pre_weekdays_rows(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "0015",
+        env=_bot_env(dependency_ports),
+    )
+    await _prepare_pre_folder_rows(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "upgrade",
+        "head",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_subscription_duplicates_deduplicated(dependency_ports)
+    await _assert_schema_migrated(dependency_ports)
+    await _run_checked(
+        "uv",
+        "run",
+        "--isolated",
+        "--no-dev",
+        "--group",
+        "migration",
+        "alembic",
+        "downgrade",
+        "0015",
+        env=_bot_env(dependency_ports),
+    )
+    await _assert_subscription_category_folders_absent(dependency_ports)
     await _run_checked(
         "uv",
         "run",
@@ -1237,6 +1284,16 @@ async def seed_functional_subscription_types(
 
 
 @pytest.fixture
+async def seed_functional_subscription_folders(
+    docker_compose: DependencyPorts,
+) -> Callable[[tuple[FunctionalSubscriptionFolder, ...]], Awaitable[None]]:
+    async def seed(folders: tuple[FunctionalSubscriptionFolder, ...]) -> None:
+        await _insert_subscription_folders(docker_compose, folders)
+
+    return seed
+
+
+@pytest.fixture
 async def create_user_subscription(
     docker_compose: DependencyPorts,
 ) -> Callable[..., Awaitable[None]]:
@@ -1347,6 +1404,104 @@ async def count_user_subscriptions(
             await connection.close()
 
     return count
+
+
+@pytest.fixture
+async def read_user_subscription_type_ids(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[tuple[int, ...]]]:
+    async def read(user_id: int) -> tuple[int, ...]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT subscription_type_id
+                FROM subscriptions
+                WHERE user_id = $1
+                ORDER BY subscription_type_id
+                """,
+                user_id,
+            )
+            return tuple(row["subscription_type_id"] for row in rows)
+        finally:
+            await connection.close()
+
+    return read
+
+
+@pytest.fixture
+async def set_functional_subscription_folder_members(
+    docker_compose: DependencyPorts,
+) -> Callable[[int, tuple[int, ...]], Awaitable[None]]:
+    async def set_members(folder_id: int, subscription_type_ids: tuple[int, ...]) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            async with connection.transaction():
+                await connection.execute(
+                    "DELETE FROM subscription_category_folder_members WHERE folder_id = $1",
+                    folder_id,
+                )
+                await connection.executemany(
+                    """
+                    INSERT INTO subscription_category_folder_members(folder_id, subscription_type_id, created_at)
+                    VALUES($1, $2, now())
+                    """,
+                    [(folder_id, subscription_type_id) for subscription_type_id in subscription_type_ids],
+                )
+        finally:
+            await connection.close()
+
+    return set_members
+
+
+@pytest.fixture
+async def read_functional_subscription_folders(
+    docker_compose: DependencyPorts,
+) -> Callable[[], Awaitable[tuple[FunctionalSubscriptionFolder, ...]]]:
+    async def read() -> tuple[FunctionalSubscriptionFolder, ...]:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT
+                    folder.id,
+                    folder.name,
+                    member.subscription_type_id
+                FROM subscription_category_folders AS folder
+                LEFT JOIN subscription_category_folder_members AS member ON member.folder_id = folder.id
+                ORDER BY folder.id, member.subscription_type_id
+                """
+            )
+        finally:
+            await connection.close()
+
+        folders: dict[int, FunctionalSubscriptionFolder] = {}
+        member_ids: dict[int, list[int]] = {}
+        for row in rows:
+            folders[row["id"]] = FunctionalSubscriptionFolder(row["id"], row["name"], ())
+            if row["subscription_type_id"] is not None:
+                member_ids.setdefault(row["id"], []).append(row["subscription_type_id"])
+
+        return tuple(
+            FunctionalSubscriptionFolder(folder.id, folder.name, tuple(member_ids.get(folder.id, ())))
+            for folder in folders.values()
+        )
+
+    return read
+
+
+@pytest.fixture
+async def delete_functional_subscription_folder(
+    docker_compose: DependencyPorts,
+) -> Callable[[int], Awaitable[None]]:
+    async def delete(folder_id: int) -> None:
+        connection = await _create_postgres_connection(docker_compose)
+        try:
+            await connection.execute("DELETE FROM subscription_category_folders WHERE id = $1", folder_id)
+        finally:
+            await connection.close()
+
+    return delete
 
 
 @pytest.fixture
@@ -2022,6 +2177,8 @@ async def _reset_database(dependency_ports: DependencyPorts) -> None:
         await connection.execute(
             """
             TRUNCATE
+                subscription_category_folder_members,
+                subscription_category_folders,
                 user_media_cycle_entries,
                 user_media_cycle_states,
                 media_alias_enrichment_jobs,
@@ -2095,6 +2252,41 @@ async def _prepare_pre_weekdays_rows(dependency_ports: DependencyPorts) -> None:
             VALUES('/migration-null-schedule-probe', NULL, 'migration-null-schedule-probe', now(), now())
             """
         )
+    finally:
+        await connection.close()
+
+
+async def _prepare_pre_folder_rows(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        category_id = await connection.fetchval("SELECT id FROM subscription_types WHERE name = '/migration-probe'")
+        await connection.execute(
+            """
+            INSERT INTO users(id, created_at)
+            VALUES(99, now())
+            ON CONFLICT (id) DO NOTHING
+            """
+        )
+        await connection.executemany(
+            """
+            INSERT INTO subscriptions(user_id, subscription_type_id, created_at)
+            VALUES(99, $1, now())
+            """,
+            [(category_id,), (category_id,)],
+        )
+    finally:
+        await connection.close()
+
+
+async def _assert_subscription_duplicates_deduplicated(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM subscriptions WHERE user_id = 99"),
+            equal_to(1),
+        )
+        await connection.execute("DELETE FROM subscriptions WHERE user_id = 99")
+        await connection.execute("DELETE FROM users WHERE id = 99")
     finally:
         await connection.close()
 
@@ -2211,6 +2403,85 @@ async def _assert_schema_migrated(dependency_ports: DependencyPorts) -> None:
         assert_that(
             await connection.fetchval("SELECT is_active FROM subscription_types WHERE name = '/migration-probe'"),
             is_(True),
+        )
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('subscription_category_folders')"),
+            equal_to("subscription_category_folders"),
+        )
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('subscription_category_folder_members')"),
+            equal_to("subscription_category_folder_members"),
+        )
+        await connection.execute("DELETE FROM subscription_category_folders WHERE name LIKE 'migration-folder-%'")
+        first_folder_id = await connection.fetchval(
+            """
+            INSERT INTO subscription_category_folders(name)
+            VALUES('migration-folder-first')
+            RETURNING id
+            """
+        )
+        second_folder_id = await connection.fetchval(
+            """
+            INSERT INTO subscription_category_folders(name)
+            VALUES('migration-folder-second')
+            RETURNING id
+            """
+        )
+        migration_category_id = await connection.fetchval(
+            "SELECT id FROM subscription_types WHERE name = '/migration-probe'"
+        )
+        await connection.execute(
+            """
+            INSERT INTO subscription_category_folder_members(folder_id, subscription_type_id)
+            VALUES($1, $2)
+            """,
+            first_folder_id,
+            migration_category_id,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO subscription_category_folder_members(folder_id, subscription_type_id)
+                VALUES($1, $2)
+                """,
+                second_folder_id,
+                migration_category_id,
+            )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await connection.execute("INSERT INTO subscription_category_folders(name) VALUES('   ')")
+        with pytest.raises(asyncpg.RestrictViolationError):
+            await connection.execute("DELETE FROM subscription_types WHERE id = $1", migration_category_id)
+        await connection.execute("DELETE FROM subscription_category_folders WHERE id = $1", first_folder_id)
+        assert_that(
+            await connection.fetchval(
+                "SELECT count(*) FROM subscription_category_folder_members WHERE subscription_type_id = $1",
+                migration_category_id,
+            ),
+            equal_to(0),
+        )
+        await connection.execute("DELETE FROM subscription_category_folders WHERE id = $1", second_folder_id)
+        await connection.execute(
+            "DELETE FROM subscriptions WHERE user_id = 1 AND subscription_type_id = $1",
+            migration_category_id,
+        )
+        await connection.execute(
+            """
+            INSERT INTO subscriptions(user_id, subscription_type_id, created_at)
+            VALUES(1, $1, now())
+            """,
+            migration_category_id,
+        )
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await connection.execute(
+                """
+                INSERT INTO subscriptions(user_id, subscription_type_id, created_at)
+                VALUES(1, $1, now())
+                """,
+                migration_category_id,
+            )
+        await connection.execute(
+            "DELETE FROM subscriptions WHERE user_id = 1 AND subscription_type_id = $1",
+            migration_category_id,
         )
         assert_that(
             await connection.fetchval(
@@ -2592,6 +2863,34 @@ async def _assert_annual_schedule_columns_absent(dependency_ports: DependencyPor
         await connection.close()
 
 
+async def _assert_subscription_category_folders_absent(dependency_ports: DependencyPorts) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        assert_that(await connection.fetchval("SELECT to_regclass('subscription_category_folders')"), none())
+        assert_that(
+            await connection.fetchval("SELECT to_regclass('subscription_category_folder_members')"),
+            none(),
+        )
+        assert_that(
+            await connection.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'subscriptions_user_type_key'
+                )
+                """
+            ),
+            is_(False),
+        )
+        assert_that(
+            await connection.fetchval("SELECT count(*) FROM subscription_types WHERE name = '/migration-probe'"),
+            equal_to(1),
+        )
+    finally:
+        await connection.close()
+
+
 async def _assert_media_search_aliases_table_absent(dependency_ports: DependencyPorts) -> None:
     connection = await _create_postgres_connection(dependency_ports)
     try:
@@ -2732,6 +3031,44 @@ async def _insert_subscription_types(
                 max(id) IS NOT NULL
             )
             FROM subscription_types
+            """
+        )
+    finally:
+        await connection.close()
+
+
+async def _insert_subscription_folders(
+    dependency_ports: DependencyPorts,
+    folders: tuple[FunctionalSubscriptionFolder, ...],
+) -> None:
+    connection = await _create_postgres_connection(dependency_ports)
+    try:
+        await connection.executemany(
+            """
+            INSERT INTO subscription_category_folders(id, name, created_at, updated_at)
+            VALUES($1, $2, now(), now())
+            """,
+            [(folder.id, folder.name) for folder in folders],
+        )
+        await connection.executemany(
+            """
+            INSERT INTO subscription_category_folder_members(folder_id, subscription_type_id, created_at)
+            VALUES($1, $2, now())
+            """,
+            [
+                (folder.id, subscription_type_id)
+                for folder in folders
+                for subscription_type_id in folder.subscription_type_ids
+            ],
+        )
+        await connection.execute(
+            """
+            SELECT setval(
+                pg_get_serial_sequence('subscription_category_folders', 'id'),
+                COALESCE(max(id), 1),
+                max(id) IS NOT NULL
+            )
+            FROM subscription_category_folders
             """
         )
     finally:

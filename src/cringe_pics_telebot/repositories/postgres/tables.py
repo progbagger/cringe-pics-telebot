@@ -182,6 +182,40 @@ subscription_types = sa.Table(
     ),
 )
 
+subscription_category_folders = sa.Table(
+    "subscription_category_folders",
+    _metadata,
+    sa.Column("id", sa.BIGINT, primary_key=True, nullable=False, autoincrement=True),
+    sa.Column("name", sa.VARCHAR, nullable=False, unique=True),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+    sa.CheckConstraint(
+        "btrim(name) <> ''",
+        name="subscription_category_folders_name_nonempty",
+    ),
+)
+
+subscription_category_folder_members = sa.Table(
+    "subscription_category_folder_members",
+    _metadata,
+    sa.Column(
+        "folder_id",
+        sa.BIGINT,
+        sa.ForeignKey(subscription_category_folders.c.id, ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    ),
+    sa.Column(
+        "subscription_type_id",
+        sa.BIGINT,
+        sa.ForeignKey(subscription_types.c.id, ondelete="RESTRICT"),
+        primary_key=True,
+        nullable=False,
+        unique=True,
+    ),
+    sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+)
+
 category_media = sa.Table(
     "category_media",
     _metadata,
@@ -405,5 +439,10 @@ subscriptions = sa.Table(
         nullable=False,
     ),
     _time_column("created_at"),
+    sa.UniqueConstraint(
+        "user_id",
+        "subscription_type_id",
+        name="subscriptions_user_type_key",
+    ),
     sa.Index("subscriptions_user_id_idx", _subscriptions_user_id),
 )

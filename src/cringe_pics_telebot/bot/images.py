@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from html import escape
 
 from aiogram import F, Router
@@ -11,6 +12,7 @@ from aiogram.types import (
 
 from cringe_pics_telebot.bot.keyboards import (
     category_button_sort_key,
+    create_inline_subscription_folder_keyboard,
     create_inline_subscriptions_keyboard,
 )
 from cringe_pics_telebot.bot.main_keyboard import without_main_keyboard
@@ -18,7 +20,15 @@ from cringe_pics_telebot.bot.media import MediaDeliveryReceipt, add_image_to_mes
 from cringe_pics_telebot.bot.subscription_callback_data import (
     SubscriptionActionCallbackData,
     SubscriptionCallbackData,
+    SubscriptionFolderAction,
+    SubscriptionFolderCallbackData,
+    SubscriptionMenuActionCallbackData,
     SubscriptionPageCallbackData,
+    unpack_subscription_pages,
+)
+from cringe_pics_telebot.entities.subscription_menu import (
+    SubscriptionFolderMenu,
+    UserSubscriptionMenu,
 )
 from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.entities.user_birthday import UserBirthdaySource
@@ -35,11 +45,16 @@ from cringe_pics_telebot.services.birthdays import (
 )
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import (
+    SubscriptionFolderUnavailableError,
+    SubscriptionMenuLocationUnavailableError,
     SubscriptionTypeUnavailableError,
     get_subscription_types,
-    get_user_subscriptions,
+    get_user_subscription_menu,
+    set_folder_subscriptions,
     subscribe,
+    subscribe_from_menu,
     unsubscribe,
+    unsubscribe_from_menu,
     user_has_birthday,
 )
 from cringe_pics_telebot.services.timezones import (
@@ -54,6 +69,16 @@ from cringe_pics_telebot.services.user_media_cycles import deliver_user_category
 logger = logging.getLogger(__name__)
 
 router = Router(name="main")
+
+
+@dataclass(frozen=True, slots=True)
+class _SubscriptionCallbackParams:
+    category_id: int
+    should_subscribe: bool
+    validate_location: bool
+    folder_id: int | None
+    root_page: int
+    folder_page: int
 
 
 @router.message(Command("start", "help"))
@@ -179,24 +204,10 @@ async def show_subscriptions(message: Message) -> None:
         logger.info("Received message without from_user: %d", message.message_id)
         return
 
-    subscriptions = await get_user_subscriptions(message.from_user.id)
-    timezone_offset = format_timezone_offset(await get_user_timezone_offset(message.from_user.id))
-    birthday_hint = ""
-    if any(
-        item.schedule_kind is SubscriptionScheduleKind.annual_birthday for item in subscriptions
-    ) and not await user_has_birthday(message.from_user.id):
-        birthday_hint = "\n<i>Для рассылки в день рождения укажи дату командой <code>/birthday DD.MM</code>.</i>\n"
+    menu = await get_user_subscription_menu(message.from_user.id)
     await message.answer(
-        text=f"""\
-Вот <b>список</b> твоих подписок.
-
-<b>Кликни</b> на подписку, чтобы <b>подписаться/отписаться</b> от рассылки.
-
-<i>Время категорий — локальное, твой часовой пояс: UTC{timezone_offset}.</i>
-<i>Изменить его можно командой <code>/timezone</code>.</i>\
-{birthday_hint}\
-""",
-        reply_markup=create_inline_subscriptions_keyboard(subscriptions),
+        text=await _subscription_list_text(message.from_user.id, menu),
+        reply_markup=create_inline_subscriptions_keyboard(menu),
     )
 
 
@@ -213,10 +224,8 @@ async def paginate_subscriptions(callback: CallbackQuery) -> None:
             await callback.answer("Список подписок недоступен.", show_alert=True)
             return
 
-        subscriptions = await get_user_subscriptions(callback.from_user.id)
-        await callback.message.edit_reply_markup(
-            reply_markup=create_inline_subscriptions_keyboard(subscriptions, page=page)
-        )
+        menu = await get_user_subscription_menu(callback.from_user.id)
+        await callback.message.edit_reply_markup(reply_markup=create_inline_subscriptions_keyboard(menu, page=page))
         await callback.answer()
     except Exception:
         logger.exception("Failed to change subscription page for user %d", callback.from_user.id)
@@ -224,6 +233,77 @@ async def paginate_subscriptions(callback: CallbackQuery) -> None:
             logger.error("Failed to show alert to user %d", callback.from_user.id)
 
 
+@router.callback_query(SubscriptionFolderCallbackData.filter())
+async def process_subscription_folder(callback: CallbackQuery) -> None:
+    if callback.data is None:
+        logger.error("Received subscription folder callback without data: %d", callback.id)
+        return
+
+    if callback.message is None or isinstance(callback.message, InaccessibleMessage):
+        logger.error("Subscription folder message is not accessible for callback %d", callback.id)
+        await callback.answer("Список подписок недоступен.", show_alert=True)
+        return
+
+    try:
+        params = SubscriptionFolderCallbackData.unpack(callback.data)
+        root_page, folder_page = unpack_subscription_pages(params.pages)
+        if params.action is SubscriptionFolderAction.back:
+            await _edit_subscription_root(callback, root_page=root_page)
+            await callback.answer()
+            return
+
+        menu = await get_user_subscription_menu(callback.from_user.id)
+        folder = menu.find_folder(params.folder_id)
+        if folder is None:
+            await _edit_subscription_root(callback, root_page=root_page, menu=menu)
+            await callback.answer("Папка больше недоступна.", show_alert=True)
+            return
+
+        if params.action in {
+            SubscriptionFolderAction.subscribe_all,
+            SubscriptionFolderAction.unsubscribe_all,
+        }:
+            subscribe_to_all = params.action is SubscriptionFolderAction.subscribe_all
+            try:
+                await set_folder_subscriptions(
+                    user_id=callback.from_user.id,
+                    folder_id=params.folder_id,
+                    subscribe=subscribe_to_all,
+                )
+            except SubscriptionFolderUnavailableError:
+                await _edit_subscription_root(callback, root_page=root_page)
+                await callback.answer("Папка больше недоступна.", show_alert=True)
+                return
+
+            await _refresh_subscription_location(
+                callback,
+                folder_id=params.folder_id,
+                root_page=root_page,
+                folder_page=folder_page,
+            )
+            await callback.answer("Подписки оформлены!" if subscribe_to_all else "Подписки удалены!")
+            return
+
+        markup = create_inline_subscription_folder_keyboard(
+            folder,
+            root_page=root_page,
+            folder_page=folder_page,
+        )
+        if params.action is SubscriptionFolderAction.open:
+            await callback.message.edit_text(
+                _subscription_folder_text(folder),
+                reply_markup=markup,
+            )
+        else:
+            await callback.message.edit_reply_markup(reply_markup=markup)
+        await callback.answer()
+    except Exception:
+        logger.exception("Failed to process subscription folder for user %d", callback.from_user.id)
+        if not await callback.answer("Что-то пошло не так...", show_alert=True):
+            logger.error("Failed to show alert to user %d", callback.from_user.id)
+
+
+@router.callback_query(SubscriptionMenuActionCallbackData.filter())
 @router.callback_query(SubscriptionActionCallbackData.filter())
 @router.callback_query(SubscriptionCallbackData.filter())
 async def process_subscription(callback: CallbackQuery) -> None:
@@ -231,79 +311,191 @@ async def process_subscription(callback: CallbackQuery) -> None:
         logger.error("Received callback query without data: %d", callback.id)
         return
 
-    subscription_category_id: int | None = None
     try:
-        if callback.data.startswith("subscription_action:"):
-            action_params = SubscriptionActionCallbackData.unpack(callback.data)
-            page = action_params.page
-        else:
-            legacy_params = SubscriptionCallbackData.unpack(callback.data)
-            action_params = SubscriptionActionCallbackData(
-                category_id=legacy_params.category_id,
-                subscribe=legacy_params.subscribe,
-                page=0,
-            )
-            page = 0
-        subscription_category_id = action_params.category_id
-        if action_params.subscribe:
-            try:
-                await subscribe(user_id=callback.from_user.id, subscription_type_id=action_params.category_id)
-            except SubscriptionTypeUnavailableError:
-                logger.info(
-                    "User %d tried to subscribe to unavailable category %d",
-                    callback.from_user.id,
-                    action_params.category_id,
-                )
-                await _refresh_subscription_keyboard(callback, page=page)
-                await callback.answer("Категория больше недоступна.", show_alert=True)
-                return
-
-            logger.info(
-                "User %d subscribed to category %d",
-                callback.from_user.id,
-                action_params.category_id,
-            )
-            await callback.answer("Подписка оформлена!")
-        else:
-            await unsubscribe(
-                user_id=callback.from_user.id,
-                subscription_type_id=action_params.category_id,
-            )
-            logger.info(
-                "User %d unsubscribed from category %d",
-                callback.from_user.id,
-                action_params.category_id,
-            )
-            await callback.answer("Подписка удалена!")
-
-        if callback.message is not None and not isinstance(
-            callback.message,
-            InaccessibleMessage,
-        ):
-            await _refresh_subscription_keyboard(callback, page=page)
-        else:
-            logger.error(
-                "Message is not accessible for user %d in callback %d",
-                callback.from_user.id,
-                callback.id,
-            )
+        await _process_subscription_callback(callback, callback.data)
     except Exception:
-        logger.exception(
-            "Failed to update subscription for user %d and category %s",
-            callback.from_user.id,
-            subscription_category_id,
-        )
+        logger.exception("Failed to update subscription for user %d", callback.from_user.id)
 
         if not await callback.answer("Что-то пошло не так...", show_alert=True):
             logger.error("Failed to show alert to user %d", callback.from_user.id)
 
 
-async def _refresh_subscription_keyboard(callback: CallbackQuery, *, page: int) -> None:
+async def _process_subscription_callback(callback: CallbackQuery, data: str) -> None:
+    params = _unpack_subscription_callback(data)
+    try:
+        await _update_subscription_from_callback(
+            user_id=callback.from_user.id,
+            params=params,
+        )
+    except SubscriptionMenuLocationUnavailableError, SubscriptionTypeUnavailableError:
+        logger.info(
+            "User %d tried to update unavailable category %d",
+            callback.from_user.id,
+            params.category_id,
+        )
+        await _refresh_subscription_location(
+            callback,
+            folder_id=params.folder_id,
+            root_page=params.root_page,
+            folder_page=params.folder_page,
+        )
+        await callback.answer("Категория больше недоступна.", show_alert=True)
+        return
+
+    logger.info(
+        "User %d %s category %d",
+        callback.from_user.id,
+        "subscribed to" if params.should_subscribe else "unsubscribed from",
+        params.category_id,
+    )
+    await callback.answer("Подписка оформлена!" if params.should_subscribe else "Подписка удалена!")
+
+    if callback.message is None or isinstance(callback.message, InaccessibleMessage):
+        logger.error(
+            "Message is not accessible for user %d in callback %d",
+            callback.from_user.id,
+            callback.id,
+        )
+        return
+
+    await _refresh_subscription_location(
+        callback,
+        folder_id=params.folder_id,
+        root_page=params.root_page,
+        folder_page=params.folder_page,
+    )
+
+
+def _unpack_subscription_callback(data: str) -> _SubscriptionCallbackParams:
+    if data.startswith("s:"):
+        menu_params = SubscriptionMenuActionCallbackData.unpack(data)
+        root_page, folder_page = unpack_subscription_pages(menu_params.pages)
+        return _SubscriptionCallbackParams(
+            category_id=menu_params.category_id,
+            should_subscribe=menu_params.subscribe,
+            validate_location=True,
+            folder_id=menu_params.folder_id or None,
+            root_page=root_page,
+            folder_page=folder_page,
+        )
+
+    if data.startswith("subscription_action:"):
+        action_params = SubscriptionActionCallbackData.unpack(data)
+        return _SubscriptionCallbackParams(
+            category_id=action_params.category_id,
+            should_subscribe=action_params.subscribe,
+            validate_location=False,
+            folder_id=None,
+            root_page=action_params.page,
+            folder_page=0,
+        )
+
+    legacy_params = SubscriptionCallbackData.unpack(data)
+    return _SubscriptionCallbackParams(
+        category_id=legacy_params.category_id,
+        should_subscribe=legacy_params.subscribe,
+        validate_location=False,
+        folder_id=None,
+        root_page=0,
+        folder_page=0,
+    )
+
+
+async def _update_subscription_from_callback(*, user_id: int, params: _SubscriptionCallbackParams) -> None:
+    if params.should_subscribe:
+        if params.validate_location:
+            await subscribe_from_menu(
+                user_id=user_id,
+                subscription_type_id=params.category_id,
+                folder_id=params.folder_id,
+            )
+            return
+
+        await subscribe(user_id=user_id, subscription_type_id=params.category_id)
+        return
+
+    if params.validate_location:
+        await unsubscribe_from_menu(
+            user_id=user_id,
+            subscription_type_id=params.category_id,
+            folder_id=params.folder_id,
+        )
+        return
+
+    await unsubscribe(user_id=user_id, subscription_type_id=params.category_id)
+
+
+async def _refresh_subscription_location(
+    callback: CallbackQuery,
+    *,
+    folder_id: int | None,
+    root_page: int,
+    folder_page: int,
+) -> None:
     if callback.message is None or isinstance(callback.message, InaccessibleMessage):
         return
-    subscriptions = await get_user_subscriptions(callback.from_user.id)
+
+    menu = await get_user_subscription_menu(callback.from_user.id)
+    if folder_id is None:
+        await callback.message.edit_reply_markup(
+            reply_markup=create_inline_subscriptions_keyboard(menu, page=root_page)
+        )
+        return
+
+    folder = menu.find_folder(folder_id)
+    if folder is None:
+        await _edit_subscription_root(callback, root_page=root_page, menu=menu)
+        return
+
     await callback.message.edit_reply_markup(
-        reply_markup=create_inline_subscriptions_keyboard(subscriptions, page=page)
+        reply_markup=create_inline_subscription_folder_keyboard(
+            folder,
+            root_page=root_page,
+            folder_page=folder_page,
+        )
+    )
+
+
+async def _edit_subscription_root(
+    callback: CallbackQuery,
+    *,
+    root_page: int,
+    menu: UserSubscriptionMenu | None = None,
+) -> None:
+    if callback.message is None or isinstance(callback.message, InaccessibleMessage):
+        return
+
+    current_menu = menu or await get_user_subscription_menu(callback.from_user.id)
+    await callback.message.edit_text(
+        await _subscription_list_text(callback.from_user.id, current_menu),
+        reply_markup=create_inline_subscriptions_keyboard(current_menu, page=root_page),
+    )
+
+
+async def _subscription_list_text(user_id: int, menu: UserSubscriptionMenu) -> str:
+    timezone_offset = format_timezone_offset(await get_user_timezone_offset(user_id))
+    birthday_hint = ""
+    if any(
+        item.schedule_kind is SubscriptionScheduleKind.annual_birthday for item in menu.subscriptions
+    ) and not await user_has_birthday(user_id):
+        birthday_hint = "\n<i>Для рассылки в день рождения укажи дату командой <code>/birthday DD.MM</code>.</i>\n"
+
+    return f"""\
+Вот <b>список</b> твоих подписок.
+
+<b>Кликни</b> на подписку, чтобы <b>подписаться/отписаться</b> от рассылки.
+
+<i>Время категорий — локальное, твой часовой пояс: UTC{timezone_offset}.</i>
+<i>Изменить его можно командой <code>/timezone</code>.</i>\
+{birthday_hint}\
+"""
+
+
+def _subscription_folder_text(folder: SubscriptionFolderMenu) -> str:
+    return (
+        f"<b>Папка «{escape(folder.folder.name)}»</b>\n\n"
+        "Кликни на категорию, чтобы подписаться или отписаться от рассылки. "
+        "Кнопки внизу изменят все подписки в этой папке."
     )
 
 

@@ -3,6 +3,11 @@ from collections.abc import Collection, Iterable
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from cringe_pics_telebot.entities.admin_subscription_folders import (
+    AdminSubscriptionFolderCategory,
+    AdminSubscriptionFolderEditor,
+)
+from cringe_pics_telebot.entities.subscription_menu import SubscriptionFolder
 from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.repositories.postgres.entities import (
     AdminBroadcast,
@@ -23,6 +28,10 @@ from .admin_category_callback_data import (
 )
 from .admin_media_callback_data import AdminMediaAction, AdminMediaCallbackData
 from .admin_panel_callback_data import AdminPanelAction, AdminPanelCallbackData
+from .admin_subscription_folder_callback_data import (
+    AdminSubscriptionFolderAction,
+    AdminSubscriptionFolderCallbackData,
+)
 from .inline_pagination import paginate_inline_keyboard
 
 
@@ -37,8 +46,156 @@ def create_admin_panel_keyboard() -> InlineKeyboardMarkup:
         callback_data=_category_callback(AdminCategoryAction.categories),
     )
     builder.button(
+        text="Управление папками",
+        callback_data=_subscription_folder_callback(AdminSubscriptionFolderAction.folders),
+    )
+    builder.button(
         text="Синхронизировать медиа",
         callback_data=_admin_panel_callback(AdminPanelAction.synchronize_media),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def create_admin_subscription_folders_keyboard(
+    folders: Iterable[SubscriptionFolder],
+    *,
+    page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    sorted_folders = sorted(folders, key=_subscription_folder_sort_key)
+    current_page = paginate_inline_keyboard(sorted_folders, page)
+    for folder in current_page.items:
+        builder.button(
+            text=f"📁 {folder.name}",
+            callback_data=_subscription_folder_callback(
+                AdminSubscriptionFolderAction.folder,
+                folder_id=folder.id,
+                folder_page=current_page.number,
+            ),
+        )
+    builder.button(
+        text="Создать папку",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.create,
+            folder_page=current_page.number,
+        ),
+    )
+    builder.button(text="Назад", callback_data=_panel_callback())
+    builder.adjust(1)
+    _add_subscription_folder_list_navigation(
+        builder,
+        previous_page=current_page.previous_number,
+        next_page=current_page.next_number,
+    )
+    return builder.as_markup()
+
+
+def create_admin_subscription_folder_keyboard(
+    editor: AdminSubscriptionFolderEditor,
+    *,
+    folder_page: int = 0,
+    category_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    sorted_categories = sorted(editor.categories, key=_subscription_folder_category_sort_key)
+    current_page = paginate_inline_keyboard(sorted_categories, category_page)
+    for category in current_page.items:
+        if category.folder is None:
+            text = f"❌ {category.name}"
+        elif category.folder.id == editor.folder.id:
+            text = f"✅ {category.name}"
+        else:
+            text = f"📁 {category.name} — {category.folder.name}"
+        builder.button(
+            text=text,
+            callback_data=_subscription_folder_callback(
+                AdminSubscriptionFolderAction.toggle_category,
+                folder_id=editor.folder.id,
+                category_id=category.id,
+                folder_page=folder_page,
+                category_page=current_page.number,
+            ),
+        )
+    builder.button(
+        text="Переименовать",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.rename,
+            folder_id=editor.folder.id,
+            folder_page=folder_page,
+            category_page=current_page.number,
+        ),
+    )
+    builder.button(
+        text="Удалить папку",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.delete,
+            folder_id=editor.folder.id,
+            folder_page=folder_page,
+            category_page=current_page.number,
+        ),
+    )
+    builder.button(
+        text="Назад",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.folders,
+            folder_page=folder_page,
+        ),
+    )
+    builder.adjust(1)
+    _add_subscription_folder_category_navigation(
+        builder,
+        folder_id=editor.folder.id,
+        folder_page=folder_page,
+        previous_page=current_page.previous_number,
+        next_page=current_page.next_number,
+    )
+    return builder.as_markup()
+
+
+def create_admin_subscription_folder_form_cancel_keyboard(
+    *,
+    folder_id: int = 0,
+    folder_page: int = 0,
+    category_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Отмена",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.cancel_form,
+            folder_id=folder_id,
+            folder_page=folder_page,
+            category_page=category_page,
+        ),
+    )
+    return builder.as_markup()
+
+
+def create_admin_subscription_folder_delete_keyboard(
+    *,
+    folder_id: int,
+    folder_page: int = 0,
+    category_page: int = 0,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Удалить",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.confirm_delete,
+            folder_id=folder_id,
+            folder_page=folder_page,
+            category_page=category_page,
+        ),
+    )
+    builder.button(
+        text="Отмена",
+        callback_data=_subscription_folder_callback(
+            AdminSubscriptionFolderAction.folder,
+            folder_id=folder_id,
+            folder_page=folder_page,
+            category_page=category_page,
+        ),
     )
     builder.adjust(1)
     return builder.as_markup()
@@ -589,5 +746,98 @@ def _admin_panel_callback(action: AdminPanelAction) -> str:
     return AdminPanelCallbackData(action=action).pack()
 
 
+def _subscription_folder_callback(
+    action: AdminSubscriptionFolderAction,
+    *,
+    folder_id: int = 0,
+    category_id: int = 0,
+    folder_page: int = 0,
+    category_page: int = 0,
+) -> str:
+    return AdminSubscriptionFolderCallbackData(
+        action=action,
+        folder_id=folder_id,
+        category_id=category_id,
+        folder_page=folder_page,
+        category_page=category_page,
+    ).pack()
+
+
 def _panel_callback() -> str:
     return _admin_panel_callback(AdminPanelAction.panel)
+
+
+def _subscription_folder_sort_key(folder: SubscriptionFolder) -> str:
+    return folder.name.casefold()
+
+
+def _subscription_folder_category_sort_key(category: AdminSubscriptionFolderCategory) -> str:
+    return category.name.casefold()
+
+
+def _add_subscription_folder_list_navigation(
+    builder: InlineKeyboardBuilder,
+    *,
+    previous_page: int | None,
+    next_page: int | None,
+) -> None:
+    buttons = []
+    if previous_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_subscription_folder_callback(
+                    AdminSubscriptionFolderAction.folders,
+                    folder_page=previous_page,
+                ),
+            )
+        )
+    if next_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_subscription_folder_callback(
+                    AdminSubscriptionFolderAction.folders,
+                    folder_page=next_page,
+                ),
+            )
+        )
+    if buttons:
+        builder.row(*buttons)
+
+
+def _add_subscription_folder_category_navigation(
+    builder: InlineKeyboardBuilder,
+    *,
+    folder_id: int,
+    folder_page: int,
+    previous_page: int | None,
+    next_page: int | None,
+) -> None:
+    buttons = []
+    if previous_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text="<",
+                callback_data=_subscription_folder_callback(
+                    AdminSubscriptionFolderAction.folder,
+                    folder_id=folder_id,
+                    folder_page=folder_page,
+                    category_page=previous_page,
+                ),
+            )
+        )
+    if next_page is not None:
+        buttons.append(
+            InlineKeyboardButton(
+                text=">",
+                callback_data=_subscription_folder_callback(
+                    AdminSubscriptionFolderAction.folder,
+                    folder_id=folder_id,
+                    folder_page=folder_page,
+                    category_page=next_page,
+                ),
+            )
+        )
+    if buttons:
+        builder.row(*buttons)

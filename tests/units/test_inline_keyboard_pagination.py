@@ -16,11 +16,24 @@ from cringe_pics_telebot.bot.admin_keyboards import (
     create_admin_categories_keyboard,
 )
 from cringe_pics_telebot.bot.inline_pagination import paginate_inline_keyboard
-from cringe_pics_telebot.bot.keyboards import create_inline_subscriptions_keyboard
+from cringe_pics_telebot.bot.keyboards import (
+    create_inline_subscription_folder_keyboard,
+    create_inline_subscriptions_keyboard,
+)
 from cringe_pics_telebot.bot.subscription_callback_data import (
     SubscriptionActionCallbackData,
     SubscriptionCallbackData,
+    SubscriptionFolderAction,
+    SubscriptionFolderCallbackData,
+    SubscriptionMenuActionCallbackData,
     SubscriptionPageCallbackData,
+    pack_subscription_pages,
+    unpack_subscription_pages,
+)
+from cringe_pics_telebot.entities.subscription_menu import (
+    SubscriptionFolder,
+    SubscriptionFolderMenu,
+    UserSubscriptionMenu,
 )
 from cringe_pics_telebot.entities.subscription_weekdays import SubscriptionWeekdays
 from cringe_pics_telebot.entities.subscriptions import SubscriptionInfo
@@ -98,7 +111,7 @@ def test_subscription_keyboard_shows_only_available_navigation(
     page: int,
     expected_navigation: list[str],
 ) -> None:
-    keyboard = create_inline_subscriptions_keyboard(_subscriptions(item_count), page=page)
+    keyboard = create_inline_subscriptions_keyboard(_menu(item_count), page=page)
     navigation = [button.text for row in keyboard.inline_keyboard for button in row if button.text in {"<", ">"}]
 
     assert_that(navigation, equal_to(expected_navigation))
@@ -117,6 +130,77 @@ def test_subscription_callbacks_fit_telegram_limit_and_legacy_callback_still_unp
         equal_to(SubscriptionCallbackData(category_id=42, subscribe=True)),
     )
     assert_that(SubscriptionPageCallbackData.unpack("subscription_page:3").page, equal_to(3))
+
+    pages = pack_subscription_pages(root_page=999_999, folder_page=999_999)
+    menu_callback = SubscriptionMenuActionCallbackData(
+        category_id=9_223_372_036_854_775_807,
+        subscribe=True,
+        folder_id=9_223_372_036_854_775_807,
+        pages=pages,
+    ).pack()
+    folder_callback = SubscriptionFolderCallbackData(
+        action=SubscriptionFolderAction.subscribe_all,
+        folder_id=9_223_372_036_854_775_807,
+        pages=pages,
+    ).pack()
+
+    assert len(menu_callback.encode()) <= 64
+    assert len(folder_callback.encode()) <= 64
+    assert_that(unpack_subscription_pages(pages), equal_to((999_999, 999_999)))
+
+
+def test_subscription_root_keyboard_places_folders_before_ungrouped_categories() -> None:
+    menu = UserSubscriptionMenu(
+        folders={
+            7: SubscriptionFolderMenu(
+                folder=SubscriptionFolder(id=7, name="Праздники"),
+                subscriptions=tuple(_subscriptions(2)),
+            ),
+        },
+        ungrouped_subscriptions=tuple(_subscriptions(2, start=2)),
+    )
+
+    keyboard = create_inline_subscriptions_keyboard(menu, page=0)
+    rows = [[button.text for button in row] for row in keyboard.inline_keyboard]
+
+    assert_that(
+        rows,
+        equal_to(
+            [
+                ["📁 Праздники"],
+                ["❌ /category-02 – 02:00 · ежедневно"],
+                ["❌ /category-03 – 03:00 · ежедневно"],
+            ]
+        ),
+    )
+    folder_callback = SubscriptionFolderCallbackData.unpack(keyboard.inline_keyboard[0][0].callback_data or "")
+    assert_that(folder_callback.action, equal_to(SubscriptionFolderAction.open))
+    assert_that(folder_callback.folder_id, equal_to(7))
+
+
+def test_subscription_folder_keyboard_keeps_actions_after_page_navigation() -> None:
+    folder = SubscriptionFolderMenu(
+        folder=SubscriptionFolder(id=7, name="Праздники"),
+        subscriptions=tuple(_subscriptions(9)),
+    )
+
+    keyboard = create_inline_subscription_folder_keyboard(folder, root_page=2, folder_page=0)
+    rows = [[button.text for button in row] for row in keyboard.inline_keyboard]
+
+    assert_that(
+        rows[-4:],
+        equal_to(
+            [
+                [">"],
+                ["Подписаться на все"],
+                ["Отписаться от всех"],
+                ["Назад"],
+            ]
+        ),
+    )
+    member_callback = SubscriptionMenuActionCallbackData.unpack(keyboard.inline_keyboard[0][0].callback_data or "")
+    assert_that(member_callback.folder_id, equal_to(7))
+    assert_that(unpack_subscription_pages(member_callback.pages), equal_to((2, 0)))
 
 
 def test_admin_category_keyboard_sorts_before_paging_and_places_constants_before_navigation() -> None:
@@ -173,7 +257,11 @@ def test_admin_paged_callbacks_fit_telegram_limit() -> None:
     assert len(broadcast_callback.encode()) <= 64
 
 
-def _subscriptions(count: int) -> list[SubscriptionInfo]:
+def _menu(count: int) -> UserSubscriptionMenu:
+    return UserSubscriptionMenu(folders={}, ungrouped_subscriptions=tuple(_subscriptions(count)))
+
+
+def _subscriptions(count: int, *, start: int = 0) -> list[SubscriptionInfo]:
     return [
         SubscriptionInfo(
             id=index + 1,
@@ -182,7 +270,7 @@ def _subscriptions(count: int) -> list[SubscriptionInfo]:
             weekdays=SubscriptionWeekdays.daily(),
             subscribed=False,
         )
-        for index in range(count)
+        for index in range(start, start + count)
     ]
 
 
