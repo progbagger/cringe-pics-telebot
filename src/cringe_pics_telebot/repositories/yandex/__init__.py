@@ -1,10 +1,14 @@
 from .connection import connect as connect
 from .connection import get_connection as get_connection
+from .repo import create_directory as create_directory
 from .repo import download_file as download_file
 from .repo import get_download_urls as get_download_urls
 from .repo import list_dir as list_dir
+from .repo import move_resource as move_resource
 from .yandex import DownloadedFile as DownloadedFile
 from .yandex import Image as Image
+from .yandex import YandexDestinationExistsError as YandexDestinationExistsError
 from .yandex import YandexDownloadTooLargeError as YandexDownloadTooLargeError
+from .yandex import YandexOperationFailedError as YandexOperationFailedError
 from .yandex import YandexS3Client as YandexS3Client
 from .yandex import resource_revision as resource_revision

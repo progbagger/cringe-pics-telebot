@@ -3,6 +3,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import ClientPayloadError
@@ -11,6 +12,7 @@ from pytest import MonkeyPatch
 
 from cringe_pics_telebot.repositories.yandex import repo, yandex
 from cringe_pics_telebot.repositories.yandex.yandex import (
+    YandexDestinationExistsError,
     YandexDownloadTooLargeError,
     YandexS3Client,
     resource_revision,
@@ -141,6 +143,37 @@ async def test_each_download_looks_up_a_new_url(monkeypatch: MonkeyPatch) -> Non
     )
 
 
+async def test_list_dir_does_not_descend_into_duplicate_quarantine(monkeypatch: MonkeyPatch) -> None:
+    response = _FakeResponse(
+        json_value={
+            "_embedded": {
+                "items": [
+                    {
+                        "name": "image-duplicates",
+                        "type": "dir",
+                        "path": "disk:/Приложения/cringe-pics-telebot/day/image-duplicates",
+                    },
+                    {
+                        "name": "image.png",
+                        "type": "file",
+                        "mime_type": "image/png",
+                        "path": "disk:/Приложения/cringe-pics-telebot/day/image.png",
+                        "sha256": "abc",
+                        "size": 12,
+                        "modified": "2026-08-19T00:00:00+00:00",
+                    },
+                ]
+            }
+        }
+    )
+    _install_single_fake_session(monkeypatch, responses=(response,))
+
+    async with YandexS3Client("secret", api_base_url="https://api.example/v1/disk/") as client:
+        images = [image async for image in client.list_dir("day")]
+
+    assert_that([image.path for image in images], contains_exactly("day/image.png"))
+
+
 @pytest.mark.parametrize(
     ("chunks", "content_length"),
     [
@@ -218,6 +251,81 @@ async def test_download_transport_error_closes_active_response(monkeypatch: Monk
     assert download_response.exited is True
 
 
+@pytest.mark.parametrize("status", [201, 409])
+async def test_create_directory_is_idempotent_and_uses_app_path(monkeypatch: MonkeyPatch, status: int) -> None:
+    response = _FakeResponse(status=status)
+    session = _install_single_fake_session(monkeypatch, responses=(response,))
+
+    async with YandexS3Client("secret", api_base_url="https://api.example/v1/disk/") as client:
+        await client.create_directory("day/image-duplicates")
+
+    assert_that(
+        session.request_details,
+        contains_exactly(
+            {
+                "method": "PUT",
+                "url": "https://api.example/v1/disk/resources",
+                "params": {"path": "app:/day/image-duplicates"},
+                "raise_for_status": False,
+            }
+        ),
+    )
+    assert response.exited is True
+
+
+async def test_move_resource_disables_overwrite_and_reports_destination_collision(monkeypatch: MonkeyPatch) -> None:
+    session = _install_single_fake_session(monkeypatch, responses=(_FakeResponse(status=409),))
+
+    async with YandexS3Client("secret", api_base_url="https://api.example/v1/disk/") as client:
+        with pytest.raises(YandexDestinationExistsError, match="day/image-duplicates/image.png"):
+            await client.move_resource(
+                source_path="day/image.png",
+                destination_path="day/image-duplicates/image.png",
+            )
+
+    assert_that(
+        session.request_details,
+        contains_exactly(
+            {
+                "method": "POST",
+                "url": "https://api.example/v1/disk/resources/move",
+                "params": {
+                    "from": "app:/day/image.png",
+                    "path": "app:/day/image-duplicates/image.png",
+                    "overwrite": "false",
+                },
+                "raise_for_status": False,
+            }
+        ),
+    )
+
+
+async def test_move_resource_waits_for_async_operation_without_blocking(monkeypatch: MonkeyPatch) -> None:
+    session = _install_single_fake_session(
+        monkeypatch,
+        responses=(
+            _FakeResponse(status=202, json_value={"href": "https://api.example/operations/42"}),
+            _FakeResponse(json_value={"status": "in-progress"}),
+            _FakeResponse(json_value={"status": "success"}),
+        ),
+    )
+    sleep = AsyncMock()
+
+    async with YandexS3Client("secret", api_base_url="https://api.example/v1/disk/") as client:
+        await client.move_resource(
+            source_path="day/image.png",
+            destination_path="day/image-duplicates/image.png",
+            poll_interval=0.25,
+            sleep=sleep,
+        )
+
+    sleep.assert_awaited_once_with(0.25)
+    assert_that(
+        [request["method"] for request in session.request_details],
+        equal_to(["POST", "GET", "GET"]),
+    )
+
+
 class _ControlledYandexClient:
     def __init__(self, paths: list[str], *, broken_path: str | None = None) -> None:
         self._expected_count = len(paths)
@@ -261,15 +369,17 @@ class _FakeResponse:
     def __init__(
         self,
         *,
-        json_value: dict[str, str] | None = None,
+        json_value: dict[str, Any] | None = None,
         chunks: tuple[bytes, ...] = (),
         content_length: int | None = None,
         headers: dict[str, str] | None = None,
+        status: int = 200,
     ) -> None:
         self._json_value = json_value
         self.content = _FakeContent(chunks)
         self.content_length = content_length
         self.headers = headers or {}
+        self.status = status
         self.exited = False
 
     async def __aenter__(self) -> _FakeResponse:
@@ -278,10 +388,14 @@ class _FakeResponse:
     async def __aexit__(self, *args: object) -> None:
         self.exited = True
 
-    async def json(self) -> dict[str, str]:
+    async def json(self) -> dict[str, Any]:
         if self._json_value is None:
             raise AssertionError("Response has no JSON value")
         return self._json_value
+
+    def raise_for_status(self) -> None:
+        if self.status >= 400:
+            raise AssertionError(f"Unexpected HTTP status in test: {self.status}")
 
 
 class _BlockingContent(_FakeContent):
@@ -313,6 +427,7 @@ class _FakeSession:
         self._responses = iter(responses)
         self.headers = dict(kwargs.get("headers", {}))
         self.requests: list[str] = []
+        self.request_details: list[dict[str, Any]] = []
         self.exited = False
 
     async def __aenter__(self) -> _FakeSession:
@@ -323,6 +438,15 @@ class _FakeSession:
 
     def get(self, url: str, **kwargs: Any) -> _FakeResponse:
         self.requests.append(url)
+        self.request_details.append({"method": "GET", "url": url, **kwargs})
+        return next(self._responses)
+
+    def put(self, url: str, **kwargs: Any) -> _FakeResponse:
+        self.request_details.append({"method": "PUT", "url": url, **kwargs})
+        return next(self._responses)
+
+    def post(self, url: str, **kwargs: Any) -> _FakeResponse:
+        self.request_details.append({"method": "POST", "url": url, **kwargs})
         return next(self._responses)
 
 
@@ -343,3 +467,13 @@ def _install_fake_sessions(
     monkeypatch.setattr(yandex.aiohttp, "ClientSession", create_session)
 
     return sessions
+
+
+def _install_single_fake_session(
+    monkeypatch: MonkeyPatch,
+    *,
+    responses: tuple[_FakeResponse, ...],
+) -> _FakeSession:
+    session = _FakeSession(responses=responses, kwargs={"headers": {"Authorization": "OAuth secret"}})
+    monkeypatch.setattr(yandex.aiohttp, "ClientSession", lambda **kwargs: session)
+    return session
