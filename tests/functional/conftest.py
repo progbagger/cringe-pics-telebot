@@ -400,6 +400,15 @@ class FakeYandexServer:
             body = await response.json()
             return body["result"]
 
+    async def directory(self, directory: str) -> list[dict[str, Any]]:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.base_url}/test/directory", params={"directory": directory}) as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
+
     async def configure_download(
         self,
         *,

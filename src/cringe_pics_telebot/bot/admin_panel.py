@@ -120,6 +120,9 @@ def _media_sync_summary_text(summary: MediaSyncSummary) -> str:
         f"Изменено записей: <b>{summary.changed}</b>\n"
         f"Повторно активировано медиа: <b>{summary.reactivated}</b>\n"
         f"Деактивировано отсутствующее медиа: <b>{summary.deactivated}</b>\n"
+        f"Найдено групп дубликатов: <b>{summary.duplicate_groups}</b>\n"
+        f"Перемещено дубликатов: <b>{summary.duplicates_moved}</b>\n"
+        f"Ошибок перемещения дубликатов: <b>{summary.duplicate_move_failed}</b>\n"
         f"Поставлено заданий на алиасы: <b>{summary.alias_enrichment_queued}</b>"
     )
 

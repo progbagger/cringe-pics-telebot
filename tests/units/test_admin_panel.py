@@ -23,6 +23,9 @@ from cringe_pics_telebot.services.media_sync import MediaSyncSummary
                 reactivated=1,
                 deactivated=1,
                 alias_enrichment_queued=2,
+                duplicate_groups=2,
+                duplicates_moved=3,
+                duplicate_move_failed=1,
             ),
             "<b>Синхронизация медиа завершена</b>\n\n"
             "Обработано категорий: <b>2</b>\n"
@@ -32,6 +35,9 @@ from cringe_pics_telebot.services.media_sync import MediaSyncSummary
             "Изменено записей: <b>1</b>\n"
             "Повторно активировано медиа: <b>1</b>\n"
             "Деактивировано отсутствующее медиа: <b>1</b>\n"
+            "Найдено групп дубликатов: <b>2</b>\n"
+            "Перемещено дубликатов: <b>3</b>\n"
+            "Ошибок перемещения дубликатов: <b>1</b>\n"
             "Поставлено заданий на алиасы: <b>2</b>",
         ),
         (
@@ -44,6 +50,9 @@ from cringe_pics_telebot.services.media_sync import MediaSyncSummary
             "Изменено записей: <b>0</b>\n"
             "Повторно активировано медиа: <b>0</b>\n"
             "Деактивировано отсутствующее медиа: <b>0</b>\n"
+            "Найдено групп дубликатов: <b>0</b>\n"
+            "Перемещено дубликатов: <b>0</b>\n"
+            "Ошибок перемещения дубликатов: <b>0</b>\n"
             "Поставлено заданий на алиасы: <b>0</b>",
         ),
         (

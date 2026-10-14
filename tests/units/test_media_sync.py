@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import UTC, datetime, time, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from hamcrest import assert_that, equal_to, has_length, has_properties, is_, same_instance
@@ -13,6 +13,7 @@ from cringe_pics_telebot.repositories.postgres import (
 )
 from cringe_pics_telebot.repositories.yandex import Image
 from cringe_pics_telebot.services import media_sync
+from cringe_pics_telebot.services.media_deduplication import MediaDeduplicationResult
 
 
 async def test_runner_synchronizes_immediately_then_waits(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,6 +92,87 @@ async def test_lost_lease_does_not_publish_snapshot(monkeypatch: pytest.MonkeyPa
     assert_that(result.categories, equal_to(0))
     assert_that(result.failed, equal_to(1))
     reconcile.assert_not_awaited()
+
+
+async def test_synchronization_reports_deduplication_and_emits_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
+    image = _image("day/image.png")
+    monkeypatch.setattr(
+        media_sync,
+        "get_all_subscription_types",
+        AsyncMock(return_value=[_subscription_type(1, "/day", "day")]),
+    )
+    monkeypatch.setattr(media_sync.cache, "set_if_absent", AsyncMock(return_value=True))
+    monkeypatch.setattr(media_sync.cache, "refresh_if_value", AsyncMock(return_value=True))
+    monkeypatch.setattr(media_sync.cache, "delete_if_value", AsyncMock(return_value=True))
+
+    async def list_images(directory: str):
+        yield image
+
+    monkeypatch.setattr(media_sync, "list_dir", list_images)
+    deduplicate = AsyncMock(
+        return_value=MediaDeduplicationResult(
+            images=(image,),
+            groups=2,
+            moved=3,
+            move_failed=1,
+        )
+    )
+    monkeypatch.setattr(media_sync, "deduplicate_category_media", deduplicate)
+    monkeypatch.setattr(
+        media_sync,
+        "reconcile_category_media_snapshot",
+        AsyncMock(
+            return_value=CategoryMediaReconcileResult(
+                discovered=1,
+                created=1,
+                changed=0,
+                reactivated=0,
+                deactivated=0,
+                unchanged=0,
+                alias_enrichment_queued=0,
+            )
+        ),
+    )
+    metrics = Mock()
+    monkeypatch.setattr(media_sync, "get_metrics_sink", Mock(return_value=metrics))
+
+    result = await media_sync.synchronize_media_catalog()
+
+    assert_that(
+        result,
+        has_properties(duplicate_groups=2, duplicates_moved=3, duplicate_move_failed=1),
+    )
+    deduplicate.assert_awaited_once()
+    assert_that(
+        [(metric.name, metric.value) for metric in metrics.emit.call_args.args[0]],
+        equal_to(
+            [
+                ("media_deduplication.groups", 2),
+                ("media_deduplication.moved", 3),
+                ("media_deduplication.move_failed", 1),
+            ]
+        ),
+    )
+
+
+async def test_lease_heartbeat_refreshes_before_ttl_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleep_calls: asyncio.Queue[float] = asyncio.Queue()
+
+    async def controlled_sleep(seconds: float) -> None:
+        sleep_calls.put_nowait(seconds)
+
+    ensure_lease = AsyncMock(side_effect=media_sync.MediaSyncLeaseLost)
+    heartbeat = asyncio.create_task(
+        media_sync._maintain_media_sync_lease(
+            ensure_lease=ensure_lease,
+            lease_ttl=timedelta(minutes=30),
+            lease_sleep=controlled_sleep,
+        )
+    )
+
+    assert await asyncio.wait_for(sleep_calls.get(), timeout=1) == 600
+    await asyncio.wait_for(heartbeat, timeout=1)
+    ensure_lease.assert_awaited_once_with()
 
 
 @pytest.mark.parametrize(

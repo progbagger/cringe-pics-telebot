@@ -192,7 +192,5 @@ async def test_sync_reconciles_changes_isolates_failures_and_honors_lease(
         assert_that(len(await fake_yandex_server.requests()), equal_to(requests_before_skip))
 
     requests = await fake_yandex_server.requests()
-    assert_that(
-        {request["method"] for request in requests} & {"resources/download", "download"},
-        empty(),
-    )
+    assert_that(sum(request["method"] == "resources/download" for request in requests), equal_to(4))
+    assert_that(sum(request["method"] == "download" for request in requests), equal_to(4))
