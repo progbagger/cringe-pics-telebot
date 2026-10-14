@@ -2,16 +2,26 @@ import argparse
 import asyncio
 import base64
 from datetime import UTC, datetime
+from functools import cache
 from hashlib import sha256
+from io import BytesIO
 from typing import Any
 
 from aiohttp import web
+from PIL import Image as PillowImage
 
-IMAGE_BYTES = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?"
-    b"\x00\x05\xfe\x02\xfeA\xe2p\xb9\x00\x00\x00\x00IEND\xaeB`\x82"
-)
+
+@cache
+def _default_media_bytes(name: str) -> bytes:
+    seed = sha256(name.encode()).digest()
+    pixels = bytearray()
+    for index in range(32 * 32):
+        pixels.extend(sha256(seed + index.to_bytes(2, "big")).digest()[:3])
+
+    image = PillowImage.frombytes("RGB", (32, 32), bytes(pixels))
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 class FakeYandex:
@@ -49,6 +59,10 @@ class FakeYandex:
             self._failed_directories.discard(directory)
             self._directory_overrides[directory] = list(payload.get("images", []))
         return web.json_response({"ok": True})
+
+    async def directory_state(self, request: web.Request) -> web.Response:
+        directory = request.query["directory"].strip("/")
+        return web.json_response({"ok": True, "result": self._directory_overrides.get(directory, [])})
 
     async def configure_download(self, request: web.Request) -> web.Response:
         payload = await request.json()
@@ -93,6 +107,49 @@ class FakeYandex:
 
         return web.json_response({"_embedded": {"items": items}})
 
+    async def create_directory(self, request: web.Request) -> web.Response:
+        params = dict(request.query)
+        self._requests.append({"method": "resources/create", "params": params})
+        directory = params["path"].removeprefix("app:/").strip("/")
+        if directory in self._directory_overrides:
+            return web.json_response({"error": "DiskPathPointsToExistentDirectoryError"}, status=409)
+
+        self._directory_overrides[directory] = []
+        return web.json_response({"path": params["path"]}, status=201)
+
+    async def move_resource(self, request: web.Request) -> web.Response:
+        params = dict(request.query)
+        self._requests.append({"method": "resources/move", "params": params})
+
+        source_path = params["from"].removeprefix("app:/").strip("/")
+        destination_path = params["path"].removeprefix("app:/").strip("/")
+        source_directory, source_name = source_path.rsplit("/", maxsplit=1)
+        destination_directory, destination_name = destination_path.rsplit("/", maxsplit=1)
+        source_images = self._directory_overrides.get(source_directory)
+        if source_images is None:
+            raise web.HTTPNotFound(text="Functional Yandex source directory not found")
+
+        source_index = next(
+            (index for index, image in enumerate(source_images) if str(image["name"]) == source_name),
+            None,
+        )
+        if source_index is None:
+            raise web.HTTPNotFound(text="Functional Yandex source resource not found")
+
+        source_image = source_images[source_index]
+        if move_status := source_image.get("move_status"):
+            return web.json_response({"error": "FunctionalMoveFailure"}, status=int(move_status))
+
+        destination_images = self._directory_overrides.setdefault(destination_directory, [])
+        if any(str(image["name"]) == destination_name for image in destination_images):
+            return web.json_response({"error": "DiskResourceAlreadyExistsError"}, status=409)
+
+        moved_image = dict(source_image)
+        moved_image["name"] = destination_name
+        destination_images.append(moved_image)
+        source_images.pop(source_index)
+        return web.json_response({"path": params["path"]}, status=201)
+
     @staticmethod
     def _resource(directory: str, image: dict[str, Any]) -> dict[str, Any]:
         image_name = str(image["name"])
@@ -101,7 +158,7 @@ class FakeYandex:
             "mime_type": image.get("mime_type", "image/png"),
             "path": f"disk:/Приложения/cringe-pics-telebot/{directory}/{image_name}",
             "sha256": image.get("sha256", sha256(f"{directory}/{image_name}".encode()).hexdigest()),
-            "size": image.get("size", len(IMAGE_BYTES)),
+            "size": image.get("size", len(_default_media_bytes(image_name))),
             "modified": image.get("modified", datetime(2026, 8, 19, tzinfo=UTC).isoformat()),
         }
 
@@ -131,7 +188,7 @@ class FakeYandex:
         if barrier := self._download_barriers.get(name):
             await barrier.wait()
 
-        body = base64.b64decode(configured["content"]) if "content" in configured else IMAGE_BYTES
+        body = base64.b64decode(configured["content"]) if "content" in configured else _default_media_bytes(name)
         return web.Response(
             body=body,
             content_type=configured.get("content_type", "image/png"),
@@ -144,12 +201,15 @@ def create_app() -> web.Application:
     app = web.Application()
     app.router.add_get("/healthz", fake.healthcheck)
     app.router.add_get("/test/requests", fake.list_requests)
+    app.router.add_get("/test/directory", fake.directory_state)
     app.router.add_post("/test/reset", fake.reset)
     app.router.add_post("/test/directory", fake.configure_directory)
     app.router.add_post("/test/download", fake.configure_download)
     app.router.add_post("/test/release-download", fake.release_download)
     app.router.add_get("/test/wait-download", fake.wait_for_download)
     app.router.add_get("/v1/disk/resources", fake.resources)
+    app.router.add_put("/v1/disk/resources", fake.create_directory)
+    app.router.add_post("/v1/disk/resources/move", fake.move_resource)
     app.router.add_get("/v1/disk/resources/download", fake.download_resource)
     app.router.add_get("/download/{path:.*}", fake.download_file)
     return app

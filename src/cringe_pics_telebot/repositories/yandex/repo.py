@@ -39,3 +39,13 @@ async def get_download_urls(paths: Iterable[str]) -> list[str | None]:
 async def download_file(*, path: str, max_bytes: int, timeout: timedelta) -> DownloadedFile:
     async with get_connection() as conn:
         return await conn.download_file(path=path, max_bytes=max_bytes, timeout=timeout)
+
+
+async def create_directory(path: str) -> None:
+    async with get_connection() as conn:
+        await conn.create_directory(path)
+
+
+async def move_resource(*, source_path: str, destination_path: str) -> None:
+    async with get_connection() as conn:
+        await conn.move_resource(source_path=source_path, destination_path=destination_path)

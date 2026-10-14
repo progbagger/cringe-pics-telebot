@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -42,6 +42,12 @@ class DownloadedFile:
 
 
 class YandexDownloadTooLargeError(ValueError): ...
+
+
+class YandexDestinationExistsError(FileExistsError): ...
+
+
+class YandexOperationFailedError(RuntimeError): ...
 
 
 class YandexS3Client:
@@ -216,6 +222,79 @@ class YandexS3Client:
                     content=bytes(content),
                     content_type=response.headers.get("Content-Type"),
                 )
+
+    async def create_directory(self, path: str) -> None:
+        async with self._session.put(
+            self._create_url("/resources", base_url=self._api_base_url),
+            params={"path": self._get_path_with_app(path)},
+            raise_for_status=False,
+        ) as response:
+            if response.status in {201, 409}:
+                return
+
+            response.raise_for_status()
+            raise YandexOperationFailedError(f"Yandex directory creation returned status {response.status}")
+
+    async def move_resource(
+        self,
+        *,
+        source_path: str,
+        destination_path: str,
+        operation_timeout: timedelta = timedelta(minutes=1),
+        poll_interval: float = 0.5,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if operation_timeout.total_seconds() <= 0:
+            raise ValueError("Yandex move operation timeout must be positive")
+        if poll_interval < 0:
+            raise ValueError("Yandex move poll interval must not be negative")
+
+        async with self._session.post(
+            self._create_url("/resources/move", base_url=self._api_base_url),
+            params={
+                "from": self._get_path_with_app(source_path),
+                "path": self._get_path_with_app(destination_path),
+                "overwrite": "false",
+            },
+            raise_for_status=False,
+        ) as response:
+            if response.status == 201:
+                return
+            if response.status == 409:
+                raise YandexDestinationExistsError(destination_path)
+            if response.status != 202:
+                response.raise_for_status()
+                raise YandexOperationFailedError(f"Yandex move returned status {response.status}")
+
+            operation_url = (await response.json())["href"]
+
+        async with asyncio.timeout(operation_timeout.total_seconds()):
+            await self._wait_for_operation(
+                operation_url,
+                poll_interval=poll_interval,
+                sleep=sleep,
+            )
+
+    async def _wait_for_operation(
+        self,
+        operation_url: str,
+        *,
+        poll_interval: float,
+        sleep: Callable[[float], Awaitable[None]],
+    ) -> None:
+        while True:
+            async with self._session.get(operation_url) as response:
+                payload = await response.json()
+
+            status = payload.get("status")
+            if status == "success":
+                return
+            if status == "failed":
+                raise YandexOperationFailedError(f"Yandex move operation failed: {payload}")
+            if status != "in-progress":
+                raise YandexOperationFailedError(f"Yandex move operation returned unknown status: {payload}")
+
+            await sleep(poll_interval)
 
 
 def resource_revision(resource: dict[str, Any]) -> str:

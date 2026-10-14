@@ -28,7 +28,7 @@ from tests.functional.conftest import (
 from tests.functional.enrichment_support import EnrichmentBot, EnrichmentDatabase, FakeOllamaServer
 
 
-def _media_bytes(mime_type: str) -> bytes:
+def _media_bytes(mime_type: str, *, seed: str | None = None) -> bytes:
     with BytesIO() as output:
         colors = ((220, 20, 20), (20, 220, 20), (20, 20, 220))
         if mime_type == "video/mp4":
@@ -45,7 +45,14 @@ def _media_bytes(mime_type: str) -> bytes:
                 for packet in stream.encode():
                     container.mux(packet)
         else:
-            frames = [Image.new("RGB", (16, 16), color) for color in colors]
+            if seed is None:
+                frames = [Image.new("RGB", (16, 16), color) for color in colors]
+            else:
+                digest = sha256(seed.encode()).digest()
+                pixels = bytearray()
+                for index in range(16 * 16):
+                    pixels.extend(sha256(digest + index.to_bytes(2, "big")).digest()[:3])
+                frames = [Image.frombytes("RGB", (16, 16), bytes(pixels))]
             try:
                 if mime_type == "image/gif":
                     frames[0].save(output, format="GIF", save_all=True, append_images=frames[1:], duration=100)
@@ -434,8 +441,11 @@ async def test_failed_job_does_not_cancel_other_media_in_same_batch(
     fake_yandex_server: FakeYandexServer,
     fake_ollama_server: FakeOllamaServer,
 ) -> None:
-    await fake_yandex_server.configure_directory("test", images=[{"name": "corrupt.png"}, {"name": "good.png"}])
-    await fake_yandex_server.configure_download(name="corrupt.png", content=b"invalid image")
+    await fake_yandex_server.configure_directory(
+        "test",
+        images=[{"name": "corrupt.gif", "mime_type": "image/gif"}, {"name": "good.png"}],
+    )
+    await fake_yandex_server.configure_download(name="corrupt.gif", content=b"invalid image")
 
     await _synchronize(enrichment_bot)
     jobs = await enrichment_database.wait_for_jobs(
@@ -445,7 +455,7 @@ async def test_failed_job_does_not_cancel_other_media_in_same_batch(
     assert_that(
         jobs,
         contains_exactly(
-            has_entries(source_path="test/corrupt.png", status="failed", result_class="decode_failed"),
+            has_entries(source_path="test/corrupt.gif", status="failed", result_class="decode_failed"),
             has_entries(source_path="test/good.png", status="succeeded"),
         ),
     )
@@ -685,7 +695,7 @@ async def test_manual_and_background_sync_keep_startup_prompt_until_restart(
         await enrichment_database.wait_for_jobs(lambda jobs: len(jobs) == 1 and jobs[0]["status"] == "succeeded")
 
         prompt_file.write_text(new_prompt, encoding="utf-8")
-        await fake_yandex_server.configure_download(name="second.png", content=_media_bytes("image/png"))
+        await fake_yandex_server.configure_download(name="second.png", content=_media_bytes("image/png", seed="second"))
         await fake_yandex_server.configure_directory("test", images=[{"name": "first.png"}, {"name": "second.png"}])
         jobs = await enrichment_database.wait_for_jobs(
             lambda jobs: len(jobs) == 2 and all(job["status"] == "succeeded" for job in jobs)
@@ -694,7 +704,7 @@ async def test_manual_and_background_sync_keep_startup_prompt_until_restart(
             jobs, contains_exactly(*[has_entries(prompt_sha256=sha256(original_prompt.encode()).hexdigest())] * 2)
         )
 
-    await fake_yandex_server.configure_download(name="third.png", content=_media_bytes("image/png"))
+    await fake_yandex_server.configure_download(name="third.png", content=_media_bytes("image/png", seed="third"))
     await fake_yandex_server.configure_directory(
         "test", images=[{"name": "first.png"}, {"name": "second.png"}, {"name": "third.png"}]
     )

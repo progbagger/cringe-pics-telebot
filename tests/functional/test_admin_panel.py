@@ -187,6 +187,9 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
+        "Найдено групп дубликатов: <b>0</b>",
+        "Перемещено дубликатов: <b>0</b>",
+        "Ошибок перемещения дубликатов: <b>0</b>",
         "Поставлено заданий на алиасы: <b>0</b>",
     ):
         assert_that(result["payload"]["text"], contains_string(expected_line))
@@ -202,10 +205,9 @@ async def test_admin_manually_synchronizes_active_and_inactive_media(
         ],
         equal_to(["app:/day", "app:/inactive"]),
     )
-    assert_that(
-        {request["method"] for request in await fake_yandex_server.requests()} & {"resources/download", "download"},
-        empty(),
-    )
+    yandex_methods = [request["method"] for request in await fake_yandex_server.requests()]
+    assert_that(yandex_methods.count("resources/download"), equal_to(2))
+    assert_that(yandex_methods.count("download"), equal_to(2))
     assert_that(await read_functional_media_alias_enrichment_jobs(), empty())
 
     await fake_telegram_server.push_callback_query(
@@ -299,6 +301,9 @@ async def test_admin_media_sync_shows_partial_result_and_allows_retry(
         "Изменено записей: <b>0</b>",
         "Повторно активировано медиа: <b>0</b>",
         "Деактивировано отсутствующее медиа: <b>0</b>",
+        "Найдено групп дубликатов: <b>0</b>",
+        "Перемещено дубликатов: <b>0</b>",
+        "Ошибок перемещения дубликатов: <b>0</b>",
         "Поставлено заданий на алиасы: <b>0</b>",
     ):
         assert_that(partial_result["payload"]["text"], contains_string(expected_line))
