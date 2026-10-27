@@ -34,11 +34,16 @@ def create_bot(
     token: str,
     *,
     api_base_url: str | None = None,
+    proxy_url: str | None = None,
     main_keyboard_clock: Callable[[], float] = monotonic,
 ) -> Bot:
     session = None
-    if api_base_url is not None:
-        session = AiohttpSession(api=TelegramAPIServer.from_base(api_base_url))
+    if api_base_url is not None or proxy_url is not None:
+        api = TelegramAPIServer.from_base(api_base_url) if api_base_url is not None else None
+        try:
+            session = AiohttpSession(proxy=proxy_url) if api is None else AiohttpSession(api=api, proxy=proxy_url)
+        except ValueError:
+            raise ValueError("Invalid TELEGRAM_PROXY_URL") from None
 
     bot = Bot(token, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML.value))
     bot.session.middleware(MainKeyboardMiddleware(MainKeyboardCache(clock=main_keyboard_clock)))
