@@ -141,6 +141,38 @@ StatsD использует UDP. Проект не запускает Graphite �
 - `SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS` и `ADMIN_BROADCAST_INTERVAL_SECONDS` — интервалы проверки периодических рассылок и административных уведомлений соответственно, по умолчанию 30 секунд; допустимы значения больше нуля и не более 60 секунд;
 - `MEDIA_SYNC_INTERVAL_SECONDS` — интервал общего цикла синхронизации медиа с Яндекс Диска и дней рождения из профилей Telegram, по умолчанию `43200` секунд (12 часов). Первый проход обоих этапов выполняется сразу после запуска; значение должно быть больше нуля.
 
+#### Опционально: прокси только для Telegram
+
+Если Telegram Bot API недоступен напрямую, задайте `TELEGRAM_PROXY_URL`. Например, SOCKS5 без авторизации:
+
+```dotenv
+TELEGRAM_PROXY_URL=socks5://proxy.example.com:1080
+```
+
+С авторизацией credentials можно указать в URL:
+
+```dotenv
+TELEGRAM_PROXY_URL=socks5://user:password@proxy.example.com:1080
+```
+
+Для HTTP tunnel используется та же настройка:
+
+```dotenv
+TELEGRAM_PROXY_URL=http://user:password@proxy.example.com:3128
+```
+
+Поддерживаются HTTP tunnel, SOCKS4(a) и SOCKS5. Если логин или пароль содержит зарезервированные символы URL, закодируйте их percent-encoding. Не выводите значение переменной в логи и диагностические команды.
+
+Прокси применяется только к сессии aiogram: через него идут long polling, отправка сообщений и передача файлов Telegram. Запросы к Яндекс Диску и Ollama, а также подключения к PostgreSQL, Redis и StatsD продолжают использовать обычные сетевые маршруты. Общие переменные `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` и `NO_PROXY` бот для этой настройки не использует.
+
+Если прокси запущен на Docker host, внутри контейнера `127.0.0.1` указывает на сам контейнер. Используйте имя `host.docker.internal`, например:
+
+```dotenv
+TELEGRAM_PROXY_URL=socks5://host.docker.internal:1080
+```
+
+Docker Desktop предоставляет это имя автоматически, а `compose.yml` добавляет mapping через `host-gateway` для Docker Engine под Linux. На Linux прокси должен слушать адрес host gateway или другой интерфейс, доступный из контейнера: сервис, привязанный только к host `127.0.0.1`, через bridge network недоступен. Ограничьте доступ к proxy port сетевым экраном.
+
 #### Опционально: автоматические алиасы через Ollama
 
 По умолчанию фича выключена. Для включения добавьте в `docker/bot/.env`:
