@@ -34,6 +34,8 @@ services:
 
   bot:
     image: ghcr.io/astral-sh/uv:python3.14-trixie
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - ./docker/bot/.env
       - ./docker/postgres/.env

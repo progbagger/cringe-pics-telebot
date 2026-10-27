@@ -97,6 +97,7 @@ async def start_polling(
             bot = create_bot(
                 os.environ["TELEGRAM_BOT_TOKEN"],
                 api_base_url=os.environ.get("TELEGRAM_API_BASE_URL"),
+                proxy_url=os.environ.get("TELEGRAM_PROXY_URL") or None,
                 main_keyboard_clock=main_keyboard_clock,
             )
         except KeyError:

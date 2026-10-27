@@ -88,6 +88,34 @@ class DependencyPorts:
     redis: int
 
 
+@dataclass(slots=True)
+class FakeHTTPProxyServer:
+    proxy_url: str
+    control_url: str
+    process: subprocess.Process
+
+    async def targets(self) -> list[str]:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(f"{self.control_url}/test/targets") as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
+
+    async def wait_for_targets(self, *, count: int = 1, timeout: float = 10) -> list[str]:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                f"{self.control_url}/test/wait",
+                params={"count": count, "timeout": timeout},
+            ) as response,
+        ):
+            response.raise_for_status()
+            body = await response.json()
+            return body["result"]
+
+
 SEEDED_SUBSCRIPTION_TYPES = (
     FunctionalSubscriptionType(1, "/morning", time(8, 0), "morning", ("утро", "утренняя", "с утра")),
     FunctionalSubscriptionType(2, "/day", time(13, 0), "day", ("день", "дневная")),
@@ -376,6 +404,9 @@ class FunctionalBotStarter(Protocol):
         *,
         get_chat_responses: dict[int, list[dict[str, Any]]] | None = None,
         block_get_chat: bool = False,
+        telegram_proxy_url: str | None = None,
+        wait_for_telegram: bool = True,
+        capture_output: bool = False,
     ) -> AbstractAsyncContextManager[RunningFunctionalBot]: ...
 
 
@@ -815,6 +846,34 @@ async def fake_yandex_server() -> AsyncIterator[FakeYandexServer]:
         await _terminate_process(process)
 
 
+@pytest_asyncio.fixture
+async def fake_http_proxy_server() -> AsyncIterator[FakeHTTPProxyServer]:
+    proxy_port = _get_unused_tcp_port()
+    control_port = _get_unused_tcp_port()
+    process = await subprocess.create_subprocess_exec(
+        sys.executable,
+        str(FUNCTIONAL_DIR / "fake_http_proxy.py"),
+        "--proxy-port",
+        str(proxy_port),
+        "--control-port",
+        str(control_port),
+        cwd=ROOT_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    server = FakeHTTPProxyServer(
+        proxy_url=f"http://127.0.0.1:{proxy_port}",
+        control_url=f"http://127.0.0.1:{control_port}",
+        process=process,
+    )
+    await _wait_until_ready(lambda: _http_ready(f"{server.control_url}/healthz"), "fake HTTP proxy")
+
+    try:
+        yield server
+    finally:
+        await _terminate_process(process)
+
+
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def fake_statsd_server() -> AsyncIterator[FakeStatsDServer]:
     http_port = _get_unused_tcp_port()
@@ -1157,6 +1216,9 @@ def start_functional_bot_process(
         *,
         get_chat_responses: dict[int, list[dict[str, Any]]] | None = None,
         block_get_chat: bool = False,
+        telegram_proxy_url: str | None = None,
+        wait_for_telegram: bool = True,
+        capture_output: bool = False,
     ) -> AsyncIterator[RunningFunctionalBot]:
         telegram_port = _get_unused_tcp_port()
         telegram_process = await subprocess.create_subprocess_exec(
@@ -1184,6 +1246,8 @@ def start_functional_bot_process(
             env["STATSD_HOST"] = fake_statsd_server.udp_host
             env["STATSD_PORT"] = str(fake_statsd_server.udp_port)
             env["STATSD_PREFIX"] = "functional-isolated"
+            if telegram_proxy_url is not None:
+                env["TELEGRAM_PROXY_URL"] = telegram_proxy_url
 
             process = await subprocess.create_subprocess_exec(
                 sys.executable,
@@ -1192,10 +1256,11 @@ def start_functional_bot_process(
                 str(_get_unused_tcp_port()),
                 cwd=ROOT_DIR,
                 env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE if capture_output else subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
             )
-            await telegram.wait_for_requests("getMe", timeout=30)
+            if wait_for_telegram:
+                await telegram.wait_for_requests("getMe", timeout=30)
             yield RunningFunctionalBot(process=process, telegram=telegram)
         finally:
             if process is not None:
@@ -2173,6 +2238,7 @@ def run_admin_broadcasts_at(
 
 def _bot_env(dependency_ports: DependencyPorts) -> dict[str, str]:
     env = os.environ.copy()
+    env.pop("TELEGRAM_PROXY_URL", None)
     env.update(BOT_ENV)
     env["POSTGRES_PORT"] = str(dependency_ports.postgres)
     env["REDIS_PORT"] = str(dependency_ports.redis)
