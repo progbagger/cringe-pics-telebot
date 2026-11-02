@@ -43,6 +43,7 @@ from cringe_pics_telebot.services.birthdays import (
     parse_birthday_command,
     set_manual_birthday,
 )
+from cringe_pics_telebot.services.media_delivery_settings import DEFAULT_MEDIA_DELIVERY_MAX_RETRIES
 from cringe_pics_telebot.services.random_image import CachedMedia, LinkedMedia
 from cringe_pics_telebot.services.subscriptions import (
     SubscriptionFolderUnavailableError,
@@ -509,7 +510,12 @@ async def _subscription_type_filter(message: Message) -> dict[str, SubscriptionT
 
 
 @router.message(_subscription_type_filter)
-async def send_image(message: Message, *, subscription_type: SubscriptionType) -> None:
+async def send_image(
+    message: Message,
+    *,
+    subscription_type: SubscriptionType,
+    media_delivery_max_retries: int = DEFAULT_MEDIA_DELIVERY_MAX_RETRIES,
+) -> None:
     if message.text is None or message.from_user is None:
         logger.info("Received message without text or from_user: %d", message.message_id)
         return
@@ -524,6 +530,7 @@ async def send_image(message: Message, *, subscription_type: SubscriptionType) -
             subscription_type_id=subscription_type.id,
             media=media,
             send=lambda image: _add_image_to_chat_message(message=sent_message, image=image),
+            max_retries=media_delivery_max_retries,
         )
 
     except Exception:

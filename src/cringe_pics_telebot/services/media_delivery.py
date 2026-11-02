@@ -61,6 +61,8 @@ async def deliver_category_media(
                 raise
             except Exception as error:
                 if recovered_invalid_file_id or not _is_invalid_file_id_error(error):
+                    if is_media_rejection(error):
+                        raise MediaCandidateError(type(error).__name__) from None
                     raise
                 async with transaction():
                     invalidated = await invalidate_category_media_file_id(
@@ -96,10 +98,19 @@ async def _materialize_as_lease_owner(
 ) -> Message:
     lease_key = _materialization_lease_key(media)
     try:
-        download_url, *_ = await get_download_urls([media.source_path])
+        try:
+            download_url, *_ = await get_download_urls([media.source_path])
+        except Exception as error:
+            raise MediaDownloadUrlError(type(error).__name__) from None
         if download_url is None:
-            raise MediaDownloadUrlError(media.source_path)
-        receipt = await send(_linked_media(media, download_url))
+            raise MediaDownloadUrlError("MediaDownloadUrlError")
+        try:
+            receipt = await send(_linked_media(media, download_url))
+        except Exception as error:
+            if is_media_rejection(error):
+                raise MediaCandidateError(type(error).__name__) from None
+            raise
+
         await _materialize_delivered_media(media, receipt=receipt)
         return receipt.message
     finally:
@@ -190,13 +201,41 @@ def _is_invalid_file_id_error(error: Exception) -> bool:
     return "wrong file identifier" in message or "wrong remote file identifier" in message
 
 
+def is_media_rejection(error: Exception) -> bool:
+    if not isinstance(error, TelegramBadRequest):
+        return False
+    message = error.message.casefold()
+    return any(
+        reason in message
+        for reason in (
+            "wrong file identifier",
+            "wrong remote file identifier",
+            "failed to get http url content",
+            "wrong type of the web page content",
+            "webpage_curl_failed",
+            "image_process_failed",
+            "photo_invalid_dimensions",
+            "video_content_type_invalid",
+            "failed to process video",
+        )
+    )
+
+
 class MediaDeliveryError(RuntimeError): ...
 
 
 class MediaUnavailableError(MediaDeliveryError): ...
 
 
-class MediaDownloadUrlError(MediaDeliveryError): ...
+class MediaCandidateError(MediaDeliveryError):
+    """A failure before a successful send which replacing the candidate may fix."""
+
+    def __init__(self, error_type: str) -> None:
+        self.error_type = error_type
+        super().__init__(error_type)
+
+
+class MediaDownloadUrlError(MediaCandidateError): ...
 
 
 class MediaMaterializationTimeout(MediaDeliveryError): ...

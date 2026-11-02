@@ -12,6 +12,7 @@ from cringe_pics_telebot.repositories.postgres import (
     SubscriptionType,
     get_category_media_by_subscription_types,
 )
+from cringe_pics_telebot.services.media_delivery_settings import DEFAULT_MEDIA_DELIVERY_MAX_RETRIES
 from cringe_pics_telebot.services.scheduler import aware_datetime, seconds_until_next_tick, validate_interval
 from cringe_pics_telebot.services.subscription_schedules import is_subscription_due
 from cringe_pics_telebot.services.subscriptions import get_scheduled_subscription_types, get_subscription_users
@@ -30,17 +31,23 @@ async def run_subscription_broadcasts(
     bot: Bot,
     *,
     interval: timedelta = DEFAULT_CHECK_INTERVAL,
+    media_delivery_max_retries: int = DEFAULT_MEDIA_DELIVERY_MAX_RETRIES,
     now: TimeProvider | None = None,
     sleep: Sleep = asyncio.sleep,
 ) -> None:
     now = now or _now
     validate_interval(interval)
     while True:
-        await run_due_subscription_broadcasts(bot, now=now())
+        await run_due_subscription_broadcasts(bot, now=now(), media_delivery_max_retries=media_delivery_max_retries)
         await sleep(seconds_until_next_tick(current_time=now(), interval=interval))
 
 
-async def run_due_subscription_broadcasts(bot: Bot, *, now: datetime | None = None) -> int:
+async def run_due_subscription_broadcasts(
+    bot: Bot,
+    *,
+    now: datetime | None = None,
+    media_delivery_max_retries: int = DEFAULT_MEDIA_DELIVERY_MAX_RETRIES,
+) -> int:
     current_time = now or _now()
     subscription_types = await get_scheduled_subscription_types()
     if not subscription_types:
@@ -52,6 +59,7 @@ async def run_due_subscription_broadcasts(bot: Bot, *, now: datetime | None = No
                 bot=bot,
                 subscription_type=subscription_type,
                 current_time=current_time,
+                media_delivery_max_retries=media_delivery_max_retries,
             )
             for subscription_type in subscription_types
         )
@@ -60,7 +68,13 @@ async def run_due_subscription_broadcasts(bot: Bot, *, now: datetime | None = No
     return sum(sent_counts)
 
 
-async def _broadcast_subscription_type(*, bot: Bot, subscription_type: SubscriptionType, current_time: datetime) -> int:
+async def _broadcast_subscription_type(
+    *,
+    bot: Bot,
+    subscription_type: SubscriptionType,
+    current_time: datetime,
+    media_delivery_max_retries: int = DEFAULT_MEDIA_DELIVERY_MAX_RETRIES,
+) -> int:
     scheduled_time = subscription_type.time
     if scheduled_time is None:
         return 0
@@ -107,6 +121,7 @@ async def _broadcast_subscription_type(*, bot: Bot, subscription_type: Subscript
                 user_id=user_id,
                 subscription_type=subscription_type,
                 media=media,
+                media_delivery_max_retries=media_delivery_max_retries,
             )
             for user_id in reserved_user_ids
         )
@@ -121,6 +136,7 @@ async def _send_scheduled_image_to_user(
     user_id: int,
     subscription_type: SubscriptionType,
     media: Sequence[CategoryMedia],
+    media_delivery_max_retries: int,
 ) -> int:
     try:
         await deliver_user_category_media(
@@ -128,6 +144,7 @@ async def _send_scheduled_image_to_user(
             subscription_type_id=subscription_type.id,
             media=media,
             send=lambda image: send_image_to_chat(bot=bot, chat_id=user_id, image=image),
+            max_retries=media_delivery_max_retries,
         )
     except Exception:
         logger.exception(

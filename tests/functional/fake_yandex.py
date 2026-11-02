@@ -170,6 +170,8 @@ class FakeYandex:
             raise web.HTTPServiceUnavailable(text="Functional Yandex failure")
 
         image_name = params.get("path", "image.png").rsplit("/", maxsplit=1)[-1]
+        if status := self._downloads.get(image_name, {}).get("url_status"):
+            return web.json_response({"error": "FunctionalDownloadUrlFailure"}, status=status)
         return web.json_response({"href": f"{request.scheme}://{request.host}/download/{image_name}"})
 
     async def download_file(self, request: web.Request) -> web.Response:
