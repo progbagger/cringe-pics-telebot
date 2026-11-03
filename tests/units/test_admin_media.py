@@ -13,6 +13,7 @@ from cringe_pics_telebot.bot.admin_keyboards import (
 )
 from cringe_pics_telebot.bot.admin_media_callback_data import AdminMediaAction, AdminMediaCallbackData
 from cringe_pics_telebot.entities.search_aliases import SearchAlias
+from cringe_pics_telebot.pagination import InlineKeyboardPage
 from cringe_pics_telebot.repositories.postgres import (
     CategoryMedia,
     CategoryMediaSearchMetadata,
@@ -148,18 +149,21 @@ async def test_admin_media_preview_resolves_pending_media_url(
     assert_that(await admin_media.get_admin_media_preview(metadata), equal_to(expected))
 
 
-def test_admin_media_list_keyboard_preserves_both_pages_and_normalizes_requested_page() -> None:
+def test_admin_media_list_keyboard_numbers_items_and_preserves_both_pages() -> None:
     metadata = tuple(_metadata(index) for index in range(1, 10))
 
     markup = create_admin_media_list_keyboard(
-        metadata,
+        admin_media.AdminMediaPage(
+            category=_category(),
+            total=len(metadata),
+            page=InlineKeyboardPage((admin_media.AdminMediaPreview(metadata[-1], None),), 1, 0, None),
+        ),
         category_id=2,
         category_page=3,
-        media_page=99,
     )
     buttons = [button for row in markup.inline_keyboard for button in row]
 
-    assert_that([button.text for button in buttons], equal_to(["9.png", "Назад", "<"]))
+    assert_that([button.text for button in buttons], equal_to(["1 · 🏷 0", "Назад", "<"]))
     media_callback = AdminMediaCallbackData.unpack(buttons[0].callback_data or "")
     assert_that(
         (

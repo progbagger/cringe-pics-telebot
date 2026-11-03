@@ -162,13 +162,12 @@ class FakeTelegram:
         payload = await self._read_payload(request)
         tracks_get_chat = method == "getChat"
         async with self._condition:
-            self._requests.append(
-                {
-                    "method": method,
-                    "token": request.match_info["bot_token"].removeprefix("bot"),
-                    "payload": payload,
-                }
-            )
+            recorded = {
+                "method": method,
+                "token": request.match_info["bot_token"].removeprefix("bot"),
+                "payload": payload,
+            }
+            self._requests.append(recorded)
             if tracks_get_chat:
                 self._active_get_chat_requests += 1
                 self._max_active_get_chat_requests = max(
@@ -180,7 +179,10 @@ class FakeTelegram:
                 await self._condition.wait()
 
         try:
-            if method in {"sendPhoto", "sendAnimation", "sendVideo", "editMessageMedia"} and self._media_errors:
+            has_media = method in {"sendPhoto", "sendAnimation", "sendVideo", "editMessageMedia"} or bool(
+                payload.get("rich_message")
+            )
+            if has_media and self._media_errors:
                 configured = self._media_errors.popleft()
                 if configured.get("disconnect"):
                     assert request.transport is not None
@@ -192,7 +194,12 @@ class FakeTelegram:
                         configured["description"],
                         retry_after=configured.get("retry_after"),
                     )
-            return await self._handle_bot_api_method(method, payload)
+
+            response = await self._handle_bot_api_method(method, payload)
+            if method in {"sendMessage", "editMessageText"} and response.text is not None:
+                recorded["response"] = json.loads(response.text)
+
+            return response
         finally:
             if tracks_get_chat:
                 async with self._condition:
@@ -205,6 +212,19 @@ class FakeTelegram:
             return _telegram_error(403, "Forbidden: bot was blocked by the user")
         if _request_media_id(method, payload) in self._invalid_file_ids:
             return _telegram_error(400, "Bad Request: wrong file identifier/HTTP URL specified")
+
+        rich_message = payload.get("rich_message")
+        if isinstance(rich_message, dict):
+            blocks = rich_message.get("blocks", [])
+            if not blocks or any(
+                block.get("type") not in {"paragraph", "photo", "animation", "video"} for block in blocks
+            ):
+                return _telegram_error(400, "Bad Request: invalid rich blocks")
+            for block in blocks:
+                kind = block["type"]
+                if kind != "paragraph" and block.get(kind, {}).get("media") in self._invalid_file_ids:
+                    return _telegram_error(400, "Bad Request: wrong file identifier/HTTP URL specified")
+
         if self._message_has_reply_keyboard(payload):
             if method == "editMessageMedia":
                 return _telegram_error(400, "Bad Request: message media can't be edited")
@@ -319,11 +339,28 @@ class FakeTelegram:
         chat_id = int(payload.get("chat_id") or payload.get("chat", {}).get("id") or 1)
         text = payload.get("text") or ""
         message = {
-            "message_id": self._next_message_id,
+            "message_id": payload.get("message_id", self._next_message_id),
             "date": int(time.time()),
             "chat": {"id": chat_id, "type": "private"},
             "text": text,
         }
+
+        if isinstance(rich_message := payload.get("rich_message"), dict):
+            message.pop("text", None)
+            rich_blocks = []
+            for block in rich_message["blocks"]:
+                kind = block["type"]
+                if kind == "paragraph":
+                    rich_blocks.append(block)
+                    continue
+
+                media_message = self._sent_media_message_from_payload(
+                    {"chat_id": chat_id, kind: block[kind]["media"]}, media_key=kind, response_media_key=None
+                )
+                rich_blocks.append({"type": kind, kind: media_message[kind]})
+
+            message["rich_message"] = {"blocks": rich_blocks}
+
         reply_markup = payload.get("reply_markup")
         if isinstance(reply_markup, dict) and "inline_keyboard" in reply_markup:
             message["reply_markup"] = reply_markup
