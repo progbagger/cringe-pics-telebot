@@ -17,6 +17,7 @@ from cringe_pics_telebot.services.admin_broadcasts import run_admin_broadcasts
 from cringe_pics_telebot.services.data_sync import run_data_sync
 from cringe_pics_telebot.services.media_alias_enrichment import run_media_alias_enrichment
 from cringe_pics_telebot.services.media_alias_enrichment_settings import load_media_alias_enrichment_settings
+from cringe_pics_telebot.services.media_delivery_settings import load_media_delivery_max_retries
 from cringe_pics_telebot.services.media_sync import DEFAULT_SYNC_INTERVAL
 from cringe_pics_telebot.services.subscription_broadcasts import (
     DEFAULT_CHECK_INTERVAL,
@@ -85,6 +86,7 @@ async def start_polling(
     admin_broadcast_now: TimeProvider | None = None,
     main_keyboard_clock: Callable[[], float] = monotonic,
 ) -> None:
+    media_delivery_max_retries = load_media_delivery_max_retries()
     enrichment_settings = await load_media_alias_enrichment_settings()
     connectors = (_connect_postgres, _create_yandex_client, _connect_redis)
     async with AsyncExitStack() as stack:
@@ -133,6 +135,7 @@ async def start_polling(
                     bot,
                     interval=timedelta(seconds=subscription_broadcast_interval),
                     now=subscription_broadcast_now,
+                    media_delivery_max_retries=media_delivery_max_retries,
                 )
             ),
             asyncio.create_task(
@@ -156,7 +159,11 @@ async def start_polling(
             )
 
         try:
-            await dp.start_polling(bot, alias_enrichment_settings=enrichment_settings)
+            await dp.start_polling(
+                bot,
+                alias_enrichment_settings=enrichment_settings,
+                media_delivery_max_retries=media_delivery_max_retries,
+            )
         finally:
             for background_task in background_tasks:
                 background_task.cancel()

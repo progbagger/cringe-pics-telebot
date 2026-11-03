@@ -17,6 +17,7 @@ class FakeTelegram:
         self._forbidden_chat_ids: set[int] = set()
         self._invalid_file_ids: set[str] = set()
         self._media_response_types: dict[str, str] = {}
+        self._media_errors: deque[dict[str, Any]] = deque()
         self._messages_with_reply_keyboard: set[tuple[int, int]] = set()
         self._get_chat_responses: dict[int, deque[dict[str, Any]]] = {}
         self._active_get_chat_requests = 0
@@ -55,6 +56,7 @@ class FakeTelegram:
             self._forbidden_chat_ids.clear()
             self._invalid_file_ids.clear()
             self._media_response_types.clear()
+            self._media_errors.clear()
             self._messages_with_reply_keyboard.clear()
             self._get_chat_responses.clear()
             self._active_get_chat_requests = 0
@@ -93,6 +95,11 @@ class FakeTelegram:
             raise web.HTTPBadRequest(text=f"Unsupported media response types: {sorted(unsupported)}")
 
         self._media_response_types = response_types
+        return web.json_response({"ok": True})
+
+    async def set_media_errors(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        self._media_errors = deque(payload["responses"])
         return web.json_response({"ok": True})
 
     async def set_get_chat_responses(self, request: web.Request) -> web.Response:
@@ -173,6 +180,18 @@ class FakeTelegram:
                 await self._condition.wait()
 
         try:
+            if method in {"sendPhoto", "sendAnimation", "sendVideo", "editMessageMedia"} and self._media_errors:
+                configured = self._media_errors.popleft()
+                if configured.get("disconnect"):
+                    assert request.transport is not None
+                    request.transport.close()
+                    return web.Response()
+                if "error_code" in configured:
+                    return _telegram_error(
+                        configured["error_code"],
+                        configured["description"],
+                        retry_after=configured.get("retry_after"),
+                    )
             return await self._handle_bot_api_method(method, payload)
         finally:
             if tracks_get_chat:
@@ -322,6 +341,12 @@ class FakeTelegram:
     def _media_message_from_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         message = self._message_from_payload(payload)
         media = payload.get("media")
+        if isinstance(media, dict) and (response_type := self._media_response_types.get("editMessageMedia")):
+            return self._sent_media_message_from_payload(
+                payload | {media["type"]: media["media"]},
+                media_key=media["type"],
+                response_media_key=response_type,
+            )
         media_id = "functional-media-file-id"
         if isinstance(media, dict):
             media_id = media.get("media", media_id)
@@ -461,6 +486,7 @@ def create_app() -> web.Application:
     app.router.add_post("/test/forbidden-chats", fake.set_forbidden_chats)
     app.router.add_post("/test/invalid-file-ids", fake.set_invalid_file_ids)
     app.router.add_post("/test/media-response-types", fake.set_media_response_types)
+    app.router.add_post("/test/media-errors", fake.set_media_errors)
     app.router.add_post("/test/get-chat-responses", fake.set_get_chat_responses)
     app.router.add_get("/test/wait", fake.wait_for_requests)
     app.router.add_get("/test/get-chat-stats", fake.get_chat_stats)

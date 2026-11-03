@@ -55,6 +55,7 @@ BOT_ENV = {
     "TELEGRAM_BOT_TOKEN": "123456:functional-test-token",
     "YANDEX_DISK_TOKEN": "functional-test-yandex-token",
     "MEDIA_ALIAS_ENRICHMENT_ENABLED": "false",
+    "MEDIA_DELIVERY_MAX_RETRIES": "3",
     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.5",
     "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.5",
 }
@@ -371,6 +372,7 @@ class MainKeyboardBot:
     clock_url: str
     logs: deque[str]
     log_condition: asyncio.Condition
+    process: subprocess.Process
 
     async def advance(self, seconds: float = 0, *, wall_now: datetime | None = None) -> None:
         payload: dict[str, float | str] = {"seconds": seconds}
@@ -407,6 +409,7 @@ class FunctionalBotStarter(Protocol):
         telegram_proxy_url: str | None = None,
         wait_for_telegram: bool = True,
         capture_output: bool = False,
+        media_delivery_max_retries: str | None = None,
     ) -> AbstractAsyncContextManager[RunningFunctionalBot]: ...
 
 
@@ -1101,9 +1104,9 @@ async def main_keyboard_clock_url() -> str:
 def start_main_keyboard_bot(
     docker_compose: DependencyPorts,
     fake_yandex_server: FakeYandexServer,
-) -> Callable[[], AbstractAsyncContextManager[MainKeyboardBot]]:
+) -> Callable[..., AbstractAsyncContextManager[MainKeyboardBot]]:
     @asynccontextmanager
-    async def start() -> AsyncIterator[MainKeyboardBot]:
+    async def start(*, media_delivery_max_retries: str | None = None) -> AsyncIterator[MainKeyboardBot]:
         port = _get_unused_tcp_port()
         clock_port = _get_unused_tcp_port()
         telegram_process = await subprocess.create_subprocess_exec(
@@ -1137,7 +1140,12 @@ def start_main_keyboard_bot(
                     "YANDEX_DISK_API_BASE_URL": f"{fake_yandex_server.base_url}/v1/disk/",
                     "SUBSCRIPTION_BROADCAST_INTERVAL_SECONDS": "0.1",
                     "ADMIN_BROADCAST_INTERVAL_SECONDS": "0.1",
-                },
+                }
+                | (
+                    {"MEDIA_DELIVERY_MAX_RETRIES": media_delivery_max_retries}
+                    if media_delivery_max_retries is not None
+                    else {}
+                ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
             )
@@ -1153,7 +1161,7 @@ def start_main_keyboard_bot(
             log_reader = asyncio.create_task(drain_logs())
             await telegram.wait_for_request("getMe")
 
-            yield MainKeyboardBot(telegram, f"http://127.0.0.1:{clock_port}", logs, log_condition)
+            yield MainKeyboardBot(telegram, f"http://127.0.0.1:{clock_port}", logs, log_condition, process)
         finally:
             if process is not None:
                 if process.returncode is None:
@@ -1219,6 +1227,7 @@ def start_functional_bot_process(
         telegram_proxy_url: str | None = None,
         wait_for_telegram: bool = True,
         capture_output: bool = False,
+        media_delivery_max_retries: str | None = None,
     ) -> AsyncIterator[RunningFunctionalBot]:
         telegram_port = _get_unused_tcp_port()
         telegram_process = await subprocess.create_subprocess_exec(
@@ -1246,6 +1255,8 @@ def start_functional_bot_process(
             env["STATSD_HOST"] = fake_statsd_server.udp_host
             env["STATSD_PORT"] = str(fake_statsd_server.udp_port)
             env["STATSD_PREFIX"] = "functional-isolated"
+            if media_delivery_max_retries is not None:
+                env["MEDIA_DELIVERY_MAX_RETRIES"] = media_delivery_max_retries
             if telegram_proxy_url is not None:
                 env["TELEGRAM_PROXY_URL"] = telegram_proxy_url
 

@@ -135,3 +135,41 @@ def _media(media_id: int, *, status: CategoryMediaStatus) -> CategoryMedia:
         created_at=now,
         updated_at=now,
     )
+
+
+@pytest.mark.parametrize("shown_ids,starts_new_cycle", [({1}, False), ({1, 2}, True)])
+def test_excluded_candidate_is_not_selected_even_after_cycle_reset(shown_ids: set[int], starts_new_cycle: bool) -> None:
+    failed = _media(1, status=CategoryMediaStatus.pending)
+    alternative = _media(2, status=CategoryMediaStatus.ready)
+    selection = choose_user_media_cycle_image(
+        [failed, alternative],
+        shown_media_ids=shown_ids,
+        reserved_media_ids=set(),
+        excluded_media_ids={failed.id},
+        last_media_id=failed.id,
+        chooser=_choose_only,
+    )
+    assert_that(selection.media, same_instance(alternative))
+    assert selection.starts_new_cycle == starts_new_cycle
+
+
+def test_exclusion_does_not_hide_parallel_reservation_and_allow_cycle_reset() -> None:
+    with pytest.raises(UserMediaCycleBusyError):
+        choose_user_media_cycle_image(
+            [_media(1, status=CategoryMediaStatus.pending), _media(2, status=CategoryMediaStatus.ready)],
+            shown_media_ids={2},
+            reserved_media_ids={1},
+            excluded_media_ids={1},
+            last_media_id=2,
+        )
+
+
+def test_exhausted_exclusions_do_not_restart_cycle() -> None:
+    with pytest.raises(NoCategoryMediaError):
+        choose_user_media_cycle_image(
+            [_media(1, status=CategoryMediaStatus.pending)],
+            shown_media_ids=set(),
+            reserved_media_ids=set(),
+            excluded_media_ids={1},
+            last_media_id=None,
+        )
