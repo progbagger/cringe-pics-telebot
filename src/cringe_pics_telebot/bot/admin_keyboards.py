@@ -11,10 +11,10 @@ from cringe_pics_telebot.entities.subscription_menu import SubscriptionFolder
 from cringe_pics_telebot.entities.subscription_schedule import SubscriptionScheduleKind
 from cringe_pics_telebot.repositories.postgres.entities import (
     AdminBroadcast,
-    CategoryMediaSearchMetadata,
     SubscriptionType,
 )
 from cringe_pics_telebot.services.admin_broadcast_schedules import format_admin_broadcast_schedule
+from cringe_pics_telebot.services.admin_media import AdminMediaPage
 
 from .admin_broadcast_callback_data import (
     AdminBroadcastAction,
@@ -380,17 +380,18 @@ def create_admin_category_keyboard(
 
 
 def create_admin_media_list_keyboard(
-    media: Collection[CategoryMediaSearchMetadata],
+    catalog: AdminMediaPage,
     *,
     category_id: int,
     category_page: int = 0,
-    media_page: int = 0,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    current_page = paginate_inline_keyboard(tuple(media), media_page)
-    for metadata in current_page.items:
+    current_page = catalog.page
+
+    for number, preview in enumerate(current_page.items, start=1):
+        metadata = preview.metadata
         builder.button(
-            text=metadata.media.name,
+            text=f"{number} · 🏷 {len(metadata.search_aliases)}",
             callback_data=_media_callback(
                 AdminMediaAction.media,
                 category_id=category_id,
@@ -399,6 +400,7 @@ def create_admin_media_list_keyboard(
                 media_page=current_page.number,
             ),
         )
+
     builder.button(
         text="Назад",
         callback_data=_paged_category_callback(

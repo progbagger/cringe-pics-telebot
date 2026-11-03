@@ -1,17 +1,19 @@
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
-from html import escape
 
 from aiogram import Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardMarkup, Message
 
 from cringe_pics_telebot.repositories.postgres import CategoryMediaSearchMetadata
 from cringe_pics_telebot.services.admin_media import (
+    AdminMediaPreview,
     get_admin_media,
-    get_admin_media_catalog,
-    get_admin_media_preview,
+    get_admin_media_page,
+    prepare_admin_media_preview,
     update_admin_media_search_aliases,
 )
 from cringe_pics_telebot.services.media_search_aliases import (
@@ -27,7 +29,7 @@ from .admin_keyboards import (
     create_admin_panel_keyboard,
 )
 from .admin_media_callback_data import AdminMediaAction, AdminMediaCallbackData
-from .media import send_image_to_chat
+from .admin_media_content import create_admin_media_content
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,7 @@ class _AdminMediaLocation:
     media_id: int
     category_page: int
     media_page: int
+    panel_message_id: int
 
 
 @router.callback_query(AdminMediaCallbackData.filter())
@@ -56,6 +59,7 @@ async def handle_admin_media_callback(callback: CallbackQuery, state: FSMContext
         return
 
     callback_data = AdminMediaCallbackData.unpack(callback.data)
+
     try:
         notice = await _dispatch_admin_media_callback(callback_data, message=message, state=state)
     except Exception:
@@ -76,26 +80,14 @@ async def receive_admin_media_aliases(message: Message, state: FSMContext) -> No
         )
         return
 
-    cancel_keyboard = create_admin_media_form_cancel_keyboard(
-        category_id=location.category_id,
-        media_id=location.media_id,
-        category_page=location.category_page,
-        media_page=location.media_page,
-    )
     if message.text is None:
-        await message.answer(
-            _aliases_error("Алиасы должны быть текстом."),
-            reply_markup=cancel_keyboard,
-        )
+        await message.answer(_aliases_error("Алиасы должны быть текстом."))
         return
 
     try:
         aliases = parse_media_search_aliases(message.text)
     except InvalidMediaSearchAliasesError:
-        await message.answer(
-            _aliases_error("Не найдено ни одного непустого алиаса."),
-            reply_markup=cancel_keyboard,
-        )
+        await message.answer(_aliases_error("Не найдено ни одного непустого алиаса."))
         return
 
     metadata = await update_admin_media_search_aliases(
@@ -104,17 +96,27 @@ async def receive_admin_media_aliases(message: Message, state: FSMContext) -> No
         aliases,
     )
     await state.clear()
-    if metadata is None:
-        await message.answer(
-            "Медиа больше недоступно.",
-            reply_markup=await _media_list_keyboard_or_panel(location),
-        )
-        return
 
-    await message.answer(
-        f"Алиасы медиа обновлены.\n\n{_media_details(metadata)}",
-        reply_markup=_media_keyboard(metadata, location),
-    )
+    try:
+        if metadata is None:
+            await _show_media_list(message, location)
+            await message.answer("Медиа больше недоступно.")
+            return
+
+        await _edit_media_content(
+            message,
+            location,
+            f"Алиасы медиа обновлены.\n\n{_media_details(metadata)}",
+            (await prepare_admin_media_preview(metadata),),
+            _media_keyboard(metadata, location),
+        )
+    except Exception as error:
+        logger.warning("Admin media panel update failed after alias input: error=%s", type(error).__name__)
+        result = "Алиасы медиа сохранены." if metadata is not None else "Медиа больше недоступно."
+        await message.answer(
+            f"{result} Не удалось обновить сообщение панели. Откройте медиа заново через /admin.",
+            reply_markup=create_admin_panel_keyboard(),
+        )
 
 
 async def _dispatch_admin_media_callback(
@@ -123,7 +125,8 @@ async def _dispatch_admin_media_callback(
     message: Message,
     state: FSMContext,
 ) -> str | None:
-    location = _location_from_callback(callback_data)
+    location = _location_from_callback(callback_data, message_id=message.message_id)
+
     match callback_data.action:
         case AdminMediaAction.media_list:
             await state.clear()
@@ -140,31 +143,38 @@ async def _dispatch_admin_media_callback(
             await state.clear()
             notice = await _show_media(message, location)
             return notice or "Редактирование алиасов отменено."
+
     return None
 
 
 async def _show_media_list(message: Message, location: _AdminMediaLocation) -> str | None:
-    catalog = await get_admin_media_catalog(location.category_id)
+    catalog = await get_admin_media_page(location.category_id, location.media_page)
     if catalog is None:
-        await message.edit_text(
-            "<b>Админ-панель</b>\n\nКатегория больше недоступна.",
-            reply_markup=create_admin_panel_keyboard(),
+        await _edit_media_content(
+            message,
+            location,
+            "Админ-панель\n\nКатегория больше недоступна.",
+            (),
+            create_admin_panel_keyboard(),
         )
         return "Категория больше недоступна."
 
-    media_count = len(catalog.media)
-    await message.edit_text(
-        f"<b>Медиа категории {escape(catalog.category.name)}</b>\n\n"
-        f"Активных элементов: <b>{media_count}</b>.\n"
-        "Выберите медиа, чтобы просмотреть или изменить его алиасы.",
-        reply_markup=create_admin_media_list_keyboard(
-            catalog.media,
+    return await _edit_media_content(
+        message,
+        location,
+        f"Медиа категории {catalog.category.name}\n\n"
+        f"Активных элементов: {catalog.total}. Страница {catalog.page.number + 1}.\n"
+        "Выберите номер медиа. 🏷 — количество алиасов; 0 — алиасов нет."
+        if catalog.total
+        else f"Медиа категории {catalog.category.name}\n\nАктивных медиа пока нет.",
+        catalog.page.items,
+        create_admin_media_list_keyboard(
+            catalog,
             category_id=location.category_id,
             category_page=location.category_page,
-            media_page=location.media_page,
         ),
+        numbered=True,
     )
-    return None
 
 
 async def _show_media(message: Message, location: _AdminMediaLocation) -> str | None:
@@ -173,11 +183,13 @@ async def _show_media(message: Message, location: _AdminMediaLocation) -> str | 
         await _show_media_list(message, location)
         return "Медиа больше недоступно."
 
-    await message.edit_text(
+    return await _edit_media_content(
+        message,
+        location,
         _media_details(metadata),
-        reply_markup=_media_keyboard(metadata, location),
+        (await prepare_admin_media_preview(metadata),),
+        _media_keyboard(metadata, location),
     )
-    return None
 
 
 async def _start_edit_aliases(
@@ -191,6 +203,19 @@ async def _start_edit_aliases(
         await _show_media_list(message, location)
         return "Медиа больше недоступно."
 
+    notice = await _edit_media_content(
+        message,
+        location,
+        _aliases_prompt(metadata.media.name),
+        (await prepare_admin_media_preview(metadata),),
+        create_admin_media_form_cancel_keyboard(
+            category_id=location.category_id,
+            media_id=location.media_id,
+            category_page=location.category_page,
+            media_page=location.media_page,
+        ),
+    )
+
     await state.set_state(AdminMediaAliasesForm.aliases)
     await state.set_data(
         {
@@ -198,18 +223,11 @@ async def _start_edit_aliases(
             "media_id": location.media_id,
             "category_page": location.category_page,
             "media_page": location.media_page,
+            "panel_message_id": location.panel_message_id,
         }
     )
-    await message.edit_text(
-        _aliases_prompt(metadata.media.name),
-        reply_markup=create_admin_media_form_cancel_keyboard(
-            category_id=location.category_id,
-            media_id=location.media_id,
-            category_page=location.category_page,
-            media_page=location.media_page,
-        ),
-    )
-    return await _send_media_preview(message, metadata)
+
+    return notice
 
 
 async def _clear_aliases(message: Message, location: _AdminMediaLocation) -> str:
@@ -218,41 +236,58 @@ async def _clear_aliases(message: Message, location: _AdminMediaLocation) -> str
         await _show_media_list(message, location)
         return "Медиа больше недоступно."
 
-    await message.edit_text(
+    await _edit_media_content(
+        message,
+        location,
         _media_details(metadata),
-        reply_markup=_media_keyboard(metadata, location),
+        (await prepare_admin_media_preview(metadata),),
+        _media_keyboard(metadata, location),
     )
+
     return "Алиасы медиа очищены."
 
 
-async def _send_media_preview(
+async def _edit_media_content(
     message: Message,
-    metadata: CategoryMediaSearchMetadata,
+    location: _AdminMediaLocation,
+    text: str,
+    previews: Sequence[AdminMediaPreview],
+    keyboard: InlineKeyboardMarkup,
+    *,
+    numbered: bool = False,
 ) -> str | None:
+    bot = message.bot
+    if bot is None:
+        raise RuntimeError("Admin media message has no bot")
+
+    async def edit(*, hide_media: bool = False) -> None:
+        try:
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=location.panel_message_id,
+                rich_message=create_admin_media_content(text, previews, numbered=numbered, hide_media=hide_media),
+                reply_markup=keyboard,
+                parse_mode=None,
+            )
+        except TelegramBadRequest as error:
+            if "message is not modified" not in error.message.lower():
+                raise
+
     try:
-        preview = await get_admin_media_preview(metadata)
-        if preview is None:
-            return "Не удалось получить предпросмотр медиа."
-        bot = message.bot
-        if bot is None:
-            return "Не удалось отправить предпросмотр медиа."
-        await send_image_to_chat(bot=bot, chat_id=message.chat.id, image=preview)
-    except Exception:
-        logger.exception("Failed to send admin preview for media %d", metadata.media.id)
-        return "Не удалось отправить предпросмотр медиа."
+        await edit()
+    except TelegramBadRequest as error:
+        # Telegram rejects the entire rich update if any attachment is invalid.
+        # Replace content and buttons together with numbered placeholders.
+        media_errors = ("wrong file", "file identifier", "failed to get http", "failed to get url", "media_empty")
+        if not any(reason in error.message.lower() for reason in media_errors):
+            raise
+
+        logger.warning("Telegram rejected admin media previews: category_id=%d", location.category_id)
+        await edit(hide_media=True)
+
+        return "Предпросмотры недоступны. Можно открыть медиа и редактировать алиасы."
+
     return None
-
-
-async def _media_list_keyboard_or_panel(location: _AdminMediaLocation) -> InlineKeyboardMarkup:
-    catalog = await get_admin_media_catalog(location.category_id)
-    if catalog is None:
-        return create_admin_panel_keyboard()
-    return create_admin_media_list_keyboard(
-        catalog.media,
-        category_id=location.category_id,
-        category_page=location.category_page,
-        media_page=location.media_page,
-    )
 
 
 async def _state_location(state: FSMContext) -> _AdminMediaLocation | None:
@@ -262,24 +297,29 @@ async def _state_location(state: FSMContext) -> _AdminMediaLocation | None:
         data.get("media_id"),
         data.get("category_page", 0),
         data.get("media_page", 0),
+        data.get("panel_message_id"),
     )
     if any(not isinstance(value, int) for value in values):
         await state.clear()
         return None
-    category_id, media_id, category_page, media_page = values
+
+    category_id, media_id, category_page, media_page, panel_message_id = values
     assert isinstance(category_id, int)
     assert isinstance(media_id, int)
     assert isinstance(category_page, int)
     assert isinstance(media_page, int)
-    return _AdminMediaLocation(category_id, media_id, category_page, media_page)
+    assert isinstance(panel_message_id, int)
+
+    return _AdminMediaLocation(category_id, media_id, category_page, media_page, panel_message_id)
 
 
-def _location_from_callback(callback_data: AdminMediaCallbackData) -> _AdminMediaLocation:
+def _location_from_callback(callback_data: AdminMediaCallbackData, *, message_id: int) -> _AdminMediaLocation:
     return _AdminMediaLocation(
         category_id=callback_data.category_id,
         media_id=callback_data.media_id,
         category_page=callback_data.category_page,
         media_page=callback_data.media_page,
+        panel_message_id=message_id,
     )
 
 
@@ -298,24 +338,21 @@ def _media_keyboard(
 
 def _media_details(metadata: CategoryMediaSearchMetadata) -> str:
     media = metadata.media
-    aliases = (
-        "\n".join(f"• <code>{escape(alias)}</code>" for alias in metadata.search_aliases)
-        if metadata.search_aliases
-        else "<i>не заданы</i>"
-    )
+    aliases = "\n".join(f"• {alias}" for alias in metadata.search_aliases) if metadata.search_aliases else "не заданы"
     activity = "активно" if media.is_active else "неактивно"
+
     return (
-        f"<b>Медиа {escape(media.name)}</b>\n\n"
-        f"Путь: <code>{escape(media.source_path)}</code>\n"
-        f"Тип: <code>{escape(media.telegram_media_type.value)}</code>\n"
-        f"Статус: <code>{escape(media.status.value)}</code>, {activity}\n\n"
+        f"Медиа {media.name}\n\n"
+        f"Путь: {media.source_path}\n"
+        f"Тип: {media.telegram_media_type.value}\n"
+        f"Статус: {media.status.value}, {activity}\n\n"
         f"Алиасы для поиска:\n{aliases}"
     )
 
 
 def _aliases_prompt(media_name: str) -> str:
     return (
-        f"<b>Алиасы медиа {escape(media_name)}</b>\n\n"
+        f"Алиасы медиа {media_name}\n\n"
         "Отправьте алиасы по одному на строку. Новый список полностью заменит текущий.\n"
         "Чтобы удалить все алиасы, вернитесь в карточку и нажмите «Очистить алиасы медиа»."
     )
@@ -328,4 +365,5 @@ def _aliases_error(reason: str) -> str:
 def _callback_message(callback: CallbackQuery) -> Message | None:
     if callback.message is None or isinstance(callback.message, InaccessibleMessage):
         return None
+
     return callback.message
