@@ -8,11 +8,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InaccessibleMessage, InlineKeyboardMarkup, Message
 
+from cringe_pics_telebot.helpers.metrics import Stopwatch
 from cringe_pics_telebot.repositories.postgres import CategoryMediaSearchMetadata
 from cringe_pics_telebot.services.admin_media import (
     AdminMediaPreview,
     get_admin_media,
     get_admin_media_page,
+    materialize_admin_media,
     prepare_admin_media_preview,
     update_admin_media_search_aliases,
 )
@@ -29,7 +31,7 @@ from .admin_keyboards import (
     create_admin_panel_keyboard,
 )
 from .admin_media_callback_data import AdminMediaAction, AdminMediaCallbackData
-from .admin_media_content import create_admin_media_content
+from .admin_media_content import create_admin_media_content, get_admin_media_materializations
 
 logger = logging.getLogger(__name__)
 
@@ -60,18 +62,31 @@ async def handle_admin_media_callback(callback: CallbackQuery, state: FSMContext
 
     callback_data = AdminMediaCallbackData.unpack(callback.data)
 
-    try:
-        notice = await _dispatch_admin_media_callback(callback_data, message=message, state=state)
-    except Exception:
-        logger.exception("Failed to process admin media callback %s", callback.data)
-        await callback.answer("Не удалось выполнить действие.", show_alert=True)
-        return
+    with Stopwatch.start(metric_name="admin_media.transition"):
+        await callback.answer()
+        try:
+            notice = await _dispatch_admin_media_callback(callback_data, message=message, state=state)
+        except Exception as error:
+            logger.warning(
+                "Admin media callback failed: category_id=%d media_id=%d action=%s error=%s",
+                callback_data.category_id,
+                callback_data.media_id,
+                callback_data.action,
+                type(error).__name__,
+            )
+            notice = "Не удалось выполнить действие. Откройте медиа заново через /admin."
 
-    await callback.answer(notice, show_alert=notice is not None)
+        if notice is not None:
+            await message.answer(notice)
 
 
 @router.message(AdminMediaAliasesForm.aliases)
 async def receive_admin_media_aliases(message: Message, state: FSMContext) -> None:
+    with Stopwatch.start(metric_name="admin_media.transition"):
+        await _receive_admin_media_aliases(message, state)
+
+
+async def _receive_admin_media_aliases(message: Message, state: FSMContext) -> None:
     location = await _state_location(state)
     if location is None:
         await message.answer(
@@ -261,17 +276,23 @@ async def _edit_media_content(
         raise RuntimeError("Admin media message has no bot")
 
     async def edit(*, hide_media: bool = False) -> None:
+        content = create_admin_media_content(text, previews, numbered=numbered, hide_media=hide_media)
         try:
-            await bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=location.panel_message_id,
-                rich_message=create_admin_media_content(text, previews, numbered=numbered, hide_media=hide_media),
-                reply_markup=keyboard,
-                parse_mode=None,
-            )
+            with Stopwatch.start(metric_name="admin_media.telegram_edit"):
+                response = await bot.edit_message_text(
+                    chat_id=message.chat.id,
+                    message_id=location.panel_message_id,
+                    rich_message=content,
+                    reply_markup=keyboard,
+                    parse_mode=None,
+                )
         except TelegramBadRequest as error:
             if "message is not modified" not in error.message.lower():
                 raise
+            return
+
+        if not hide_media:
+            await materialize_admin_media(get_admin_media_materializations(content, response, previews))
 
     try:
         await edit()

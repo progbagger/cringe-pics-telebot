@@ -33,14 +33,15 @@ class FakeStatsD(asyncio.DatagramProtocol):
     async def wait_for_metric(self, request: web.Request) -> web.Response:
         name = request.query["name"]
         timeout = float(request.query.get("timeout", "10"))
+        count = int(request.query.get("count", "1"))
         try:
             async with asyncio.timeout(timeout):
                 async with self._condition:
-                    while not (metrics := [metric for metric in self._metrics if metric["name"] == name]):
+                    while len(metrics := [metric for metric in self._metrics if metric["name"] == name]) < count:
                         await self._condition.wait()
         except TimeoutError as error:
             raise web.HTTPRequestTimeout(text=f"Metric {name!r} was not received") from error
-        return web.json_response({"ok": True, "result": metrics[0]})
+        return web.json_response({"ok": True, "result": metrics[count - 1]})
 
     async def reset(self, request: web.Request) -> web.Response:
         async with self._condition:

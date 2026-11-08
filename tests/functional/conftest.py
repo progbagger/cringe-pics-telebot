@@ -540,12 +540,12 @@ class FakeStatsDServer:
             body = await response.json()
             return body["result"]
 
-    async def wait_for_metric(self, name: str, *, timeout: float = 10) -> dict[str, Any]:
+    async def wait_for_metric(self, name: str, *, timeout: float = 10, count: int = 1) -> dict[str, Any]:
         async with (
             aiohttp.ClientSession() as session,
             session.get(
                 f"{self.base_url}/test/wait",
-                params={"name": name, "timeout": timeout},
+                params={"name": name, "timeout": timeout, "count": count},
             ) as response,
         ):
             response.raise_for_status()

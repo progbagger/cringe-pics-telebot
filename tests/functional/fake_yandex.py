@@ -32,6 +32,9 @@ class FakeYandex:
         self._downloads: dict[str, dict[str, Any]] = {}
         self._download_barriers: dict[str, asyncio.Event] = {}
         self._download_condition = asyncio.Condition()
+        self._url_barriers: dict[str, asyncio.Event] = {}
+        self._active_urls = 0
+        self._max_active_urls = 0
 
     async def healthcheck(self, request: web.Request) -> web.Response:
         return web.json_response({"ok": True})
@@ -43,6 +46,12 @@ class FakeYandex:
         for barrier in self._download_barriers.values():
             barrier.set()
         self._download_barriers.clear()
+        for barrier in self._url_barriers.values():
+            barrier.set()
+        self._url_barriers.clear()
+        async with self._download_condition:
+            await self._download_condition.wait_for(lambda: self._active_urls == 0)
+        self._max_active_urls = 0
         self._requests.clear()
         self._directory_overrides.clear()
         self._failed_directories.clear()
@@ -162,17 +171,45 @@ class FakeYandex:
             "modified": image.get("modified", datetime(2026, 8, 19, tzinfo=UTC).isoformat()),
         }
 
+    async def configure_url(self, request: web.Request) -> web.Response:
+        payload = await request.json()
+        barrier = self._url_barriers.setdefault(payload["path"], asyncio.Event())
+        if payload.get("block", False):
+            barrier.clear()
+        else:
+            barrier.set()
+        return web.json_response({"ok": True})
+
+    async def wait_for_urls(self, request: web.Request) -> web.Response:
+        count = int(request.query.get("count", "1"))
+        async with asyncio.timeout(10), self._download_condition:
+            await self._download_condition.wait_for(
+                lambda: sum(item["method"] == "resources/download" for item in self._requests) >= count
+            )
+        return web.json_response({"ok": True, "result": {"max_active": self._max_active_urls}})
+
     async def download_resource(self, request: web.Request) -> web.Response:
         params = dict(request.query)
-        self._requests.append({"method": "resources/download", "params": params})
+        async with self._download_condition:
+            self._requests.append({"method": "resources/download", "params": params})
+            self._active_urls += 1
+            self._max_active_urls = max(self._max_active_urls, self._active_urls)
+            self._download_condition.notify_all()
 
-        if "broken" in params.get("path", ""):
-            raise web.HTTPServiceUnavailable(text="Functional Yandex failure")
+        try:
+            if barrier := self._url_barriers.get(params.get("path", "")):
+                await barrier.wait()
+            if "broken" in params.get("path", ""):
+                raise web.HTTPServiceUnavailable(text="Functional Yandex failure")
 
-        image_name = params.get("path", "image.png").rsplit("/", maxsplit=1)[-1]
-        if status := self._downloads.get(image_name, {}).get("url_status"):
-            return web.json_response({"error": "FunctionalDownloadUrlFailure"}, status=status)
-        return web.json_response({"href": f"{request.scheme}://{request.host}/download/{image_name}"})
+            image_name = params.get("path", "image.png").rsplit("/", maxsplit=1)[-1]
+            if status := self._downloads.get(image_name, {}).get("url_status"):
+                return web.json_response({"error": "FunctionalDownloadUrlFailure"}, status=status)
+            return web.json_response({"href": f"{request.scheme}://{request.host}/download/{image_name}"})
+        finally:
+            async with self._download_condition:
+                self._active_urls -= 1
+                self._download_condition.notify_all()
 
     async def download_file(self, request: web.Request) -> web.Response:
         name = request.match_info["path"]
@@ -209,6 +246,8 @@ def create_app() -> web.Application:
     app.router.add_post("/test/download", fake.configure_download)
     app.router.add_post("/test/release-download", fake.release_download)
     app.router.add_get("/test/wait-download", fake.wait_for_download)
+    app.router.add_post("/test/url", fake.configure_url)
+    app.router.add_get("/test/wait-urls", fake.wait_for_urls)
     app.router.add_get("/v1/disk/resources", fake.resources)
     app.router.add_put("/v1/disk/resources", fake.create_directory)
     app.router.add_post("/v1/disk/resources/move", fake.move_resource)
